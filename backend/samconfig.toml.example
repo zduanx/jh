@@ -1,0 +1,10 @@
+version = 0.1
+[default]
+[default.deploy]
+[default.deploy.parameters]
+stack_name = "jh-backend-stack"
+resolve_s3 = true
+region = "us-east-1"
+capabilities = "CAPABILITY_IAM"
+parameter_overrides = "GoogleClientId=\"your-client-id.apps.googleusercontent.com\" JWTSecretKey=\"your-secret-key-use-openssl-rand-hex-32\" AllowedOrigins=\"http://localhost:3000,https://your-app.vercel.app\" AllowedEmails=\"your-email@gmail.com\""
+confirm_changeset = false

@@ -1,0 +1,40 @@
+# Environment files (contain secrets)
+.env
+.env.local
+*.env
+
+# AWS SAM
+backend/samconfig.toml  # Contains secrets, use samconfig.toml.example
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+venv/
+ENV/
+.Python
+
+# Node
+node_modules/
+/build
+npm-debug.log*
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Build artifacts
+.aws-sam/
+dist/
+build/
+
+# Vercel
+.vercel

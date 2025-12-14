@@ -1,0 +1,91 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: Job Hunt Tracker API - FastAPI on Lambda
+
+Globals:
+  Function:
+    Timeout: 30
+    MemorySize: 512
+    Runtime: python3.13
+    Environment:
+      Variables:
+        GOOGLE_CLIENT_ID: !Ref GoogleClientId
+        SECRET_KEY: !Ref JWTSecretKey
+        ALGORITHM: HS256
+        ACCESS_TOKEN_EXPIRE_MINUTES: 1440
+        ALLOWED_ORIGINS: !Ref AllowedOrigins
+        ALLOWED_EMAILS: !Ref AllowedEmails
+
+Parameters:
+  GoogleClientId:
+    Type: String
+    Description: Google OAuth Client ID
+    NoEcho: false
+
+  JWTSecretKey:
+    Type: String
+    Description: Secret key for JWT signing (use openssl rand -hex 32)
+    NoEcho: true
+
+  AllowedOrigins:
+    Type: String
+    Description: Comma-separated list of allowed CORS origins
+    Default: "http://localhost:3000,http://localhost:5173"
+
+  AllowedEmails:
+    Type: String
+    Description: Comma-separated list of allowed user emails
+    Default: "zduanx@gmail.com"
+
+Resources:
+  JobHuntTrackerAPI:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: JobHuntTrackerAPI
+      CodeUri: .
+      Handler: main.handler
+      Description: FastAPI backend for Job Hunt Tracker
+      Events:
+        HttpApiEvent:
+          Type: HttpApi
+          Properties:
+            Path: /{proxy+}
+            Method: ANY
+            ApiId: !Ref HttpApi
+        RootEvent:
+          Type: HttpApi
+          Properties:
+            Path: /
+            Method: ANY
+            ApiId: !Ref HttpApi
+
+  HttpApi:
+    Type: AWS::Serverless::HttpApi
+    Properties:
+      StageName: prod
+      CorsConfiguration:
+        AllowOrigins:
+          - "http://localhost:3000"
+          - "https://zduan-job.vercel.app"
+        AllowHeaders:
+          - "*"
+        AllowMethods:
+          - GET
+          - POST
+          - PUT
+          - DELETE
+          - OPTIONS
+        AllowCredentials: true
+
+Outputs:
+  ApiUrl:
+    Description: API Gateway endpoint URL
+    Value: !Sub "https://${HttpApi}.execute-api.${AWS::Region}.amazonaws.com/prod"
+
+  FunctionName:
+    Description: Lambda function name
+    Value: !Ref JobHuntTrackerAPI
+
+  FunctionArn:
+    Description: Lambda function ARN
+    Value: !GetAtt JobHuntTrackerAPI.Arn
