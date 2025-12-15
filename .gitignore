@@ -3,8 +3,8 @@
 .env.local
 *.env
 
-# AWS SAM
-backend/samconfig.toml  # Contains secrets, use samconfig.toml.example
+# AWS SAM - Contains secrets, use samconfig.toml.example
+backend/samconfig.toml
 
 # Python
 __pycache__/
