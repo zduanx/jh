@@ -6,5 +6,6 @@ stack_name = "jh-backend-stack"
 resolve_s3 = true
 region = "us-east-1"
 capabilities = "CAPABILITY_IAM"
-parameter_overrides = "GoogleClientId=\"your-client-id.apps.googleusercontent.com\" JWTSecretKey=\"your-secret-key-use-openssl-rand-hex-32\" AllowedOrigins=\"http://localhost:3000,https://your-app.vercel.app\" AllowedEmails=\"your-email@gmail.com\""
+parameter_overrides = "GoogleClientId=\"YOUR_GOOGLE_CLIENT_ID\" JWTSecretKey=\"YOUR_JWT_SECRET_KEY\" AllowedOrigins=\"YOUR_ALLOWED_ORIGINS\" AllowedEmails=\"YOUR_EMAIL\""
 confirm_changeset = false
+image_repositories = []
