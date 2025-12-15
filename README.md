@@ -80,18 +80,17 @@ jh/
 │   ├── learning/          # Learning notes
 │   └── logs/              # Development logs and summaries
 │
-├── src/                   # Production source code (Phase 1-2)
+├── backend/               # FastAPI backend (AWS Lambda)
+│   ├── main.py            # Lambda handler
+│   ├── template.yaml      # CloudFormation/SAM
+│   ├── auth/              # Authentication module
+│   ├── sourcing/          # URL sourcing API
 │   └── extractors/        # Job URL extractors (6 companies)
 │       ├── enums.py       # Company enum
 │       ├── registry.py    # Extractor registry
 │       ├── base_extractor.py  # Abstract base class
 │       ├── config.py      # Configuration models
 │       └── {company}.py   # Google, Amazon, Anthropic, TikTok, Roblox, Netflix
-│
-├── backend/               # FastAPI backend (AWS Lambda)
-│   ├── main.py            # Lambda handler
-│   ├── template.yaml      # CloudFormation/SAM
-│   └── sourcing/          # URL sourcing API
 │
 ├── frontend/              # React frontend (Vercel)
 │   └── src/               # React components

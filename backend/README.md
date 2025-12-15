@@ -30,6 +30,12 @@ backend/
 │   ├── routes.py          # POST /api/sourcing endpoint
 │   ├── models.py          # Pydantic models for sourcing API
 │   └── orchestrator.py    # Async parallel extraction across companies
+├── extractors/            # Job URL extractors (shared library)
+│   ├── base_extractor.py  # Abstract base class
+│   ├── config.py          # TitleFilters configuration
+│   ├── enums.py           # Company enum
+│   ├── registry.py        # Extractor registry
+│   └── {company}.py       # Company-specific extractors
 └── config/
     └── settings.py        # Configuration management
 ```
@@ -272,7 +278,7 @@ curl http://localhost:8000/api/user \
 - Handles authentication endpoints
 - Handles sourcing endpoint: `POST /api/sourcing`
 - Supports dry_run mode (return metadata) or live mode (send to SQS)
-- Uses extractors from `src/extractors/` directory
+- Uses extractors from `backend/extractors/` directory
 - Orchestrates parallel extraction across multiple companies
 
 **JobCrawlerLambda** (Phase 2B - Not yet implemented) 🚧
@@ -313,11 +319,11 @@ Location: [backend/sourcing/](./sourcing/)
 **Files:**
 - `routes.py` - POST /api/sourcing endpoint implementation
 - `models.py` - Pydantic models (SourceUrlsRequest, SourceUrlsResponse, CompanyResult, JobMetadata)
-- `orchestrator.py` - Async parallel extraction using extractors from `src/extractors/`
+- `orchestrator.py` - Async parallel extraction using extractors from `backend/extractors/`
 
 **How it works:**
 1. Reads user settings (companies + filters) - currently hardcoded, will use DB later
-2. Creates tasks for each company using `src/extractors/registry.get_extractor()`
+2. Creates tasks for each company using `backend/extractors/registry.get_extractor()`
 3. Runs all extractions in parallel using asyncio
 4. Aggregates results into summary statistics
 5. If dry_run=false: sends jobs to SQS Queue A (Phase 2B)

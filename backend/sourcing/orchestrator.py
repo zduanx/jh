@@ -10,8 +10,8 @@ from concurrent.futures import ThreadPoolExecutor
 
 # Add src to path for imports
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../..'))
-from src.extractors import TitleFilters
-from src.extractors.registry import get_extractor, Company
+from extractors import TitleFilters
+from extractors.registry import get_extractor, Company
 from .models import CompanyResult
 
 

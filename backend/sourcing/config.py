@@ -15,8 +15,8 @@ from typing import Dict
 
 # Add src to path for imports
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../..'))
-from src.extractors import TitleFilters
-from src.extractors.registry import Company
+from extractors import TitleFilters
+from extractors.registry import Company
 
 
 def get_user_sourcing_settings(user_id: str = None, local_testing: bool = False) -> Dict[Company, TitleFilters]:

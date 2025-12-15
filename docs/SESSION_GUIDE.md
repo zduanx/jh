@@ -159,11 +159,11 @@ Below are the user's preferences for AI assistant behavior during development.
 
 ## Workflow Guidelines
 
-### Updating src/extractors Logic
+### Updating backend/extractors Logic
 
 **IMPORTANT: Always check trials folder first**
 
-Before making ANY changes to `src/extractors/` logic:
+Before making ANY changes to `backend/extractors/` logic:
 
 1. **Check for API response snapshots:**
    - Look in `trials/{company_name}/` for response examples

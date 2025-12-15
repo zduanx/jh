@@ -263,16 +263,16 @@ Use a **hybrid approach**:
 
 **JobCrawlerLambda (backend/crawler/main.py):**
 - Triggered by SQS Queue A
-- Uses extractors from src/extractors/
+- Uses extractors from backend/extractors/
 - Saves HTML to S3, metadata to DB
 
 **JobParserLambda (backend/parser/main.py):**
 - Triggered by SQS Queue B
-- Uses extractors from src/extractors/
+- Uses extractors from backend/extractors/
 - Reads HTML from S3, parses, updates DB
 
 **Shared code strategy:**
-- Package src/extractors/ in all Lambda deployment packages
+- Package backend/extractors/ in all Lambda deployment packages
 - Consider Lambda Layers for shared dependencies later if needed
 
 ---
