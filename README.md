@@ -2,7 +2,7 @@
 
 A full-stack job application tracking system built with React and FastAPI.
 
-**Status**: Phase 1 Complete ✅
+**Status**: Phase 2 In Progress 🚧
 
 ---
 
@@ -27,7 +27,9 @@ This guide contains:
 - **Frontend:** React (Vercel) ✅ Deployed
 - **Backend:** FastAPI (AWS Lambda + API Gateway) ✅ Deployed
 - **Auth:** Google OAuth + JWT ✅ Working
-- **Future:** PostgreSQL, Redis, Web Scraping
+- **URL Sourcing:** 6 company extractors ✅ Working
+- **Phase 2:** SQS Queues, S3 Storage, Web Crawling, Parsing 🚧 In Progress
+- **Future:** PostgreSQL/Neon, WebSocket, Application Tracking
 
 **Goals:**
 1. Build practical job hunting tool
@@ -71,21 +73,30 @@ npm start
 
 ```
 jh/
-├── docs/
+├── docs/                  # All project documentation
+│   ├── SESSION_GUIDE.md   # 👈 START HERE (AI assistant entry point)
 │   ├── architecture/      # Architecture decisions and system design
-│   │   ├── DECISIONS.md
-│   │   ├── SYSTEM_DESIGN.md
-│   │   └── API_DESIGN.md
-│   └── learning/          # Learning notes and references
-│       ├── README.md      # Quick topic index
-│       ├── authentication.md
-│       ├── aws-deployment.md
-│       ├── backend.md
-│       ├── frontend.md
-│       └── security.md
-├── backend/               # FastAPI backend
-├── frontend/              # React frontend
-└── README.md             # This file
+│   ├── deployment/        # Deployment guides
+│   ├── learning/          # Learning notes
+│   └── logs/              # Development logs and summaries
+│
+├── src/                   # Production source code (Phase 1-2)
+│   └── extractors/        # Job URL extractors (6 companies)
+│       ├── enums.py       # Company enum
+│       ├── registry.py    # Extractor registry
+│       ├── base_extractor.py  # Abstract base class
+│       ├── config.py      # Configuration models
+│       └── {company}.py   # Google, Amazon, Anthropic, TikTok, Roblox, Netflix
+│
+├── backend/               # FastAPI backend (AWS Lambda)
+│   ├── main.py            # Lambda handler
+│   ├── template.yaml      # CloudFormation/SAM
+│   └── sourcing/          # URL sourcing API
+│
+├── frontend/              # React frontend (Vercel)
+│   └── src/               # React components
+│
+└── trials/                # Experimental code + API snapshots
 ```
 
 ---
@@ -111,35 +122,57 @@ Start with **[docs/learning/README.md](docs/learning/README.md)** for quick topi
 
 ## Current Status
 
-**Phase 1 - COMPLETE ✅**
-- [x] Project structure and documentation
-- [x] FastAPI backend with Google OAuth
-- [x] React frontend with Google login
+**Phase 1 - Authentication & Deployment** ✅ COMPLETE
+- [x] FastAPI backend with Google OAuth + JWT
+- [x] React frontend with protected routes
 - [x] Email whitelist access control
-- [x] Local testing
-- [x] Deploy to AWS Lambda + API Gateway
-- [x] Deploy to Vercel
-- [x] HTTPS on both frontend and backend
+- [x] Deploy to AWS Lambda + API Gateway (HTTPS)
+- [x] Deploy to Vercel (HTTPS)
+- [x] Full Phase 1 Summary: [docs/logs/PHASE_1_SUMMARY.md](docs/logs/PHASE_1_SUMMARY.md)
 
-**Phase 2 (Planned) - Web Scraping & Database:**
-- Database setup (PostgreSQL on RDS or Neon)
-- Web scraping logic (LinkedIn, Indeed, etc.)
-- Scraping API endpoints
-- Data storage pipeline
+**Phase 2 - Job URL Sourcing & Crawling Pipeline** 🚧 IN PROGRESS
 
-**Phase 3 (Planned) - Search & Add to List:**
+*Phase 2A: URL Generation (Completed)*
+- [x] Base extractor architecture (single class per company)
+- [x] 6 company extractors (Google, Amazon, Anthropic, TikTok, Roblox, Netflix)
+- [x] Title filtering with include/exclude patterns
+- [x] FastAPI endpoint: POST /api/sourcing (dry_run mode)
+- [x] Location field standardization (city, state)
+- [x] Company enum + registry with no lazy loading
+
+*Phase 2B: Crawling & Parsing (Next)*
+- [ ] Add `crawl_job(url)` methods to extractors
+- [ ] JobCrawlerLambda (crawling service)
+- [ ] SQS Queue A (URLs to crawl) + Queue B (IDs to parse)
+- [ ] S3 bucket for raw HTML storage
+- [ ] Database setup (Neon/RDS/DynamoDB - TBD)
+- [ ] Database schema (jobs, user_settings tables)
+- [ ] SourceURLLambda updates (SQS sending when dry_run=false)
+- [ ] Settings API (POST/GET /api/settings)
+- [ ] Companies API (GET /api/companies)
+- [ ] Queue status API (GET /api/queue/status)
+- [ ] Add `parse_job(html)` methods to extractors
+- [ ] JobParserLambda (parsing service)
+
+*Pending Decisions (See [DECISIONS.md](docs/architecture/DECISIONS.md#phase-2-pending-decisions))*
+- Database choice (PostgreSQL vs Neon vs DynamoDB)
+- Settings storage strategy
+- Crawling rate limits per company
+- Error handling (SQS DLQ, retry logic)
+- S3 cleanup policy
+- WebSocket vs polling for real-time updates
+
+**Phase 3 - Search & Application Tracking** (Planned)
 - Search API with filtering
-- Frontend search UI
-- Personal application tracker
-- Application CRUD endpoints
+- Personal job tracker (add to list, CRUD operations)
+- Application status workflow
 
-**Phase 4 (Planned) - Application Tracking:**
-- Status workflow (applied → interview → offer)
-- Notes and reminders
+**Phase 4 - Analytics & Enhancements** (Planned)
 - Timeline visualization
 - Analytics dashboard
+- Email notifications
 
-See [docs/logs/PHASE_1_SUMMARY.md](docs/logs/PHASE_1_SUMMARY.md) for detailed Phase 1 recap.
+See [SYSTEM_DESIGN.md](docs/architecture/SYSTEM_DESIGN.md) for detailed Phase 2 architecture.
 
 ---
 

@@ -246,47 +246,356 @@ See [Environment Setup Guide](../deployment/ENVIRONMENT_SETUP.md) for complete d
 
 ---
 
-## Future Architecture (Phase 2-4)
+## Phase 2 Architecture: Job URL Sourcing & Crawling Pipeline
 
-See [Phase 1 Summary](../logs/PHASE_1_SUMMARY.md) for current state.
+**Status**: In Progress 🚧
+**Goals**:
+1. Generate job URLs from company career pages
+2. Crawl job pages to get raw HTML
+3. Parse HTML to extract structured job data
+4. Store in database for application tracking
 
-### Phase 2: Web Scraping & Database
-**Goal**: Scrape job postings and save to database
+### Architecture Overview
 
-**Components**:
-- Database setup (PostgreSQL on RDS or Neon)
-- Database schema (jobs, applications tables)
-- Web scraping logic (LinkedIn, Indeed, etc.)
-- Scraping API endpoints
-- Data storage pipeline
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                         User Interface (React)                      │
+│  - Settings Page: Configure companies & filters                    │
+│  - Crawl Control: Trigger dry-run or live crawl                   │
+│  - Real-time Status: WebSocket updates (future)                   │
+└────────────────┬────────────────────────────────────────────────────┘
+                 │ HTTPS API calls
+                 ↓
+┌─────────────────────────────────────────────────────────────────────┐
+│                  API Gateway + SourceURLLambda                      │
+│                    (URL Generation Service)                         │
+│                                                                     │
+│  POST /api/sourcing (dry_run=true)  → Return URL metadata         │
+│  POST /api/sourcing (dry_run=false) → Send to SQS Queue A         │
+└────────────┬────────────────────────────────────────────────────────┘
+             │
+             │ dry_run=false
+             ↓
+┌─────────────────────────────────────────────────────────────────────┐
+│                         SQS Queue A                                 │
+│                   (Job URLs to Crawl)                              │
+│  Message: {job_id, company, title, location, url}                 │
+└────────────┬────────────────────────────────────────────────────────┘
+             │ Triggers
+             ↓
+┌─────────────────────────────────────────────────────────────────────┐
+│                  JobCrawlerLambda (Crawling)                       │
+│  1. Fetch raw HTML from job URL                                   │
+│  2. Save metadata + S3 reference to DB                            │
+│  3. Save raw HTML to S3                                           │
+│  4. Send job DB ID to SQS Queue B                                 │
+└────────────┬────────────────────────────────────────────────────────┘
+             │
+             ├─→ S3 Bucket: raw/{company}/{job_id}.html
+             │
+             └─→ Database: jobs table (status: 'crawled')
+                 │
+                 ↓
+┌─────────────────────────────────────────────────────────────────────┐
+│                         SQS Queue B                                 │
+│                   (Job IDs to Parse)                               │
+│  Message: {job_db_id}                                             │
+└────────────┬────────────────────────────────────────────────────────┘
+             │ Triggers
+             ↓
+┌─────────────────────────────────────────────────────────────────────┐
+│                  JobParserLambda (Parsing)                         │
+│  1. Read job metadata from DB (get S3 key)                        │
+│  2. Read raw HTML from S3                                         │
+│  3. Parse HTML → structured data                                  │
+│  4. Update DB with parsed data                                    │
+└────────────┬────────────────────────────────────────────────────────┘
+             │
+             ↓
+┌─────────────────────────────────────────────────────────────────────┐
+│                          Database                                   │
+│  jobs table: Complete job data (status: 'parsed')                 │
+└─────────────────────────────────────────────────────────────────────┘
+```
 
-**Status**: To be designed
+### Data Flow Detail
 
-### Phase 3: Search & Add to List
-**Goal**: Search scraped jobs and add to personal application tracker
+**1. URL Generation (SourceURLLambda)**
+```
+Input:  POST /api/sourcing {dry_run: boolean, user_id: string}
 
-**Components**:
-- Search API with filtering (company, title, location)
-- Frontend search UI
-- "Add to my list" functionality
-- Personal application tracker (status, notes, dates)
-- Application CRUD endpoints
+Process:
+  1. Read user settings from DB (companies, filters)
+  2. For each company:
+     - Get extractor: get_extractor(company, filters)
+     - Call: extractor.extract_source_urls_metadata()
+  3. If dry_run=true:
+     - Return: {summary, results: [CompanyResult, ...]}
+  4. If dry_run=false:
+     - For each job in results.included_jobs:
+       - Send message to SQS Queue A
+     - Return: {message: "Crawl started", job_count: N}
 
-**Status**: To be designed
+Output: JSON response OR SQS messages
+```
 
-### Phase 4: Application Tracking
-**Goal**: Track application status through hiring process
+**2. Crawling (JobCrawlerLambda)**
+```
+Input:  SQS message from Queue A
+        {job_id, company, title, location, url}
 
-**Components**:
-- Application status workflow (applied → phone screen → onsite → offer/rejected)
-- Notes and follow-up reminders
-- Timeline visualization
-- Email integration (optional)
-- Analytics dashboard
+Process:
+  1. Get extractor for company
+  2. Call: raw_html = extractor.crawl_job(url)
+  3. Generate S3 key: raw/{company}/{job_id}.html
+  4. Upload raw_html to S3
+  5. Insert to DB:
+     - job_id, company, title, location, url
+     - s3_key, status='crawled', created_at
+  6. Get DB record ID
+  7. Send {job_db_id} to SQS Queue B
 
-**Status**: To be designed
+Output: DB record + S3 file + SQS message
+```
+
+**3. Parsing (JobParserLambda)**
+```
+Input:  SQS message from Queue B
+        {job_db_id}
+
+Process:
+  1. Read job record from DB (get s3_key)
+  2. Download raw_html from S3
+  3. Get extractor for company
+  4. Call: parsed_data = extractor.parse_job(raw_html)
+     Returns: {
+       description: str,
+       requirements: [str],
+       responsibilities: [str],
+       salary_range: str,
+       job_type: str,
+       ...
+     }
+  5. Update DB record:
+     - Add parsed fields
+     - status='parsed'
+     - updated_at
+
+Output: Updated DB record
+```
+
+### Extractor Class Structure
+
+Each company has a single extractor class with all 3 phases:
+
+```python
+from extractors.base_extractor import BaseJobExtractor
+from extractors.enums import Company
+
+class GoogleExtractor(BaseJobExtractor):
+    COMPANY_NAME = Company.GOOGLE
+    API_URL = "https://careers.google.com/api/v3/search"
+    URL_PREFIX_JOB = "https://www.google.com/about/careers/..."
+
+    # Phase 1: URL Generation (✅ Implemented)
+    def _fetch_all_jobs(self) -> List[Dict]:
+        """Fetch jobs from API, return standardized metadata"""
+        pass
+
+    # Phase 2: Crawling (🚧 To Implement)
+    def crawl_job(self, url: str) -> str:
+        """Fetch raw HTML from job URL"""
+        pass
+
+    # Phase 3: Parsing (🚧 To Implement)
+    def parse_job(self, raw_html: str) -> Dict:
+        """Parse HTML to extract structured data"""
+        pass
+```
+
+### API Endpoints (Phase 2)
+
+**POST /api/sourcing**
+```json
+Request:
+{
+  "dry_run": true  // or false
+}
+
+Response (dry_run=true):
+{
+  "summary": {
+    "total_jobs": 480,
+    "total_companies": 6
+  },
+  "results": [
+    {
+      "company": "google",
+      "total_count": 117,
+      "filtered_count": 15,
+      "urls_count": 102,
+      "included_jobs": [
+        {"id": "...", "title": "...", "location": "...", "url": "..."},
+        ...
+      ]
+    },
+    ...
+  ]
+}
+
+Response (dry_run=false):
+{
+  "message": "Crawl pipeline started",
+  "job_count": 480,
+  "companies": ["google", "amazon", "anthropic", ...]
+}
+```
+
+**GET /api/companies** (New)
+```json
+Response:
+{
+  "companies": [
+    {"id": "google", "name": "Google", "job_count": 117},
+    {"id": "amazon", "name": "Amazon", "job_count": 63},
+    ...
+  ]
+}
+```
+
+**POST /api/settings** (New)
+```json
+Request:
+{
+  "user_id": "user123",
+  "companies": ["google", "amazon"],
+  "filters": {
+    "google": {"include": ["software"], "exclude": ["senior staff"]},
+    "amazon": {"include": null, "exclude": ["principal"]}
+  }
+}
+
+Response:
+{
+  "message": "Settings saved",
+  "settings_id": "setting123"
+}
+```
+
+**GET /api/settings/:user_id** (New)
+```json
+Response:
+{
+  "user_id": "user123",
+  "companies": ["google", "amazon"],
+  "filters": {...},
+  "last_updated": "2024-12-15T10:00:00Z"
+}
+```
+
+**GET /api/queue/status** (New - Better UX)
+```json
+Response:
+{
+  "queue_a": {
+    "name": "job-urls-to-crawl",
+    "status": "active",
+    "messages_in_queue": 150
+  },
+  "queue_b": {
+    "name": "job-ids-to-parse",
+    "status": "active",
+    "messages_in_queue": 20
+  }
+}
+```
+
+**WebSocket /ws/crawl-status** (Future - Real-time updates)
+```json
+Message:
+{
+  "event": "crawl_progress",
+  "company": "google",
+  "crawled": 45,
+  "total": 102,
+  "percent": 44.1
+}
+```
+
+### Database Schema (Preliminary)
+
+**users table** (from Phase 1)
+- id (PK)
+- email
+- name
+- google_id
+- created_at
+
+**user_settings table** (New)
+- id (PK)
+- user_id (FK)
+- companies (JSON array)
+- filters (JSON object)
+- enabled (boolean)
+- last_run_at
+- created_at, updated_at
+
+**jobs table** (New)
+- id (PK)
+- job_id (company's job ID)
+- company (enum)
+- title
+- location
+- url
+- s3_key (S3 path to raw HTML)
+- status (enum: pending, crawled, parsed, error)
+- description (text) - from parsing
+- requirements (JSON array) - from parsing
+- salary_range - from parsing
+- job_type - from parsing
+- created_at, updated_at
+
+### Phase 2 Scope
+
+**Included:**
+- ✅ Extractor crawler methods (Phase 2A)
+- ✅ JobCrawlerLambda (crawling service)
+- ✅ SQS Queue A + Queue B setup
+- ✅ S3 bucket for raw HTML
+- ✅ Database schema + tables
+- ✅ SourceURLLambda updates (SQS sending)
+- ✅ Settings API endpoints
+- ✅ Companies API endpoint
+- ✅ Queue status API endpoint
+- ✅ Extractor parser methods (Phase 2B)
+- ✅ JobParserLambda (parsing service)
+
+**Deferred to ADR (Pending Decisions):**
+- Settings storage choice (DynamoDB vs PostgreSQL)
+- Crawling rate limits & delays per company
+- Error handling strategy (retries, DLQ, logging)
+- S3 cleanup policy (retention period)
+- JobCrawlerLambda batching strategy (1 URL vs multiple)
+- WebSocket implementation (infrastructure choice)
+- Database choice (RDS vs Neon vs DynamoDB)
+
+See [ADR: Phase 2 Pending Decisions](../architecture/DECISIONS.md#phase-2-pending-decisions)
 
 ---
 
-**Current Phase**: Phase 1 Complete ✅
-**Next**: Begin Phase 2 planning
+## Phase 3-4 (Future)
+
+### Phase 3: Search & Application Tracking
+- Search API with filters
+- Add jobs to personal tracker
+- Application CRUD operations
+
+### Phase 4: Status Tracking & Analytics
+- Application workflow management
+- Timeline visualization
+- Analytics dashboard
+
+---
+
+**Current Phase**: Phase 2 In Progress 🚧
+**Next**: Implement crawler methods + JobCrawlerLambda

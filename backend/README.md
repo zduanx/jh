@@ -13,8 +13,10 @@ FastAPI backend for job application tracking system, designed for AWS Lambda dep
 
 ```
 backend/
-├── main.py                 # FastAPI app + Lambda handler
+├── main.py                 # FastAPI app + Lambda handler (SourceURLLambda)
 ├── requirements.txt        # Python dependencies
+├── template.yaml           # AWS SAM/CloudFormation template
+├── samconfig.toml         # SAM deployment configuration
 ├── .env                   # Environment variables (not committed)
 ├── .env.example           # Environment template
 ├── auth/
@@ -24,6 +26,10 @@ backend/
 │   └── dependencies.py    # FastAPI dependencies (get_current_user)
 ├── api/
 │   └── routes.py          # Protected API endpoints
+├── sourcing/              # Phase 2: Job URL sourcing module
+│   ├── routes.py          # POST /api/sourcing endpoint
+│   ├── models.py          # Pydantic models for sourcing API
+│   └── orchestrator.py    # Async parallel extraction across companies
 └── config/
     └── settings.py        # Configuration management
 ```
@@ -62,7 +68,7 @@ API will be available at: `http://localhost:8000`
 
 ## API Endpoints
 
-### Public Endpoints
+### Phase 1: Authentication
 
 #### `GET /health`
 Health check endpoint
@@ -94,10 +100,8 @@ Exchange Google OAuth token for JWT
 }
 ```
 
-### Protected Endpoints
-
 #### `GET /api/user`
-Get current user information
+Get current user information (Protected)
 
 **Headers:**
 ```
@@ -110,6 +114,63 @@ Authorization: Bearer <jwt_token>
   "email": "user@gmail.com",
   "name": "John Doe",
   "picture": "https://lh3.googleusercontent.com/..."
+}
+```
+
+### Phase 2: Job URL Sourcing
+
+#### `POST /api/sourcing`
+Generate job URLs from company career pages (Protected)
+
+**Headers:**
+```
+Authorization: Bearer <jwt_token>
+```
+
+**Request:**
+```json
+{
+  "dry_run": true  // If true: return results, if false: send to SQS queue
+}
+```
+
+**Response (dry_run=true):**
+```json
+{
+  "summary": {
+    "total_jobs": 480,
+    "total_filtered_jobs": 93,
+    "total_included_jobs": 387,
+    "total_companies": 6
+  },
+  "results": [
+    {
+      "company": "google",
+      "total_count": 117,
+      "filtered_count": 15,
+      "urls_count": 102,
+      "included_jobs": [
+        {
+          "id": "123",
+          "title": "Software Engineer",
+          "location": "Mountain View, California",
+          "url": "https://..."
+        }
+      ],
+      "excluded_jobs": [...]
+    }
+  ],
+  "dry_run": true
+}
+```
+
+**Response (dry_run=false):**
+```json
+{
+  "message": "Crawl pipeline started",
+  "job_count": 387,
+  "companies": ["google", "amazon", "anthropic", "tiktok", "roblox", "netflix"],
+  "dry_run": false
 }
 ```
 
@@ -201,10 +262,75 @@ curl http://localhost:8000/api/user \
 ### CORS errors
 - Add frontend URL to `ALLOWED_ORIGINS` in `.env`
 
-## Next Steps
+## Phase 2 Architecture
 
-- [ ] Add PostgreSQL database (Phase 2)
-- [ ] Implement job CRUD endpoints
-- [ ] Add refresh token mechanism
-- [ ] Set up monitoring (CloudWatch)
-- [ ] Add rate limiting
+**Current Status**: Phase 2A Complete ✅, Phase 2B In Progress 🚧
+
+### Lambda Functions
+
+**SourceURLLambda** (Current - `main.py`) ✅
+- Handles authentication endpoints
+- Handles sourcing endpoint: `POST /api/sourcing`
+- Supports dry_run mode (return metadata) or live mode (send to SQS)
+- Uses extractors from `src/extractors/` directory
+- Orchestrates parallel extraction across multiple companies
+
+**JobCrawlerLambda** (Phase 2B - Not yet implemented) 🚧
+- Triggered by SQS Queue A
+- Fetches raw HTML from job URLs
+- Saves to S3: `raw/{company}/{job_id}.html`
+- Saves metadata to database
+- Sends job DB ID to SQS Queue B
+
+**JobParserLambda** (Phase 2B - Not yet implemented) 🚧
+- Triggered by SQS Queue B
+- Reads raw HTML from S3
+- Parses structured data from HTML
+- Updates database with parsed job details
+
+### Data Flow
+
+```
+User → POST /api/sourcing (dry_run=false)
+  ↓
+SourceURLLambda: Extract URLs from all companies
+  ↓
+SQS Queue A: Job URLs to crawl
+  ↓
+JobCrawlerLambda: Fetch HTML, save to S3 + DB
+  ↓
+SQS Queue B: Job DB IDs to parse
+  ↓
+JobParserLambda: Parse HTML, update DB
+  ↓
+Database: Complete job data ready for search
+```
+
+### Sourcing Module
+
+Location: [backend/sourcing/](./sourcing/)
+
+**Files:**
+- `routes.py` - POST /api/sourcing endpoint implementation
+- `models.py` - Pydantic models (SourceUrlsRequest, SourceUrlsResponse, CompanyResult, JobMetadata)
+- `orchestrator.py` - Async parallel extraction using extractors from `src/extractors/`
+
+**How it works:**
+1. Reads user settings (companies + filters) - currently hardcoded, will use DB later
+2. Creates tasks for each company using `src/extractors/registry.get_extractor()`
+3. Runs all extractions in parallel using asyncio
+4. Aggregates results into summary statistics
+5. If dry_run=false: sends jobs to SQS Queue A (Phase 2B)
+
+## Next Steps (Phase 2B)
+
+- [ ] Database setup (Neon/RDS/DynamoDB - TBD)
+- [ ] Implement `crawl_job(url)` in extractors
+- [ ] Create JobCrawlerLambda function
+- [ ] Create JobParserLambda function
+- [ ] Implement `parse_job(html)` in extractors
+- [ ] Set up SQS queues (Queue A + Queue B)
+- [ ] Set up S3 bucket for raw HTML storage
+- [ ] Add settings storage (user companies + filters)
+- [ ] Add monitoring (CloudWatch)
+- [ ] Add error handling (DLQ, retries)

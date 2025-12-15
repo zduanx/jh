@@ -200,3 +200,248 @@ Use REST API initially, potentially add GraphQL in Phase 2.
 ### Consequences
 ✅ Ship faster, standard caching
 ❌ Less flexible querying (acceptable for Phase 1)
+
+---
+
+## ADR-008: Lambda Deployment Strategy for Phase 2
+
+**Date:** 2024-12-15
+**Status:** Accepted
+
+### Context
+Need to decide whether to extend the existing Lambda (main.py) with new HTTP endpoints or create separate Lambda functions for each service.
+
+### Decision
+Use a **hybrid approach**:
+1. **Extend existing SourceURLLambda** for all HTTP endpoints (auth, sourcing, settings, companies, queue status)
+2. **Create separate Lambdas** for SQS-triggered workers (JobCrawlerLambda, JobParserLambda)
+
+### Alternatives Considered
+1. **Single monolithic Lambda** - Everything in one function
+2. **Full microservices** - Separate Lambda for each endpoint/service
+
+### Reasoning
+
+**For HTTP endpoints (extend SourceURLLambda):**
+1. Share authentication logic (JWT validation)
+2. Share dependencies and code (extractors, models)
+3. Simpler deployment (one SAM template for HTTP)
+4. Lower cost (fewer Lambda cold starts)
+5. All HTTP endpoints are lightweight API calls
+
+**For SQS workers (separate Lambdas):**
+1. Different resource requirements (crawling/parsing is CPU/memory intensive)
+2. Independent scaling (workers scale based on queue depth)
+3. Isolated failures (worker crash doesn't affect API)
+4. Different timeout needs (workers may need longer execution time)
+5. Different dependencies (may need headless browser, parsing libraries)
+
+### Consequences
+
+**Positive:**
+- ✅ Best of both worlds: simplicity for APIs, separation for workers
+- ✅ Easier to deploy and maintain HTTP endpoints
+- ✅ Workers can scale independently based on queue load
+- ✅ Clear separation of concerns: API vs background processing
+- ✅ Can optimize each Lambda separately (memory, timeout, dependencies)
+
+**Negative:**
+- ❌ Need to manage shared code between Lambdas (extractors used by both API and workers)
+- ❌ More complex than single Lambda (but simpler than full microservices)
+
+### Implementation Notes
+
+**SourceURLLambda (backend/main.py):**
+- GET /health
+- POST /auth/google
+- GET /api/user
+- POST /api/sourcing (Phase 2A ✅)
+- POST /api/settings (Phase 2B)
+- GET /api/settings/:user_id (Phase 2B)
+- GET /api/companies (Phase 2B)
+- GET /api/queue/status (Phase 2B)
+
+**JobCrawlerLambda (backend/crawler/main.py):**
+- Triggered by SQS Queue A
+- Uses extractors from src/extractors/
+- Saves HTML to S3, metadata to DB
+
+**JobParserLambda (backend/parser/main.py):**
+- Triggered by SQS Queue B
+- Uses extractors from src/extractors/
+- Reads HTML from S3, parses, updates DB
+
+**Shared code strategy:**
+- Package src/extractors/ in all Lambda deployment packages
+- Consider Lambda Layers for shared dependencies later if needed
+
+---
+
+## Phase 2 Pending Decisions
+
+The following architectural decisions are deferred for future discussion and will be resolved during Phase 2 implementation.
+
+### PDR-001: Database Choice
+
+**Question:** Which database should we use for storing job data, user settings, and application tracking?
+
+**Options:**
+1. **PostgreSQL on AWS RDS**
+   - ✅ Full ACID compliance, complex queries, SQL familiarity
+   - ❌ Cost (~$15-20/month minimum), need to manage
+
+2. **Neon (Serverless Postgres)**
+   - ✅ Serverless, generous free tier, auto-scaling
+   - ❌ Newer service, less proven at scale
+
+3. **DynamoDB**
+   - ✅ Serverless, AWS integration, unlimited scale
+   - ❌ NoSQL learning curve, query limitations
+
+**Status:** To be decided
+**Target:** Before JobCrawlerLambda implementation
+
+---
+
+### PDR-002: Settings Storage Strategy
+
+**Question:** How should we store user crawling settings (companies, filters)?
+
+**Options:**
+1. **Dedicated settings table in main database**
+   - ✅ Simple, normalized, easy queries
+   - ❌ More DB calls
+
+2. **JSON field in users table**
+   - ✅ Single query for user + settings
+   - ❌ Less normalized, harder to query all settings
+
+3. **Separate DynamoDB table (if using DynamoDB)**
+   - ✅ Fast key-value lookups
+   - ❌ Eventual consistency considerations
+
+**Status:** To be decided
+**Depends on:** PDR-001 (database choice)
+
+---
+
+### PDR-003: Crawling Rate Limits
+
+**Question:** How should we implement rate limiting to avoid getting blocked by company career pages?
+
+**Considerations:**
+- Different companies may have different tolerance
+- Need delay between requests to same company
+- Batch size per Lambda invocation affects rate
+
+**Options:**
+1. **Fixed delay per company (e.g., 2 seconds)**
+   - ✅ Simple to implement
+   - ❌ May be too slow or too fast for some companies
+
+2. **Configurable delay in extractor class**
+   - ✅ Flexible per company
+   - ❌ Need to test and tune for each company
+
+3. **Use SQS delay/visibility timeout**
+   - ✅ Native AWS feature
+   - ❌ Less control
+
+**Status:** To be decided
+**Target:** Before JobCrawlerLambda load testing
+
+---
+
+### PDR-004: Error Handling Strategy
+
+**Question:** How should we handle crawling/parsing failures?
+
+**Considerations:**
+- Network failures (timeout, connection error)
+- HTTP errors (404, 403, 500)
+- Parsing errors (unexpected HTML structure)
+- Rate limiting (429 Too Many Requests)
+
+**Options:**
+1. **SQS Dead Letter Queue (DLQ)**
+   - ✅ AWS-native, automatic retry
+   - ✅ Failed messages go to DLQ for inspection
+   - ❌ Fixed retry count
+
+2. **Custom retry logic with exponential backoff**
+   - ✅ Flexible retry strategy
+   - ❌ More code to write
+
+3. **Hybrid: SQS retry + custom handling**
+   - ✅ Best of both worlds
+   - ❌ More complex
+
+**Status:** To be decided
+**Target:** Before JobCrawlerLambda implementation
+
+---
+
+### PDR-005: S3 Cleanup Policy
+
+**Question:** How long should we keep raw HTML files in S3?
+
+**Options:**
+1. **Keep forever**
+   - ✅ Can re-parse anytime, debugging
+   - ❌ S3 storage costs grow over time
+
+2. **Delete after successful parsing**
+   - ✅ Minimal storage cost
+   - ❌ Cannot re-parse or debug later
+
+3. **S3 Lifecycle Policy (30/60/90 days)**
+   - ✅ Balance cost and utility
+   - ❌ Need to choose retention period
+
+**Status:** To be decided
+**Recommendation:** Start with 30-day retention
+
+---
+
+### PDR-006: JobCrawlerLambda Batching Strategy
+
+**Question:** Should JobCrawlerLambda process one URL or multiple URLs per invocation?
+
+**Options:**
+1. **1 URL per Lambda invocation**
+   - ✅ Simple, auto-scales, easy to retry
+   - ❌ More Lambda invocations (but within free tier)
+
+2. **Batch 10-50 URLs per invocation**
+   - ✅ Fewer cold starts, more efficient
+   - ❌ Harder to handle partial failures
+   - ❌ Risk of timeout (15-minute Lambda limit)
+
+**Status:** To be decided
+**Recommendation:** Start with 1 URL, optimize later if needed
+
+---
+
+### PDR-007: WebSocket Infrastructure
+
+**Question:** How should we implement real-time crawl status updates?
+
+**Options:**
+1. **API Gateway WebSocket**
+   - ✅ AWS-native, serverless
+   - ❌ Complex to set up with Lambda
+
+2. **Polling (GET /api/crawl-status)**
+   - ✅ Simple, no infrastructure change
+   - ❌ Higher latency, more API calls
+
+3. **Server-Sent Events (SSE)**
+   - ✅ Simpler than WebSocket, one-way push
+   - ❌ Requires long-running connection
+
+**Status:** Deferred to Phase 2B
+**Recommendation:** Start with polling, add WebSocket later
+
+---
+
+**Review Process:** These decisions will be reviewed and resolved as we implement each component of Phase 2.

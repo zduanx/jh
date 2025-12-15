@@ -1,0 +1,10 @@
+version = 0.1
+[default]
+[default.deploy]
+[default.deploy.parameters]
+stack_name = "jh-backend-stack"
+resolve_s3 = true
+region = "us-east-1"
+capabilities = "CAPABILITY_IAM"
+parameter_overrides = "GoogleClientId=\"692957660464-5euenmcns4o9l8486p6bknpep4p2gp77.apps.googleusercontent.com\" JWTSecretKey=\"9a8a8eb49d9d1dd97e46bff7a19501f1f4cfd2103dbe153066026640f47347d3\" AllowedOrigins=\"http://localhost:3000,https://zduan-job.vercel.app\" AllowedEmails=\"zduanx@gmail.com\""
+confirm_changeset = false

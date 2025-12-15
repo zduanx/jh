@@ -3,6 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from mangum import Mangum
 from api.routes import router as api_router
 from auth.routes import router as auth_router
+from sourcing.routes import router as sourcing_router
 from config.settings import settings
 
 app = FastAPI(
@@ -24,6 +25,7 @@ app.add_middleware(
 # Include routers
 app.include_router(auth_router, prefix="/auth", tags=["Authentication"])
 app.include_router(api_router, prefix="/api", tags=["API"])
+app.include_router(sourcing_router, prefix="/api/sourcing", tags=["Job URL Sourcing"])
 
 
 @app.get("/health")

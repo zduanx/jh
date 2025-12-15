@@ -19,18 +19,28 @@ When starting a new AI session, follow these steps:
 
 ## Project Status
 
-**Current Phase**: Phase 1 Complete ✅
-**Last Session**: 2024-12-14
-**Next Steps**: Begin Phase 2 (Web Scraping & Database)
+**Current Phase**: Phase 2A Complete ✅, Phase 2B In Progress 🚧
+**Last Session**: 2024-12-15
+**Next Steps**: Phase 2B Implementation (see detailed plan below)
 
-### What's Working
+### What's Working (Phase 1)
 - ✅ Google OAuth authentication
 - ✅ JWT token generation and validation
 - ✅ Email whitelist access control
-- ✅ AWS Lambda + API Gateway deployment
+- ✅ AWS Lambda + API Gateway deployment (auth endpoints)
 - ✅ Vercel frontend deployment
 - ✅ CORS configured (localhost + production)
 - ✅ HTTPS on both frontend and backend
+
+### What's Working (Phase 2A)
+- ✅ 6 company extractors (Google, Amazon, Anthropic, TikTok, Roblox, Netflix)
+- ✅ Base extractor architecture with title filtering
+- ✅ Company enum + registry system
+- ✅ POST /api/sourcing endpoint added to Lambda (dry_run mode)
+- ✅ Async parallel extraction orchestrator
+- ✅ Location field standardization
+
+**Note:** The same Lambda now handles both auth (Phase 1) and sourcing (Phase 2A) endpoints. We call it "SourceURLLambda" to reflect its expanded role.
 
 ### Quick Links
 - **Live Frontend**: https://your-app.vercel.app - Read local .env for more info
@@ -149,6 +159,32 @@ Below are the user's preferences for AI assistant behavior during development.
 
 ## Workflow Guidelines
 
+### Updating src/extractors Logic
+
+**IMPORTANT: Always check trials folder first**
+
+Before making ANY changes to `src/extractors/` logic:
+
+1. **Check for API response snapshots:**
+   - Look in `trials/{company_name}/` for response examples
+   - Review snapshot files (e.g., `trials/tiktok/trial_3/tiktok_api_response_snapshot.json`)
+   - Understand the actual API structure before making assumptions
+
+2. **Why this matters:**
+   - API docs may be outdated or incomplete
+   - Real response structures often differ from expectations
+   - Prevents bugs like wrong ID fields, missing location data, etc.
+
+3. **If no snapshot exists:**
+   - Create one first by dumping actual API responses
+   - Save in `trials/{company_name}/` with descriptive filename
+   - Document any quirks in comments
+
+**Example issues caught by checking trials:**
+- Amazon has TWO id fields (`id` = UUID, `id_icims` = job number)
+- TikTok has nested `city_info` structure, not flat `location`
+- Anthropic uses `office` field instead of `location`
+
 ### Adding to Learning Documentation
 
 **When discussing new concepts:**
@@ -242,9 +278,198 @@ Add new preferences here as they come up:
 
 ---
 
+## Next Session Implementation Plan
+
+**Phase 2B Tasks (In Priority Order):**
+
+### 1. User Settings System
+**Goal:** Allow users to configure which companies to crawl and set title filters
+
+**Tasks:**
+- [ ] Design database schema for user_settings table
+- [ ] Design frontend settings page UI
+- [ ] Implement backend settings API:
+  - POST /api/settings (save user settings)
+  - GET /api/settings/:user_id (retrieve user settings)
+- [ ] Connect frontend to backend settings API
+- [ ] Test settings save/load flow
+
+**Decision needed:** Database choice (see PDR-001 below)
+
+---
+
+### 2. Deploy SourceURLLambda + Frontend Integration
+**Goal:** Deploy current Phase 2A work and connect with frontend
+
+**Tasks:**
+- [ ] Deploy updated SourceURLLambda (with /api/sourcing endpoint)
+- [ ] Create frontend page to trigger sourcing
+- [ ] Display dry_run results on frontend (company results, job counts, included/excluded jobs)
+- [ ] Test end-to-end flow: Frontend → SourceURLLambda → Display results
+
+---
+
+### 3. Implement Crawling & Parsing Logic
+**Goal:** Add crawl_job() and parse_job() methods to extractors
+
+**Tasks:**
+- [ ] Implement `crawl_job(url: str) -> str` method in base extractor
+- [ ] Implement crawl_job() for each company (6 companies)
+- [ ] Implement `parse_job(html: str) -> Dict` method in base extractor
+- [ ] Implement parse_job() for each company (6 companies)
+- [ ] Test crawling and parsing locally
+
+**Decision needed:** Rate limits per company (see PDR-003 below)
+
+---
+
+### 4. Database Setup
+**Goal:** Set up database for storing job data and user settings
+
+**Tasks:**
+- [ ] Choose database (Neon vs RDS PostgreSQL vs DynamoDB)
+- [ ] Create database schema:
+  - users table (if not exists)
+  - user_settings table
+  - jobs table
+- [ ] Set up database connection in backend
+- [ ] Test CRUD operations
+
+**Decision needed:** Database choice (see PDR-001 below)
+
+---
+
+### 5. SQS Queues + Lambda Functions
+**Goal:** Set up async crawling and parsing pipeline
+
+**Tasks:**
+- [ ] Create SQS Queue A (job URLs to crawl)
+- [ ] Create SQS Queue B (job IDs to parse)
+- [ ] Create JobCrawlerLambda function
+- [ ] Create JobParserLambda function
+- [ ] Set up Lambda triggers from SQS queues
+- [ ] Update SourceURLLambda to send to SQS when dry_run=false
+- [ ] Set up S3 bucket for raw HTML storage
+- [ ] Test full pipeline: SourceURLLambda → Queue A → JobCrawlerLambda → S3 + DB → Queue B → JobParserLambda → DB
+
+**Decisions needed:**
+- Error handling strategy (see PDR-004 below)
+- S3 cleanup policy (see PDR-005 below)
+- Batching strategy (see PDR-006 below)
+
+---
+
+### 6. Fuzzy Search Discussion
+**Goal:** Plan how to store and search parsed job data
+
+**Discussion points:**
+- How should we structure parsed data for fuzzy search?
+- Should we use PostgreSQL full-text search, Elasticsearch, or other?
+- What fields should be searchable (title, description, requirements, etc.)?
+- Should we store normalized/tokenized versions?
+
+---
+
+## Pending Architecture Decisions (PDRs)
+
+**IMPORTANT:** Review these before starting Phase 2B implementation. See [DECISIONS.md](./architecture/DECISIONS.md#phase-2-pending-decisions) for full details.
+
+### PDR-001: Database Choice
+**Question:** PostgreSQL (RDS vs Neon) or DynamoDB?
+
+**Options:**
+- PostgreSQL on AWS RDS (~$15-20/month, full SQL)
+- Neon (serverless Postgres, generous free tier)
+- DynamoDB (serverless NoSQL, unlimited scale)
+
+**Status:** ⏳ To be decided before Task #4
+**Impact:** Affects settings storage strategy (PDR-002)
+
+---
+
+### PDR-002: Settings Storage Strategy
+**Question:** How to store user settings (companies, filters)?
+
+**Options:**
+- Dedicated settings table
+- JSON field in users table
+- Separate DynamoDB table
+
+**Status:** ⏳ To be decided (depends on PDR-001)
+**Impact:** Affects Task #1 implementation
+
+---
+
+### PDR-003: Crawling Rate Limits
+**Question:** How to avoid getting blocked by company career pages?
+
+**Options:**
+- Fixed delay per company (e.g., 2 seconds)
+- Configurable delay in extractor class
+- SQS delay/visibility timeout
+
+**Status:** ⏳ To be decided before Task #3
+**Impact:** Affects crawl_job() implementation
+
+---
+
+### PDR-004: Error Handling Strategy
+**Question:** How to handle crawling/parsing failures?
+
+**Options:**
+- SQS Dead Letter Queue (DLQ)
+- Custom retry logic with exponential backoff
+- Hybrid approach
+
+**Status:** ⏳ To be decided before Task #5
+**Impact:** Affects Lambda and SQS configuration
+
+---
+
+### PDR-005: S3 Cleanup Policy
+**Question:** How long to keep raw HTML in S3?
+
+**Options:**
+- Keep forever (can re-parse, costs grow)
+- Delete after successful parsing (minimal cost, no re-parsing)
+- S3 Lifecycle Policy (30/60/90 days)
+
+**Recommendation:** Start with 30-day retention
+**Status:** ⏳ To be decided before Task #5
+
+---
+
+### PDR-006: JobCrawlerLambda Batching Strategy
+**Question:** Process 1 URL or multiple URLs per Lambda invocation?
+
+**Options:**
+- 1 URL per invocation (simple, auto-scales)
+- Batch 10-50 URLs (fewer cold starts, risk of timeout)
+
+**Recommendation:** Start with 1 URL, optimize later
+**Status:** ⏳ To be decided before Task #5
+
+---
+
+### PDR-007: WebSocket Infrastructure
+**Question:** How to show real-time crawl status updates?
+
+**Options:**
+- API Gateway WebSocket (AWS-native, complex)
+- Polling GET /api/crawl-status (simple)
+- Server-Sent Events (SSE)
+
+**Recommendation:** Start with polling, add WebSocket later
+**Status:** ⏳ Deferred to later in Phase 2B
+
+---
+
 ## Notes for Next AI Session
 
 When starting a new session, AI should:
 1. Read this file first
-2. Follow these preferences without re-asking
-3. If unclear, ask for clarification once, then add to this file
+2. Review the Next Session Implementation Plan above
+3. Ask user which task to start with (1-6)
+4. For each task, check if any PDRs need to be resolved first
+5. Follow the workflow preferences without re-asking
+6. If unclear, ask for clarification once, then add to this file
