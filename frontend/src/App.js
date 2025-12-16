@@ -11,12 +11,18 @@ import './App.css';
 const GOOGLE_CLIENT_ID = process.env.REACT_APP_GOOGLE_CLIENT_ID || 'YOUR_GOOGLE_CLIENT_ID_HERE';
 
 function App() {
+  // Smart root redirect: check if user is already logged in
+  const RootRedirect = () => {
+    const token = localStorage.getItem('access_token');
+    return <Navigate to={token ? "/info" : "/login"} replace />;
+  };
+
   return (
     <GoogleOAuthProvider clientId={GOOGLE_CLIENT_ID}>
       <Router>
         <Routes>
-          {/* Redirect root to login */}
-          <Route path="/" element={<Navigate to="/login" replace />} />
+          {/* Smart redirect: go to /info if logged in, /login otherwise */}
+          <Route path="/" element={<RootRedirect />} />
 
           {/* Public route */}
           <Route path="/login" element={<LoginPage />} />

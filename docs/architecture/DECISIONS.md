@@ -277,51 +277,536 @@ Use a **hybrid approach**:
 
 ---
 
+## ADR-009: Create User Record on First Login (Not on First Settings Change)
+
+**Date:** 2024-12-16
+**Status:** Accepted
+
+### Context
+Need to decide when to create a user record in the database: immediately after first successful authentication, or lazily when the user first modifies their settings.
+
+### Decision
+Create user record **on first login** (during auth callback).
+
+### Alternatives Considered
+1. **Create on first login** (chosen)
+2. **Create on first settings change** (lazy creation)
+
+### Reasoning
+
+**Why create on first login:**
+1. **Simpler downstream logic** - All API endpoints can assume the user exists after authentication
+2. **Default settings** - Can provide sane defaults (e.g., crawl all companies, no title filters) without requiring explicit configuration
+3. **Future-proof** - Will need user records for crawl history, saved jobs, notifications, etc.
+4. **User lifecycle tracking** - Can track `created_at`, `last_login`, and other analytics
+5. **Consistent state** - User always exists if they have a valid JWT
+
+**Why NOT lazy creation:**
+- ❌ Need "create if not exists" logic in multiple endpoints
+- ❌ Can't track when users first joined vs when they first configured
+- ❌ Can't associate future features (crawl history, saved jobs) with unconfigured users
+- ❌ More complex error handling ("user not found" scenarios)
+
+### Consequences
+
+**Positive:**
+- ✅ Every authenticated request can assume user exists
+- ✅ Can provide default settings immediately
+- ✅ Simpler API logic (no "create if not exists" checks)
+- ✅ Better analytics and user tracking
+- ✅ Easier to add future user-related features
+
+**Negative:**
+- ❌ Creates records for users who login once but never use the app
+- ❌ Slightly more complex login flow (database write during auth)
+
+**Mitigations:**
+- Storage cost is negligible (empty user records are tiny)
+- Can add cleanup job later to remove inactive users if needed
+
+### Implementation Notes
+
+**Auth callback flow:**
+```python
+async def handle_google_callback(token: str):
+    # 1. Verify Google token
+    user_info = verify_google_token(token)
+
+    # 2. Create or update user record
+    user = await db.get_user_by_email(user_info.email)
+    if not user:
+        # First time login - create user with defaults
+        user = await db.create_user(
+            email=user_info.email,
+            name=user_info.name,
+            settings={
+                "enabled_companies": ["ALL"],  # or list all company names
+                "title_filters": []  # empty = include all
+            }
+        )
+    else:
+        # Returning user - update last_login
+        await db.update_last_login(user.id)
+
+    # 3. Generate JWT with user_id
+    jwt_token = create_jwt(user.id)
+    return jwt_token
+```
+
+**Default settings strategy:**
+- `enabled_companies`: All companies enabled by default (or explicit list)
+- `title_filters`: Empty array = no filtering (include all jobs)
+- User can modify these via POST /api/settings
+
+---
+
+## ADR-010: Use BIGSERIAL for User IDs
+
+**Date:** 2024-12-16
+**Status:** Accepted
+
+### Context
+Need to decide on the primary key strategy for the users table. Options include auto-increment integers (BIGSERIAL), UUIDs (128-bit random), or custom 64-bit random IDs (like Snowflake).
+
+### Decision
+Use **BIGSERIAL** (PostgreSQL's 64-bit auto-increment integer) for `user_id`.
+
+### Alternatives Considered
+1. **BIGSERIAL** (auto-increment 64-bit) - chosen
+2. **UUID** (128-bit random, non-sequential)
+3. **Random BIGINT** (64-bit random)
+4. **Snowflake ID** (64-bit time-sortable, distributed generation)
+
+### Reasoning
+
+**Why BIGSERIAL:**
+1. **Simplest implementation** - Native PostgreSQL feature, no custom logic needed
+2. **Best performance** - Smallest size (8 bytes), fastest joins, best index performance
+3. **Zero collision risk** - Guaranteed unique by database
+4. **Sequential doesn't matter** - User IDs are hidden inside JWT tokens, never exposed in URLs
+5. **Single database** - Don't need distributed ID generation
+6. **Industry standard** - Used by GitHub, Stack Overflow, Reddit for single-database systems
+
+**Why NOT UUID (128-bit):**
+- ❌ 2x storage size (16 bytes vs 8 bytes)
+- ❌ Slower joins (string comparison vs integer)
+- ❌ Overkill for single-database system
+- ✅ Would be useful for distributed databases (not our case)
+
+**Why NOT Random BIGINT:**
+- ❌ Tiny collision risk (requires collision handling)
+- ❌ More complex code (manual ID generation)
+- ✅ Non-sequential (but we don't need this - IDs are in JWT)
+
+**Why NOT Snowflake ID:**
+- ❌ Requires custom implementation or library
+- ❌ Designed for distributed systems (Twitter-scale)
+- ✅ Time-sortable (nice feature, but not critical)
+- ✅ Would be useful at massive scale (not our case)
+
+### Security Consideration: Sequential ID Enumeration
+
+**Common concern:** "Sequential IDs allow enumeration attacks (iterate user_id=1,2,3...)"
+
+**Why this doesn't apply to us:**
+- ✅ User IDs are **inside JWT tokens**, not in URLs
+- ✅ API endpoints use JWT authentication, not user_id in path
+- ✅ Users cannot query other users' data (JWT contains their own user_id)
+- ✅ No public endpoints expose user_id
+
+**Example secure API design:**
+```
+GET /api/user
+Authorization: Bearer <JWT with user_id inside>
+
+Not:
+GET /api/users/123  ← This would be vulnerable to enumeration
+```
+
+### Consequences
+
+**Positive:**
+- ✅ Simplest possible implementation
+- ✅ Best performance (storage, joins, indexes)
+- ✅ Zero collision risk
+- ✅ Industry-proven approach
+- ✅ Easy to understand and maintain
+
+**Negative:**
+- ❌ Sequential IDs (but this is not a security risk in our design)
+- ❌ Single-database only (can't generate IDs across multiple databases)
+
+**Mitigations:**
+- Sequential IDs are hidden in JWT, never exposed
+- If we scale to distributed databases later, can migrate to UUIDs or Snowflake IDs
+
+### Implementation
+
+**Database schema:**
+```sql
+CREATE TABLE users (
+    user_id BIGSERIAL PRIMARY KEY,  -- Auto-increment 64-bit integer
+    email VARCHAR(255) UNIQUE NOT NULL,
+    name VARCHAR(255),
+    picture_url TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    last_login TIMESTAMP,
+
+    INDEX idx_users_email (email)  -- For login lookup
+);
+```
+
+**Auth flow:**
+```python
+# Login: Email → user_id lookup (once per login)
+user = await db.get_user_by_email(email)  # SELECT user_id FROM users WHERE email = ?
+
+# Create JWT with user_id
+jwt = create_jwt({"user_id": user.user_id, "email": user.email})
+
+# Future API requests: Extract user_id from JWT (no DB lookup)
+user_id = decode_jwt(token)["user_id"]
+```
+
+**ID range:**
+- BIGSERIAL range: 1 to 9,223,372,036,854,775,807 (9.2 quintillion)
+- More than sufficient for any realistic user base
+
+---
+
+## ADR-011: Use PostgreSQL (SQL) Over NoSQL
+
+**Date:** 2024-12-16
+**Status:** Accepted
+
+### Context
+Need to choose between SQL (relational) and NoSQL (document/key-value) database for storing user data, settings, and job application tracking.
+
+### Decision
+Use **PostgreSQL** (relational SQL database).
+
+### Alternatives Considered
+1. **PostgreSQL** (SQL) - chosen
+2. **DynamoDB** (NoSQL key-value)
+3. **MongoDB** (NoSQL document store)
+
+### Reasoning
+
+**Why PostgreSQL (SQL):**
+
+1. **Data is inherently relational** - Users have settings and job applications (one-to-many relationships with clear foreign keys)
+2. **Need complex queries with JOINs** - "Get all interview-stage jobs for user X", "Which users enabled company Y?"
+3. **ACID guarantees** - Data consistency is critical for job tracking (e.g., atomically update job status + timestamp)
+4. **Structured, predictable schema** - User settings and job applications have fixed fields, schema changes are infrequent
+5. **Mature ecosystem** - SQLAlchemy ORM, Alembic migrations, rich tooling
+6. **Query flexibility** - Analytics and reporting ("average time from 'applied' to 'interview'", "success rate per company")
+
+**Why NOT DynamoDB (NoSQL):**
+- ❌ No JOINs - Would need multiple queries and application-level joins
+- ❌ Limited query flexibility - Must design all access patterns upfront
+- ❌ Eventually consistent by default - Need strong consistency for job tracking
+
+**Why NOT MongoDB (NoSQL):**
+- ❌ Document model doesn't fit - Our data is relational, not hierarchical
+- ❌ JOIN support is limited - $lookup is slower than SQL JOINs
+
+### Consequences
+
+**Positive:**
+- ✅ Simple, natural data modeling with normalized tables
+- ✅ Powerful query capabilities (JOINs, aggregations, complex filters)
+- ✅ ACID guarantees for data consistency
+- ✅ Mature tooling (ORMs, migrations, admin UIs)
+- ✅ Great for analytics and reporting
+
+**Negative:**
+- ❌ Requires connection pooling (more setup than DynamoDB)
+- ❌ Need to manage schema migrations
+- ❌ Vertical scaling limits (but sufficient for our scale)
+
+**Mitigations:**
+- Connection pooling is standard practice with SQLAlchemy
+- PostgreSQL scales to millions of rows easily (well beyond our needs)
+
+### Related Decisions
+- See ADR-012 for PostgreSQL hosting choice (Neon)
+- See ADR-013 for ORM and migration strategy (SQLAlchemy + Alembic)
+- See ADR-010 for primary key strategy (BIGSERIAL)
+
+---
+
+## ADR-012: Use Neon for PostgreSQL Hosting
+
+**Date:** 2024-12-16
+**Status:** Accepted
+
+### Context
+After deciding to use PostgreSQL (ADR-011), need to choose a hosting solution for production. Options include managed AWS services (RDS, Aurora) or serverless PostgreSQL providers.
+
+### Decision
+Use **Neon** (serverless PostgreSQL) for hosting.
+
+### Alternatives Considered
+1. **Neon** (serverless Postgres) - chosen
+2. **AWS RDS PostgreSQL** (traditional managed database)
+3. **AWS Aurora Serverless** (AWS serverless SQL)
+
+### Reasoning
+
+**Why Neon:**
+
+1. **Easy setup** - 5-minute setup, no VPC configuration, no subnet groups, no parameter groups
+2. **Free tier forever** - 0.5 GB storage, 3 GB data transfer/month with no time limit (vs AWS 12-month free trial)
+3. **Serverless scaling** - Auto-scales compute and storage, no manual capacity planning
+4. **Built for modern apps** - Branch databases for dev/staging, instant point-in-time recovery
+5. **PostgreSQL-compatible** - Full PostgreSQL features (extensions, full-text search, pg_trgm)
+6. **No upfront cost** - Start free, pay only when you scale beyond free tier
+
+**Why NOT AWS RDS:**
+- ❌ Minimum cost ~$15-20/month for production instance
+- ❌ Complex setup (VPC, security groups, subnet groups, parameter groups)
+- ❌ Manual scaling (must change instance type)
+- ❌ Free tier limited to 12 months
+
+**Why NOT Aurora Serverless:**
+- ❌ More expensive than RDS for small workloads
+- ❌ Complexity of AWS networking (VPC, private subnets)
+- ❌ Cold start issues for low-traffic apps
+- ✅ Better for high-scale AWS-native architectures (not needed yet)
+
+### Consequences
+
+**Positive:**
+- ✅ Start building immediately with no infrastructure setup
+- ✅ Free tier sufficient for POC and early users
+- ✅ No VPC configuration needed (public endpoint with TLS)
+- ✅ Serverless = no capacity planning or instance sizing
+- ✅ Great developer experience (branching, instant backups)
+- ✅ Can migrate to RDS/Aurora later if needed
+
+**Negative:**
+- ❌ Less mature than AWS RDS (Neon is newer)
+- ❌ Not AWS-native (connection from Lambda crosses internet, but over TLS)
+- ❌ Limited control over infrastructure details
+
+**Mitigations:**
+- Use connection pooling (pgbouncer built into Neon)
+- Monitor performance and migrate to AWS if needed at scale
+- Database migration is straightforward (PostgreSQL → PostgreSQL)
+
+### Related Decisions
+- See ADR-011 for SQL vs NoSQL decision
+- See ADR-013 for database access strategy (SQLAlchemy + Alembic)
+
+---
+
+## ADR-013: Use SQLAlchemy + Alembic for Database Access
+
+**Date:** 2024-12-16
+**Status:** Accepted
+
+### Context
+After choosing PostgreSQL and Neon (ADR-011, ADR-012), need to decide how to access the database from Python backend. Options include raw SQL, ORMs, or query builders.
+
+### Decision
+Use **SQLAlchemy** (ORM) + **Alembic** (migration tool).
+
+### Alternatives Considered
+1. **SQLAlchemy + Alembic** (ORM + migrations) - chosen
+2. **Raw SQL with psycopg3** (no ORM)
+3. **Django ORM** (requires Django framework)
+
+### Reasoning
+
+**Why SQLAlchemy (ORM):**
+
+1. **Type safety** - Python objects instead of raw SQL strings, catch errors at development time
+2. **Pythonic code** - Write `user = User(email="foo@bar.com")` instead of `INSERT INTO users...`
+3. **Automatic query generation** - No manual SQL for common CRUD operations
+4. **Relationship handling** - Easy to traverse foreign keys (`user.settings`, `user.applications`)
+5. **Database portability** - Same Python code works with PostgreSQL, MySQL, SQLite
+6. **Mature ecosystem** - Industry standard for Python, well-documented, widely used
+
+**Why Alembic (Migrations):**
+
+1. **Version control for schema** - Track database schema changes in git
+2. **Repeatable deployments** - Apply same migrations across dev/staging/prod
+3. **Team collaboration** - Multiple developers can safely evolve schema
+4. **Rollback support** - Downgrade migrations if needed
+5. **Autogeneration** - Can detect model changes and generate migrations automatically
+6. **Works with SQLAlchemy** - Designed specifically for SQLAlchemy models
+
+**Why NOT raw SQL:**
+- ❌ No type safety - SQL injection risks, typos not caught until runtime
+- ❌ More boilerplate - Manual connection handling, result parsing
+- ❌ No migration tracking - Schema changes must be managed manually
+- ✅ Better performance (but negligible for our scale)
+
+**Why NOT Django ORM:**
+- ❌ Requires Django framework (we use FastAPI)
+- ❌ More opinionated, less flexible than SQLAlchemy
+
+### Consequences
+
+**Positive:**
+- ✅ Type-safe database operations with Python classes
+- ✅ Version-controlled schema migrations
+- ✅ Less boilerplate code compared to raw SQL
+- ✅ Easy to test (can use in-memory SQLite for unit tests)
+- ✅ Strong relationship handling (foreign keys, joins)
+- ✅ Repeatable deployments across environments
+
+**Negative:**
+- ❌ Learning curve (ORM concepts, Alembic workflow)
+- ❌ Slight performance overhead vs raw SQL (negligible at our scale)
+- ❌ Complex queries may require raw SQL fallback
+
+**Mitigations:**
+- SQLAlchemy is well-documented with many examples
+- Can always use raw SQL for complex queries (`session.execute()`)
+- Performance is sufficient for thousands of users
+
+### Workflow
+
+**Define models:**
+```python
+class User(Base):
+    __tablename__ = "users"
+    user_id = Column(BigInteger, primary_key=True)
+    email = Column(String(255), unique=True, nullable=False)
+```
+
+**Generate migration:**
+```bash
+alembic revision --autogenerate -m "Add users table"
+```
+
+**Apply migration:**
+```bash
+alembic upgrade head
+```
+
+**Use in code:**
+```python
+user = session.query(User).filter_by(email="foo@bar.com").first()
+```
+
+### Related Decisions
+- See ADR-011 for PostgreSQL decision
+- See ADR-012 for Neon hosting decision
+
+---
+
+## ADR-014: Use Hybrid Text Search (PostgreSQL Full-Text + Fuzzy)
+
+**Date:** 2024-12-16
+**Status:** Accepted
+
+### Context
+Need to search job descriptions for keywords with typo tolerance. User should be able to type "grapql" and find jobs mentioning "graphql".
+
+### Decision
+Use **hybrid search** combining PostgreSQL's full-text search (tsvector) with fuzzy matching (pg_trgm extension).
+
+### Alternatives Considered
+1. **Hybrid (tsvector + pg_trgm)** - chosen
+2. **Full-text search only** (no typo tolerance)
+3. **Fuzzy search only** (pg_trgm trigrams)
+4. **Elasticsearch** (dedicated search engine)
+
+### Reasoning
+
+**Why Hybrid (Full-Text + Fuzzy):**
+
+1. **Full-text for semantic matching** - Handles stemming ("running" matches "run"), stop words ("the", "a")
+2. **Fuzzy for typo tolerance** - Handles misspellings ("grapql" matches "graphql"), transpositions, missing letters
+3. **Native PostgreSQL** - No additional infrastructure (vs Elasticsearch)
+4. **Low storage overhead** - ~4 MB full-text + ~12 MB fuzzy per text column for 1,000 jobs (16 MB total)
+5. **Fast query performance** - GIN indexes make searches fast even at scale
+6. **Cost-effective** - Included in Neon free tier, no separate search service
+
+**Why NOT full-text only:**
+- ❌ No typo tolerance - "grapql" won't match "graphql"
+- ✅ Good for exact keyword matching and stemming
+
+**Why NOT fuzzy only:**
+- ❌ No stemming - "running" won't match "run"
+- ❌ Slower for large text blocks (trigrams are expensive)
+
+**Why NOT Elasticsearch:**
+- ❌ Additional infrastructure to manage and pay for
+- ❌ Overkill for thousands of jobs (not millions)
+- ❌ More complex deployment (another service to maintain)
+- ✅ Better for massive scale, advanced features (not needed yet)
+
+### Consequences
+
+**Positive:**
+- ✅ Typo-tolerant search out of the box
+- ✅ No additional infrastructure (uses PostgreSQL)
+- ✅ Low storage cost (~16 MB for 1,000 jobs)
+- ✅ Fast query performance with GIN indexes
+- ✅ Can migrate to Elasticsearch later if needed
+
+**Negative:**
+- ❌ Requires two GIN indexes (full-text + trigram)
+- ❌ More storage than full-text alone (but still small)
+- ❌ Slightly more complex queries (combine two search methods)
+
+**Mitigations:**
+- Storage overhead is minimal (16 MB for 1,000 jobs, ~160 MB for 10,000 jobs)
+- Query complexity is handled in application layer (users don't see it)
+
+### Implementation
+
+**Database schema:**
+```sql
+CREATE TABLE jobs (
+    job_id BIGSERIAL PRIMARY KEY,
+    description TEXT,
+    description_tsvector TSVECTOR,  -- Full-text search
+    CONSTRAINT ...
+);
+
+CREATE INDEX idx_jobs_description_fts ON jobs USING GIN(description_tsvector);
+CREATE INDEX idx_jobs_description_fuzzy ON jobs USING GIN(description gin_trgm_ops);
+```
+
+**Search query:**
+```sql
+-- Hybrid search: full-text OR fuzzy match
+SELECT * FROM jobs
+WHERE description_tsvector @@ to_tsquery('graphql')  -- Full-text
+   OR description % 'grapql';  -- Fuzzy (% is similarity operator)
+```
+
+**Storage estimation:**
+- 1,000 jobs × 5 KB text = 5 MB
+- Full-text index: ~4 MB
+- Fuzzy index: ~12 MB
+- Total: ~21 MB (very affordable)
+
+### Related Decisions
+- See ADR-011 for PostgreSQL decision
+- See ADR-012 for Neon hosting (includes pg_trgm extension)
+
+---
+
 ## Phase 2 Pending Decisions
 
 The following architectural decisions are deferred for future discussion and will be resolved during Phase 2 implementation.
 
-### PDR-001: Database Choice
+### ~~PDR-001: Database Choice~~ ✅ Resolved
 
-**Question:** Which database should we use for storing job data, user settings, and application tracking?
-
-**Options:**
-1. **PostgreSQL on AWS RDS**
-   - ✅ Full ACID compliance, complex queries, SQL familiarity
-   - ❌ Cost (~$15-20/month minimum), need to manage
-
-2. **Neon (Serverless Postgres)**
-   - ✅ Serverless, generous free tier, auto-scaling
-   - ❌ Newer service, less proven at scale
-
-3. **DynamoDB**
-   - ✅ Serverless, AWS integration, unlimited scale
-   - ❌ NoSQL learning curve, query limitations
-
-**Status:** To be decided
-**Target:** Before JobCrawlerLambda implementation
+**Status:** Resolved in ADR-011, ADR-012
+**Decision:** PostgreSQL hosted on Neon
 
 ---
 
-### PDR-002: Settings Storage Strategy
+### ~~PDR-002: Settings Storage Strategy~~ ✅ Resolved
 
-**Question:** How should we store user crawling settings (companies, filters)?
-
-**Options:**
-1. **Dedicated settings table in main database**
-   - ✅ Simple, normalized, easy queries
-   - ❌ More DB calls
-
-2. **JSON field in users table**
-   - ✅ Single query for user + settings
-   - ❌ Less normalized, harder to query all settings
-
-3. **Separate DynamoDB table (if using DynamoDB)**
-   - ✅ Fast key-value lookups
-   - ❌ Eventual consistency considerations
-
-**Status:** To be decided
-**Depends on:** PDR-001 (database choice)
+**Status:** Resolved (see ADR-011, ADR-013)
+**Decision:** Dedicated tables with SQLAlchemy ORM for user settings and job applications
 
 ---
 
