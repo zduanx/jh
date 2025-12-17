@@ -9,6 +9,5 @@
     "deploymentEnabled": {
       "main": true
     }
-  },
-  "ignoreCommand": "bash vercel-ignore-build-step.sh"
+  }
 }
