@@ -6,17 +6,60 @@ Quick reference for running and testing the application locally.
 
 ## 🚀 Quick Start
 
+### Load Dev Shortcuts (Recommended)
+
+**One-time per terminal session:**
+```bash
+# From project root
+source dev.sh
+
+# See all available commands
+jh-help
+```
+
+This loads convenient shortcuts like `jh-start-be`, `jh-start-fe`, `jh-kill-all`, etc.
+
+---
+
+### Prerequisites
+
+**One-time setup (if not done already):**
+```bash
+# 1. Ensure .env.local files exist (gitignored)
+ls backend/.env.local   # Should exist
+ls frontend/.env.local  # Should exist
+
+# 2. Install backend dependencies
+cd backend
+python3 -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
+
+# 3. Install frontend dependencies
+cd ../frontend
+npm install
+```
+
 ### Start Backend (Terminal 1)
 
+**Option 1: Using shortcuts (recommended)**
 ```bash
-# Navigate to backend directory
+source dev.sh        # Load shortcuts
+jh-start-be          # Start backend
+```
+
+**Option 2: Manual**
+```bash
 cd backend
-
-# Activate virtual environment
 source venv/bin/activate
-
-# Start server
 uvicorn main:app --reload --port 8000
+```
+
+**Option 3: Background process (survives terminal close)**
+```bash
+source dev.sh
+jh-start-be-bg       # Starts in background
+tail -f backend/server.log  # View logs
 ```
 
 **Expected output:**
@@ -40,18 +83,34 @@ curl http://localhost:8000/health
 
 ### Start Frontend (Terminal 2)
 
+**Option 1: Using shortcuts (recommended)**
 ```bash
-# Navigate to frontend directory
-cd frontend
+source dev.sh        # Load shortcuts
+jh-start-fe          # Start frontend
+```
 
-# Start React dev server
+**Option 2: Manual**
+```bash
+cd frontend
 npm start
+```
+
+**Option 3: Background process (survives terminal close)**
+```bash
+source dev.sh
+jh-start-fe-bg       # Starts in background
+tail -f frontend/server.log  # View logs
 ```
 
 **URLs:**
 - Frontend: http://localhost:3000
 - Backend API: http://localhost:8000
 - Backend API Docs: http://localhost:8000/docs
+
+**Important:**
+- Backend uses **test/dev database** from `.env.local` (safe for development)
+- Production database is only used in AWS Lambda deployment
+- Frontend connects to `http://localhost:8000` from `.env.local`
 
 ---
 
@@ -100,26 +159,75 @@ Success Rate: 85.7%
 ## 🛑 Stopping Services
 
 ### Stop Backend
-Press `Ctrl+C` in the terminal running uvicorn
-
-### Stop Frontend
-Press `Ctrl+C` in the terminal running npm
-
-### Kill by Port (if needed)
-
-**Find process on port 8000 (backend):**
+**Option 1: Using shortcuts (recommended)**
 ```bash
-lsof -ti:8000 | xargs kill -9
+source dev.sh
+jh-kill-be          # Kill backend
 ```
 
-**Find process on port 3000 (frontend):**
+**Option 2: Manual**
+- Press `Ctrl+C` in the terminal running uvicorn
+- Or: `lsof -ti:8000 | xargs kill -9`
+
+### Stop Frontend
+**Option 1: Using shortcuts (recommended)**
 ```bash
-lsof -ti:3000 | xargs kill -9
+source dev.sh
+jh-kill-fe          # Kill frontend
+```
+
+**Option 2: Manual**
+- Press `Ctrl+C` in the terminal running npm
+- Or: `lsof -ti:3000 | xargs kill -9`
+
+### Stop Everything
+```bash
+source dev.sh
+jh-kill-all         # Kill both backend and frontend
 ```
 
 ---
 
-## 🔧 Common Commands
+## 🔧 Dev Shortcuts Reference
+
+After running `source dev.sh`, you have access to:
+
+**Navigation:**
+- `jh-be` - Go to backend/ and activate venv
+- `jh-fe` - Go to frontend/
+
+**Start Services (foreground):**
+- `jh-start-be` - Start backend server (port 8000)
+- `jh-start-fe` - Start frontend server (port 3000)
+
+**Start Services (background - survives terminal close):**
+- `jh-start-be-bg` - Start backend in background
+- `jh-start-fe-bg` - Start frontend in background
+
+**Stop Services:**
+- `jh-kill-be` - Kill backend process
+- `jh-kill-fe` - Kill frontend process
+- `jh-kill-all` - Kill both backend and frontend
+
+**Utilities:**
+- `jh-status` - Check what's running
+- `jh-help` - Show all available commands
+
+**Example workflow:**
+```bash
+# Terminal 1
+source dev.sh
+jh-start-be-bg      # Start backend in background
+jh-start-fe-bg      # Start frontend in background
+jh-status           # Verify both running
+
+# When done
+jh-kill-all         # Stop everything
+```
+
+---
+
+## 🔧 Common Commands (Manual)
 
 ### Backend Commands (in `backend/` directory)
 
@@ -165,8 +273,8 @@ npm run build
 ## 📋 Testing Checklist
 
 **Before testing:**
-- [ ] Backend `.env` file exists with correct values
-- [ ] Frontend `.env` file exists with correct values
+- [ ] Backend `.env.local` file exists with correct values (test database URL)
+- [ ] Frontend `.env.local` file exists with correct values (localhost:8000)
 - [ ] Backend dependencies installed (`pip install -r requirements.txt`)
 - [ ] Frontend dependencies installed (`npm install`)
 
@@ -199,8 +307,8 @@ lsof -ti:3000 | xargs kill -9
 ### Backend won't start
 
 ```bash
-# Check .env file exists
-ls backend/.env
+# Check .env.local file exists
+ls backend/.env.local
 
 # Check dependencies installed
 source venv/bin/activate
@@ -208,13 +316,21 @@ pip list | grep fastapi
 
 # Reinstall dependencies
 pip install -r requirements.txt
+
+# Verify DATABASE_URL points to test/dev branch
+grep DATABASE_URL backend/.env.local
+# Should see: ep-aged-darkness-ahpqrn39-pooler (test branch)
 ```
 
 ### Frontend won't start
 
 ```bash
-# Check .env file exists
-ls frontend/.env
+# Check .env.local file exists
+ls frontend/.env.local
+
+# Verify API URL is localhost
+grep REACT_APP_API_URL frontend/.env.local
+# Should see: http://localhost:8000
 
 # Reinstall dependencies
 rm -rf node_modules package-lock.json

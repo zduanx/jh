@@ -1,133 +1,119 @@
-# Learning Notes Index
+# Learning Documentation
 
-Quick reference to find topics discussed during development.
-
----
-
-## Authentication & Security
-
-### OAuth & Authentication
-- [What is OAuth?](./authentication.md#what-is-oauth)
-- [How OAuth works](./authentication.md#how-oauth-works)
-- [OAuth vs Password login](./authentication.md#oauth-vs-password-login)
-- [Google OAuth implementation](./authentication.md#google-oauth-implementation)
-
-### Tokens & Sessions
-- [JWT explained](./authentication.md#jwt-explained)
-- [JWT vs Sessions comparison](./authentication.md#jwt-vs-sessions)
-- [Token storage options](./authentication.md#token-storage)
-- [Token security concerns](./authentication.md#token-security)
-
-### Security Best Practices
-- [HTTPS and why it matters](./security.md#https-and-ssl)
-- [Preventing token interception](./security.md#preventing-token-interception)
-- [localStorage vs httpOnly cookies](./security.md#token-storage-security)
-- [Common vulnerabilities](./security.md#common-vulnerabilities)
+Educational content about technologies and concepts used in this project.
 
 ---
 
-## Backend Development
+## Core Technologies
 
-### Framework Comparisons
-- [FastAPI vs Django](./backend.md#fastapi-vs-django)
-- [When to use each framework](./backend.md#framework-selection)
-- [FastAPI advantages](./backend.md#fastapi-advantages)
+### Authentication & Security
+**[authentication.md](./authentication.md)** - OAuth, JWT, sessions, Auth0
+- What is OAuth and how it works
+- JWT vs Sessions comparison
+- Google OAuth implementation
+- Token storage and security
 
-### API Design
-- [REST vs GraphQL](./backend.md#rest-vs-graphql)
-- [API endpoint design](./backend.md#api-endpoint-design)
-- [Request validation with Pydantic](./backend.md#pydantic-validation)
+**[security.md](./security.md)** - HTTPS, CORS, vulnerabilities
+- Why HTTPS matters
+- Token interception prevention
+- localStorage vs httpOnly cookies
+- Common security vulnerabilities
 
----
+### Backend
+**[backend.md](./backend.md)** - FastAPI, Django, REST, GraphQL
+- FastAPI vs Django comparison
+- API design patterns
+- Pydantic validation
+- System architecture concepts
 
-## Frontend Development
+**[python-fastapi.md](./python-fastapi.md)** - Generators, yield, Depends()
+- How Python generators work
+- yield vs return
+- FastAPI dependency injection
+- Type annotations for generators
 
-### React Basics
-- [Why React](./frontend.md#why-react)
-- [Component architecture](./frontend.md#component-architecture)
-- [Protected routes](./frontend.md#protected-routes)
+**[sqlalchemy.md](./sqlalchemy.md)** - ORM, sessions, queries
+- SessionLocal factory pattern
+- Query patterns (object vs tuple)
+- Session lifecycle
+- Loading strategies
 
-### Frontend-Backend Integration
-- [How frontend serves users](./frontend.md#frontend-serving)
-- [Bootstrap process explained](./frontend.md#bootstrap-process)
-- [Making API calls](./frontend.md#api-calls)
-- [Including tokens in requests](./frontend.md#token-in-requests)
+### Frontend
+**[frontend.md](./frontend.md)** - React, routing, state management
+- Why React
+- Component architecture
+- Protected routes
+- Frontend-backend integration
 
----
+### Cloud & Deployment
+**[aws.md](./aws.md)** - EC2, Lambda, API Gateway, SAM
+- EC2 vs Lambda comparison
+- API Gateway patterns
+- AWS SAM deployment
+- Environment variables in Lambda
 
-## AWS & Deployment
-
-### AWS Services
-- [EC2 vs Lambda comparison](./aws-deployment.md#ec2-vs-lambda)
-- [When to use API Gateway](./aws-deployment.md#api-gateway)
-- [AWS free tier options](./aws-deployment.md#free-tier)
-
-### Deployment Strategies
-- [Deploying FastAPI to EC2](./aws-deployment.md#fastapi-on-ec2)
-- [Deploying React to Vercel](./aws-deployment.md#react-on-vercel)
-- [Setting up HTTPS](./aws-deployment.md#https-setup)
-
----
-
-## Third-Party Services
-
-### Authentication Services
-- [What is Auth0](./authentication.md#auth0)
-- [AWS Cognito](./authentication.md#aws-cognito)
-- [Comparing auth solutions](./authentication.md#auth-solutions-comparison)
-
-### Other Tools
-- [Bootstrap.js library](./frontend.md#bootstrap-library)
-- [Passport.js (Node.js)](./backend.md#passportjs)
-
----
-
-## System Design Concepts
-
-### Scalability
-- [Stateless vs Stateful architecture](./backend.md#stateless-vs-stateful)
-- [Horizontal vs Vertical scaling](./aws-deployment.md#scaling)
-- [Message queues](./backend.md#message-queues)
-
-### Architecture Patterns
-- [Microservices](./backend.md#microservices)
-- [Single vs Multiple backend servers](./backend.md#single-vs-multiple-servers)
-- [WebSocket for real-time updates](./backend.md#websocket)
+### Testing
+**[pytest.md](./pytest.md)** - pytest commands and patterns
+- Running tests (all, specific, filtered)
+- Useful flags (-v, -s, -x, -k)
+- Test structure and discovery
+- Debugging failed tests
 
 ---
 
-## Quick Lookups
+## Phase 2A: Job Scraping Architecture
+
+**[kafka.md](./kafka.md)** - Message queue architecture
+- Kafka vs RabbitMQ vs SQS
+- Producer-consumer patterns
+- When to use message queues
+
+**[lambda-sqs.md](./lambda-sqs.md)** - Lambda + SQS integration
+- SQS queue setup
+- Lambda triggers and concurrency
+- Error handling and retries
+
+---
+
+## Quick Reference
 
 ### Common Questions
-- "What is OAuth?" → [authentication.md#what-is-oauth](./authentication.md#what-is-oauth)
-- "EC2 or Lambda?" → [aws-deployment.md#ec2-vs-lambda](./aws-deployment.md#ec2-vs-lambda)
-- "JWT or Sessions?" → [authentication.md#jwt-vs-sessions](./authentication.md#jwt-vs-sessions)
-- "FastAPI or Django?" → [backend.md#fastapi-vs-django](./backend.md#fastapi-vs-django)
-- "Is JWT secure?" → [security.md#jwt-security](./security.md#jwt-security)
-- "How does frontend load?" → [frontend.md#bootstrap-process](./frontend.md#bootstrap-process)
+- **"What is OAuth?"** → [authentication.md](./authentication.md)
+- **"EC2 or Lambda?"** → [aws.md](./aws.md)
+- **"JWT or Sessions?"** → [authentication.md](./authentication.md)
+- **"FastAPI or Django?"** → [backend.md](./backend.md)
+- **"How do generators work?"** → [python-fastapi.md](./python-fastapi.md)
+- **"How to run tests?"** → [pytest.md](./pytest.md)
 
 ### Technology Comparisons
-All major "A vs B" comparisons are documented with:
-- Side-by-side feature tables
+Most files include side-by-side comparisons with:
+- Feature tables
 - Use case recommendations
 - Pros/cons analysis
-- Code examples where applicable
+- Code examples
 
 ---
 
-## How to Use This Index
+## Files Overview
 
-1. **Browse by topic**: Use the sections above
-2. **Search**: Use Cmd+F to find keywords
-3. **Follow links**: Click to jump to detailed explanations
-4. **Cross-reference**: Related topics are linked within each file
+| File | Topics | Lines |
+|------|--------|-------|
+| [authentication.md](./authentication.md) | OAuth, JWT, sessions, Auth0, security tokens | ~838 |
+| [aws.md](./aws.md) | EC2, Lambda, API Gateway, deployment | ~1081 |
+| [backend.md](./backend.md) | FastAPI, Django, REST, GraphQL, architecture | ~664 |
+| [frontend.md](./frontend.md) | React, routing, state, API integration | ~523 |
+| [security.md](./security.md) | HTTPS, token security, vulnerabilities | ~361 |
+| [python-fastapi.md](./python-fastapi.md) | Generators, yield, Depends() | ~725 |
+| [sqlalchemy.md](./sqlalchemy.md) | ORM, sessions, queries | ~684 |
+| [pytest.md](./pytest.md) | pytest commands and patterns | ~262 |
+| [kafka.md](./kafka.md) | Message queues, Kafka architecture | ~834 |
+| [lambda-sqs.md](./lambda-sqs.md) | Lambda + SQS integration | ~392 |
 
 ---
 
-## Files in this Directory
+## How to Use
 
-- **authentication.md** - OAuth, JWT, sessions, Auth0, security tokens
-- **aws-deployment.md** - EC2, Lambda, API Gateway, deployment strategies
-- **backend.md** - FastAPI, Django, REST, GraphQL, system architecture
-- **frontend.md** - React, routing, state, frontend-backend communication
-- **security.md** - HTTPS, token security, best practices, vulnerabilities
+1. **Browse by topic** - Use sections above to find relevant file
+2. **Search** - Use Cmd+F to find keywords
+3. **Follow links** - Click to jump to detailed explanations
+4. **Cross-reference** - Related topics are linked within files

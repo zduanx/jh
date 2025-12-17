@@ -3,6 +3,10 @@
 .env.local
 *.env
 
+# Temporary files from dev.sh scripts (jenvcheck, jpushvercel)
+frontend/.env.vercel.check
+frontend/.env.production.local
+
 # AWS SAM - Contains secrets, use samconfig.toml.example
 backend/samconfig.toml
 
@@ -14,6 +18,8 @@ __pycache__/
 venv/
 ENV/
 .Python
+.mypy_cache/
+.pytest_cache/
 
 # Node
 node_modules/
@@ -39,3 +45,7 @@ build/
 # Vercel
 .vercel
 trials/
+
+# Dev script logs (from dev.sh background processes)
+backend/server.log
+frontend/server.log

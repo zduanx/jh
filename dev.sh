@@ -25,6 +25,7 @@ if [ -f "$JH_ROOT/backend/.env.local" ]; then
     BACKEND_ALLOWED_EMAILS_PROD=$(grep "^# ALLOWED_EMAILS_PROD_VALUE=" "$JH_ROOT/backend/.env.local" | cut -d= -f2- | tr -d '\n' | tr -d '\r')
     BACKEND_ALLOWED_ORIGINS_PROD=$(grep "^# ALLOWED_ORIGINS_PROD_VALUE=" "$JH_ROOT/backend/.env.local" | cut -d= -f2- | tr -d '\n' | tr -d '\r')
     BACKEND_DATABASE_URL_PROD=$(grep "^# DATABASE_URL_PROD_VALUE=" "$JH_ROOT/backend/.env.local" | cut -d= -f2- | tr -d '\n' | tr -d '\r')
+    BACKEND_TEST_DATABASE_URL_PROD=$(grep "^# TEST_DATABASE_URL_PROD_VALUE=" "$JH_ROOT/backend/.env.local" | cut -d= -f2- | tr -d '\n' | tr -d '\r')
 fi
 
 # Frontend production values
@@ -40,12 +41,30 @@ typeset -A BACKEND_CHECK=(
     ["ALLOWED_EMAILS"]="$BACKEND_ALLOWED_EMAILS_PROD"
     ["ALLOWED_ORIGINS"]="$BACKEND_ALLOWED_ORIGINS_PROD"
     ["DATABASE_URL"]="$BACKEND_DATABASE_URL_PROD"
+    ["TEST_DATABASE_URL"]="$BACKEND_TEST_DATABASE_URL_PROD"
 )
 
 typeset -A FRONTEND_CHECK=(
     ["REACT_APP_GOOGLE_CLIENT_ID"]="$FRONTEND_GOOGLE_CLIENT_ID_PROD"
     ["REACT_APP_API_URL"]="$FRONTEND_API_URL_PROD"
 )
+
+# Database URLs to check in jready
+typeset -a DB_CHECK_VARS=(
+    "DATABASE_URL"
+    "TEST_DATABASE_URL"
+)
+
+# ==============================================================================
+# HELPER FUNCTION: Normalize environment variable values
+# ==============================================================================
+# Strips literal \n, \r, \t escape sequences and quotes from env var values
+# This prevents issues where values like "url\n" differ from clean "url"
+_normalize_env_value() {
+    local value="$1"
+    # Remove quotes, then remove literal \n, \r, \t escape sequences
+    echo "$value" | tr -d '"' | sed 's/\\n//g' | sed 's/\\r//g' | sed 's/\\t//g'
+}
 
 # Backend shortcuts
 jbe() {
@@ -171,14 +190,18 @@ jready() {
     echo -e "${BLUE}[3/7] Backend environment config...${NC}"
     if [ -f "$JH_ROOT/backend/.env.local" ]; then
         echo -e "${GREEN}  ✓ backend/.env.local exists${NC}"
-        # Check for required variables
-        if grep -q "DATABASE_URL=" "$JH_ROOT/backend/.env.local" && \
-           grep -q "GOOGLE_CLIENT_ID=" "$JH_ROOT/backend/.env.local" && \
-           grep -q "SECRET_KEY=" "$JH_ROOT/backend/.env.local"; then
+        # Check for required variables using BACKEND_CHECK keys
+        MISSING_BACKEND_VARS=()
+        for VAR_NAME in "${(@k)BACKEND_CHECK}"; do
+            if ! grep -q "^${VAR_NAME}=" "$JH_ROOT/backend/.env.local"; then
+                MISSING_BACKEND_VARS+=("$VAR_NAME")
+            fi
+        done
+        if [ ${#MISSING_BACKEND_VARS[@]} -eq 0 ]; then
             echo -e "${GREEN}  ✓ Required environment variables present${NC}"
         else
             echo -e "${YELLOW}  ⚠ Some required variables may be missing${NC}"
-            echo -e "${YELLOW}    Check: DATABASE_URL, GOOGLE_CLIENT_ID, SECRET_KEY${NC}"
+            echo -e "${YELLOW}    Check: ${MISSING_BACKEND_VARS[*]}${NC}"
         fi
     else
         echo -e "${RED}  ✗ backend/.env.local not found${NC}"
@@ -200,13 +223,18 @@ jready() {
     echo -e "${BLUE}[5/7] Frontend environment config...${NC}"
     if [ -f "$JH_ROOT/frontend/.env.local" ]; then
         echo -e "${GREEN}  ✓ frontend/.env.local exists${NC}"
-        # Check for required variables
-        if grep -q "REACT_APP_API_URL=" "$JH_ROOT/frontend/.env.local" && \
-           grep -q "REACT_APP_GOOGLE_CLIENT_ID=" "$JH_ROOT/frontend/.env.local"; then
+        # Check for required variables using FRONTEND_CHECK keys
+        MISSING_FRONTEND_VARS=()
+        for VAR_NAME in "${(@k)FRONTEND_CHECK}"; do
+            if ! grep -q "^${VAR_NAME}=" "$JH_ROOT/frontend/.env.local"; then
+                MISSING_FRONTEND_VARS+=("$VAR_NAME")
+            fi
+        done
+        if [ ${#MISSING_FRONTEND_VARS[@]} -eq 0 ]; then
             echo -e "${GREEN}  ✓ Required environment variables present${NC}"
         else
             echo -e "${YELLOW}  ⚠ Some required variables may be missing${NC}"
-            echo -e "${YELLOW}    Check: REACT_APP_API_URL, REACT_APP_GOOGLE_CLIENT_ID${NC}"
+            echo -e "${YELLOW}    Check: ${MISSING_FRONTEND_VARS[*]}${NC}"
         fi
     else
         echo -e "${RED}  ✗ frontend/.env.local not found${NC}"
@@ -214,43 +242,89 @@ jready() {
         ISSUES=$((ISSUES + 1))
     fi
 
-    # 6. Check database connectivity
+    # 6. Check database connectivity (test both local/test and prod databases)
     echo -e "${BLUE}[6/7] Database connectivity...${NC}"
     if [ -f "$JH_ROOT/backend/.env.local" ] && [ -d "$JH_ROOT/backend/venv" ]; then
         cd "$JH_ROOT/backend" || return 1
         source venv/bin/activate
-        DB_CHECK=$(python -c "
+
+        for DB_VAR in "${DB_CHECK_VARS[@]}"; do
+            # Get prod URL from BACKEND_CHECK
+            PROD_URL="${BACKEND_CHECK[$DB_VAR]}"
+
+            # Test both local (test) and prod connections
+            DB_RESULT=$(python -c "
 import os
 from pathlib import Path
 from dotenv import load_dotenv
+from sqlalchemy import create_engine, text
+
 env_local = Path('.env.local')
 if env_local.exists():
     load_dotenv(env_local)
-db_url = os.getenv('DATABASE_URL')
-if db_url:
-    if 'ep-aged-darkness-ahpqrn39-pooler' in db_url:
-        print('test')
-    elif 'ep-quiet-hat-ahe8vhso-pooler' in db_url:
-        print('production')
-    else:
-        print('unknown')
+
+local_url = os.getenv('$DB_VAR')
+prod_url = '$PROD_URL'
+
+results = []
+
+# Test local/test DB
+if local_url:
+    try:
+        engine = create_engine(local_url)
+        with engine.connect() as conn:
+            conn.execute(text('SELECT 1'))
+        results.append('local:ok')
+    except Exception as e:
+        results.append(f'local:error:{str(e)[:50]}')
 else:
-    print('missing')
+    results.append('local:missing')
+
+# Test prod DB
+if prod_url:
+    try:
+        engine = create_engine(prod_url)
+        with engine.connect() as conn:
+            conn.execute(text('SELECT 1'))
+        results.append('prod:ok')
+    except Exception as e:
+        results.append(f'prod:error:{str(e)[:50]}')
+else:
+    results.append('prod:missing')
+
+print('|'.join(results))
 " 2>/dev/null)
+
+            # Parse results (format: "local:status|prod:status")
+            LOCAL_RESULT=$(echo "$DB_RESULT" | cut -d'|' -f1)
+            PROD_RESULT=$(echo "$DB_RESULT" | cut -d'|' -f2)
+
+            # Display local/test result
+            if [[ "$LOCAL_RESULT" == "local:ok" ]]; then
+                echo -e "${GREEN}  ✓ $DB_VAR (test) connected${NC}"
+            elif [[ "$LOCAL_RESULT" == "local:missing" ]]; then
+                echo -e "${RED}  ✗ $DB_VAR (test) not configured${NC}"
+                ISSUES=$((ISSUES + 1))
+            elif [[ "$LOCAL_RESULT" == local:error:* ]]; then
+                echo -e "${RED}  ✗ $DB_VAR (test) connection failed${NC}"
+                echo -e "${YELLOW}    ${LOCAL_RESULT#local:error:}${NC}"
+                ISSUES=$((ISSUES + 1))
+            fi
+
+            # Display prod result
+            if [[ "$PROD_RESULT" == "prod:ok" ]]; then
+                echo -e "${GREEN}  ✓ $DB_VAR (prod) connected${NC}"
+            elif [[ "$PROD_RESULT" == "prod:missing" ]]; then
+                echo -e "${YELLOW}  ⊘ $DB_VAR (prod) not configured${NC}"
+            elif [[ "$PROD_RESULT" == prod:error:* ]]; then
+                echo -e "${RED}  ✗ $DB_VAR (prod) connection failed${NC}"
+                echo -e "${YELLOW}    ${PROD_RESULT#prod:error:}${NC}"
+                ISSUES=$((ISSUES + 1))
+            fi
+        done
+
         deactivate 2>/dev/null || true
         cd "$JH_ROOT" || return 1
-
-        if [ "$DB_CHECK" = "test" ]; then
-            echo -e "${GREEN}  ✓ DATABASE_URL points to test/dev branch${NC}"
-        elif [ "$DB_CHECK" = "production" ]; then
-            echo -e "${YELLOW}  ⚠ DATABASE_URL points to PRODUCTION branch${NC}"
-            echo -e "${YELLOW}    For local development, use test branch (ep-aged-darkness-ahpqrn39-pooler)${NC}"
-        elif [ "$DB_CHECK" = "missing" ]; then
-            echo -e "${RED}  ✗ DATABASE_URL not found in .env.local${NC}"
-            ISSUES=$((ISSUES + 1))
-        else
-            echo -e "${YELLOW}  ⚠ DATABASE_URL format not recognized${NC}"
-        fi
     else
         echo -e "${YELLOW}  ⊘ Skipped (dependencies not ready)${NC}"
     fi
@@ -331,92 +405,6 @@ _compare_and_display_env() {
 # ==============================================================================
 
 # Deploy backend to AWS Lambda via SAM
-jpushapi() {
-    echo -e "${BLUE}=== Deploying Backend to AWS ===${NC}"
-    echo ""
-
-    cd "$JH_ROOT/backend" || return 1
-
-    # Check if DATABASE_URL is set in Lambda (production)
-    echo -e "${BLUE}[1/5] Checking current Lambda environment...${NC}"
-    LAMBDA_DB=$(aws lambda get-function --function-name JobHuntTrackerAPI --query 'Configuration.Environment.Variables.DATABASE_URL' --output text 2>/dev/null)
-
-    if [ $? -ne 0 ]; then
-        echo -e "${YELLOW}  ⚠ Lambda function not found or not accessible${NC}"
-        echo -e "${YELLOW}    This might be the first deployment${NC}"
-    else
-        if [ -n "$LAMBDA_DB" ] && [ "$LAMBDA_DB" != "None" ]; then
-            echo -e "${GREEN}  ✓ DATABASE_URL is configured in Lambda${NC}"
-            if [[ "$LAMBDA_DB" == *"ep-quiet-hat-ahe8vhso-pooler"* ]]; then
-                echo -e "${GREEN}  ✓ Points to PRODUCTION database${NC}"
-            else
-                echo -e "${YELLOW}  ⚠ DATABASE_URL may not be production branch${NC}"
-            fi
-        else
-            echo -e "${RED}  ✗ DATABASE_URL not set in Lambda!${NC}"
-            echo -e "${YELLOW}    You need to set it after deployment via:${NC}"
-            echo -e "${YELLOW}    aws lambda update-function-configuration --function-name JobHuntTrackerAPI --environment Variables={...}${NC}"
-        fi
-    fi
-
-    # Build with SAM
-    echo ""
-    echo -e "${BLUE}[2/5] Building with SAM...${NC}"
-    sam build
-    if [ $? -ne 0 ]; then
-        echo -e "${RED}✗ SAM build failed${NC}"
-        cd "$JH_ROOT" || return 1
-        return 1
-    fi
-    echo -e "${GREEN}  ✓ Build successful${NC}"
-
-    # Deploy with SAM (uses samconfig.toml)
-    echo ""
-    echo -e "${BLUE}[3/5] Deploying to AWS...${NC}"
-    sam deploy
-    if [ $? -ne 0 ]; then
-        echo -e "${RED}✗ SAM deploy failed${NC}"
-        cd "$JH_ROOT" || return 1
-        return 1
-    fi
-    echo -e "${GREEN}  ✓ Deploy successful${NC}"
-
-    # Get API Gateway URL
-    echo ""
-    echo -e "${BLUE}[4/5] Retrieving API Gateway URL...${NC}"
-    API_URL=$(aws cloudformation describe-stacks --stack-name jh-backend-stack --query 'Stacks[0].Outputs[?OutputKey==`ApiUrl`].OutputValue' --output text 2>/dev/null)
-    if [ -n "$API_URL" ]; then
-        echo -e "${GREEN}  ✓ API URL: ${BLUE}$API_URL${NC}"
-    else
-        echo -e "${YELLOW}  ⚠ Could not retrieve API URL${NC}"
-    fi
-
-    # Verify environment variables
-    echo ""
-    echo -e "${BLUE}[5/5] Verifying Lambda environment variables...${NC}"
-    LAMBDA_VARS=$(aws lambda get-function --function-name JobHuntTrackerAPI --query 'Configuration.Environment.Variables' --output json 2>/dev/null)
-
-    if [ $? -eq 0 ]; then
-        echo -e "${GREEN}  ✓ Environment variables:${NC}"
-        echo "$LAMBDA_VARS" | python3 -m json.tool | grep -E "(GOOGLE_CLIENT_ID|ALLOWED_ORIGINS|ALLOWED_EMAILS|DATABASE_URL)" | sed 's/^/    /'
-
-        # Check if DATABASE_URL exists
-        if echo "$LAMBDA_VARS" | grep -q "DATABASE_URL"; then
-            echo ""
-            echo -e "${GREEN}  ✓ DATABASE_URL is set${NC}"
-        else
-            echo ""
-            echo -e "${RED}  ✗ DATABASE_URL is NOT set!${NC}"
-            echo -e "${YELLOW}    Add it manually:${NC}"
-            echo -e "${YELLOW}    1. Go to AWS Lambda Console → JobHuntTrackerAPI → Configuration → Environment variables${NC}"
-            echo -e "${YELLOW}    2. Add DATABASE_URL with production value from backend/.env.local comments${NC}"
-        fi
-    fi
-
-    cd "$JH_ROOT" || return 1
-    echo ""
-    echo -e "${GREEN}=== Backend deployment complete ===${NC}"
-}
 
 # Check and deploy frontend to Vercel
 jpushvercel() {
@@ -442,51 +430,61 @@ jpushvercel() {
     echo ""
     echo -e "${BLUE}[2/5] Checking Vercel environment variables...${NC}"
 
-    # Check which variables exist (encrypted ones won't show values)
-    VERCEL_ENV_LIST=$(vercel env ls production 2>&1)
-
     echo -e "${BLUE}  Required variables for production:${NC}"
     echo ""
 
-    # Pull env vars from Vercel once
+    # Pull env vars from Vercel to get actual decrypted values
     vercel env pull .env.vercel.check --environment=production > /dev/null 2>&1
 
     # Track variables that need updating
     typeset -a VARS_TO_UPDATE=()
 
-    # Loop through each variable (using global FRONTEND_CHECK)
-    for VAR_NAME in "${(@k)FRONTEND_CHECK}"; do
-        EXPECTED_VAL="${FRONTEND_CHECK[$VAR_NAME]}"
+    if [ -f ".env.vercel.check" ]; then
+        # Loop through each variable (using global FRONTEND_CHECK)
+        for VAR_NAME in "${(@k)FRONTEND_CHECK}"; do
+            EXPECTED_VAL="${FRONTEND_CHECK[$VAR_NAME]}"
 
-        if echo "$VERCEL_ENV_LIST" | grep -q "$VAR_NAME"; then
-            if echo "$VERCEL_ENV_LIST" | grep "$VAR_NAME" | grep -q "Encrypted"; then
-                echo -e "${GREEN}  ✓ $VAR_NAME: Set (Encrypted/Sensitive)${NC}"
-                echo -e "${BLUE}    Expected: $EXPECTED_VAL${NC}"
-                echo -e "${YELLOW}    To verify value: Check Vercel Dashboard${NC}"
-            else
-                # Get value from pulled env file
-                if [ -f ".env.vercel.check" ]; then
-                    VERCEL_VAL=$(grep "^${VAR_NAME}=" .env.vercel.check | cut -d= -f2- | tr -d '"' | tr -d '\n' | tr -d '\r' | sed 's/\\n$//')
-                    if [ "$VERCEL_VAL" = "$EXPECTED_VAL" ]; then
-                        echo -e "${GREEN}  ✓ $VAR_NAME matches${NC}"
-                        echo -e "${BLUE}    Value: $VERCEL_VAL${NC}"
-                    else
-                        echo -e "${YELLOW}  ⚠ $VAR_NAME differs${NC}"
-                        echo -e "${YELLOW}    Current:  $VERCEL_VAL${NC}"
-                        echo -e "${YELLOW}    Expected: $EXPECTED_VAL${NC}"
-                        VARS_TO_UPDATE+=("$VAR_NAME")
-                    fi
+            # Get value from pulled env file (preserve literal \n for detection)
+            VERCEL_VAL_RAW=$(grep "^${VAR_NAME}=" .env.vercel.check | cut -d= -f2-)
+            VERCEL_VAL=$(printf "%s" "$VERCEL_VAL_RAW" | tr -d '"')
+
+            # Also get normalized version to check if it matches when cleaned
+            VERCEL_VAL_CLEAN=$(_normalize_env_value "$VERCEL_VAL_RAW")
+
+            if [ -n "$VERCEL_VAL" ]; then
+                # Variable exists in Vercel
+                # Check if raw value matches (ideal case)
+                if [ "$VERCEL_VAL" = "$EXPECTED_VAL" ]; then
+                    echo -e "${GREEN}  ✓ $VAR_NAME matches${NC}"
+                    echo -e "${BLUE}    Value: $VERCEL_VAL${NC}"
+                # Check if it matches after cleaning (needs fixing)
+                elif [ "$VERCEL_VAL_CLEAN" = "$EXPECTED_VAL" ]; then
+                    echo -e "${YELLOW}  ⚠ $VAR_NAME has corrupted escape sequences (will fix)${NC}"
+                    echo -e "${YELLOW}    Current:  $VERCEL_VAL${NC}"
+                    echo -e "${YELLOW}    Expected: $EXPECTED_VAL${NC}"
+                    VARS_TO_UPDATE+=("$VAR_NAME")
+                # Completely different value
+                else
+                    echo -e "${RED}  ✗ $VAR_NAME differs${NC}"
+                    echo -e "${YELLOW}    Vercel:   $VERCEL_VAL${NC}"
+                    echo -e "${YELLOW}    Expected: $EXPECTED_VAL${NC}"
+                    VARS_TO_UPDATE+=("$VAR_NAME")
                 fi
+            else
+                # Variable not found in Vercel
+                echo -e "${RED}  ✗ $VAR_NAME: NOT SET${NC}"
+                echo -e "${YELLOW}    Expected: $EXPECTED_VAL${NC}"
+                VARS_TO_UPDATE+=("$VAR_NAME")
             fi
-        else
-            echo -e "${RED}  ✗ $VAR_NAME: NOT SET${NC}"
-            echo -e "${YELLOW}    Expected: $EXPECTED_VAL${NC}"
-            VARS_TO_UPDATE+=("$VAR_NAME")
-        fi
-    done
+        done
 
-    # Cleanup
-    rm -f .env.vercel.check
+        # Cleanup
+        rm -f .env.vercel.check
+    else
+        echo -e "${RED}  ✗ Cannot retrieve Vercel environment variables${NC}"
+        cd "$JH_ROOT" || return 1
+        return 1
+    fi
 
     echo ""
     echo -e "${BLUE}  Dashboard: https://vercel.com/zduanxs-projects/zduan-job/settings/environment-variables${NC}"
@@ -508,7 +506,12 @@ jpushvercel() {
             for VAR_NAME in "${VARS_TO_UPDATE[@]}"; do
                 EXPECTED_VAL="${FRONTEND_CHECK[$VAR_NAME]}"
                 echo -e "${BLUE}  Setting $VAR_NAME...${NC}"
-                echo "$EXPECTED_VAL" | vercel env add "$VAR_NAME" production > /dev/null 2>&1
+
+                # Remove existing variable if it exists (suppress errors if not found)
+                echo "y" | vercel env rm "$VAR_NAME" production > /dev/null 2>&1
+
+                # Add the new value (use printf to avoid adding newline that becomes literal \n)
+                printf "%s" "$EXPECTED_VAL" | vercel env add "$VAR_NAME" production > /dev/null 2>&1
                 if [ $? -eq 0 ]; then
                     echo -e "${GREEN}    ✓ $VAR_NAME updated${NC}"
                 else
@@ -639,7 +642,8 @@ jenvcheck() {
             # Loop through each variable (using global BACKEND_CHECK)
             for VAR_NAME in "${(@k)BACKEND_CHECK}"; do
                 EXPECTED_VAL="${BACKEND_CHECK[$VAR_NAME]}"
-                LAMBDA_VAL=$(echo "$LAMBDA_VARS" | python3 -c "import sys, json; data=json.load(sys.stdin); print(data.get('$VAR_NAME', ''))")
+                LAMBDA_VAL_RAW=$(echo "$LAMBDA_VARS" | python3 -c "import sys, json; data=json.load(sys.stdin); print(data.get('$VAR_NAME', ''))")
+                LAMBDA_VAL=$(_normalize_env_value "$LAMBDA_VAL_RAW")
                 _compare_and_display_env "$VAR_NAME" "$LAMBDA_VAL" "$EXPECTED_VAL" "Lambda"
             done
         else
@@ -663,7 +667,9 @@ jenvcheck() {
             # Loop through each variable (using global FRONTEND_CHECK)
             for VAR_NAME in "${(@k)FRONTEND_CHECK}"; do
                 EXPECTED_VAL="${FRONTEND_CHECK[$VAR_NAME]}"
-                VERCEL_VAL=$(grep "^${VAR_NAME}=" .env.vercel.check | cut -d= -f2- | tr -d '"' | tr -d '\n' | tr -d '\r' | sed 's/\\n$//')
+                # Get raw value without normalization to detect corruption (preserve literal \n)
+                VERCEL_VAL_RAW=$(grep "^${VAR_NAME}=" .env.vercel.check | cut -d= -f2-)
+                VERCEL_VAL=$(printf "%s" "$VERCEL_VAL_RAW" | tr -d '"')
                 _compare_and_display_env "$VAR_NAME" "$VERCEL_VAL" "$EXPECTED_VAL" "Vercel"
             done
 
@@ -715,3 +721,238 @@ jhelp() {
 
 # Show help on load
 echo -e "${GREEN}Job Hunter dev shortcuts loaded!${NC} Type ${BLUE}jhelp${NC} for commands."
+# Deploy backend to AWS Lambda via SAM
+jpushapi() {
+    echo -e "${BLUE}=== Deploying Backend to AWS ===${NC}"
+    echo ""
+
+    # Step 1: Check git status - ensure clean state (MUST commit or exit)
+    echo -e "${BLUE}[1/7] Checking git status (must have clean state)...${NC}"
+    cd "$JH_ROOT" || return 1
+
+    CURRENT_BRANCH=$(git branch --show-current)
+    echo -e "${BLUE}  Current branch: ${YELLOW}$CURRENT_BRANCH${NC}"
+
+    # Check for uncommitted changes in backend/
+    if git diff --quiet backend/ && git diff --cached --quiet backend/; then
+        echo -e "${GREEN}  ✓ No uncommitted backend/ changes${NC}"
+    else
+        echo -e "${RED}  ✗ You have uncommitted backend/ changes${NC}"
+        git status --short backend/ | sed 's/^/    /'
+        echo ""
+        echo -e "${YELLOW}Deployment requires a clean git state.${NC}"
+        echo -n -e "${YELLOW}Commit backend/ changes now? [y/n]: ${NC}"
+        read COMMIT_CHOICE
+
+        if [[ ! "$COMMIT_CHOICE" =~ ^[Yy]$ ]]; then
+            echo -e "${RED}Deployment cancelled - commit changes first${NC}"
+            cd "$JH_ROOT" || return 1
+            return 1
+        fi
+
+        # Add backend changes
+        echo -e "${BLUE}Adding backend/ changes...${NC}"
+        git add backend/
+
+        # Check if there are staged changes
+        if git diff --cached --quiet; then
+            echo -e "${YELLOW}  ⚠ No backend changes to commit${NC}"
+        else
+            # Show what will be committed
+            echo -e "${BLUE}Staged changes:${NC}"
+            git status --short | grep "^[AM]" | sed 's/^/  /'
+
+            echo -n -e "${YELLOW}Commit message: ${NC}"
+            read COMMIT_MSG
+
+            if [ -z "$COMMIT_MSG" ]; then
+                echo -e "${RED}✗ Commit message required${NC}"
+                git reset > /dev/null 2>&1
+                cd "$JH_ROOT" || return 1
+                return 1
+            fi
+
+            # Commit
+            git commit -m "$COMMIT_MSG"
+            if [ $? -ne 0 ]; then
+                echo -e "${RED}✗ Commit failed${NC}"
+                cd "$JH_ROOT" || return 1
+                return 1
+            fi
+            echo -e "${GREEN}✓ Changes committed${NC}"
+        fi
+    fi
+
+    cd "$JH_ROOT/backend" || return 1
+
+    # Step 2: Check Lambda environment variables
+    echo ""
+    echo -e "${BLUE}[2/7] Checking Lambda environment variables...${NC}"
+    LAMBDA_VARS=$(aws lambda get-function --function-name JobHuntTrackerAPI --query 'Configuration.Environment.Variables' 2>/dev/null)
+
+    if [ $? -eq 0 ]; then
+        echo -e "${GREEN}  ✓ Lambda function found${NC}"
+        echo ""
+
+        # Compare each variable (using global BACKEND_CHECK)
+        typeset -a VARS_TO_UPDATE=()
+        for VAR_NAME in "${(@k)BACKEND_CHECK}"; do
+            EXPECTED_VAL="${BACKEND_CHECK[$VAR_NAME]}"
+            LAMBDA_VAL_RAW=$(echo "$LAMBDA_VARS" | python3 -c "import sys, json; data=json.load(sys.stdin); print(data.get('$VAR_NAME', ''))")
+            LAMBDA_VAL=$(_normalize_env_value "$LAMBDA_VAL_RAW")
+
+            if [ -z "$LAMBDA_VAL" ]; then
+                echo -e "${RED}  ✗ $VAR_NAME: NOT SET in Lambda${NC}"
+                if [ -n "$EXPECTED_VAL" ]; then
+                    echo -e "${YELLOW}    Will set to: $EXPECTED_VAL${NC}"
+                    VARS_TO_UPDATE+=("$VAR_NAME")
+                fi
+            elif [ -z "$EXPECTED_VAL" ]; then
+                echo -e "${YELLOW}  ⚠ $VAR_NAME: No PROD_VALUE in .env.local${NC}"
+                echo -e "${BLUE}    Current: $LAMBDA_VAL${NC}"
+            elif [ "$LAMBDA_VAL" = "$EXPECTED_VAL" ]; then
+                echo -e "${GREEN}  ✓ $VAR_NAME (up to date)${NC}"
+            else
+                echo -e "${YELLOW}  ⚠ $VAR_NAME will be updated${NC}"
+                echo -e "${YELLOW}    Current: $LAMBDA_VAL${NC}"
+                echo -e "${YELLOW}    New:     $EXPECTED_VAL${NC}"
+                VARS_TO_UPDATE+=("$VAR_NAME")
+            fi
+        done
+
+        if [ ${#VARS_TO_UPDATE[@]} -gt 0 ]; then
+            echo ""
+            echo -e "${YELLOW}${#VARS_TO_UPDATE[@]} variable(s) will be updated on deployment${NC}"
+        else
+            echo ""
+            echo -e "${GREEN}All environment variables are up to date${NC}"
+        fi
+    else
+        echo -e "${YELLOW}  ⚠ Lambda function not found${NC}"
+        echo -e "${YELLOW}    This appears to be the first deployment${NC}"
+        echo ""
+        echo -e "${BLUE}Will create Lambda with values from .env.local PROD_VALUE${NC}"
+    fi
+
+    # Step 3: Generate template.yaml and samconfig.toml
+    echo ""
+    echo -e "${BLUE}[3/7] Generating deployment configuration...${NC}"
+
+    # Generate template.yaml (script prints status and returns exit code)
+    python3 scripts/generate_template.py
+    TEMPLATE_EXIT=$?
+    if [ $TEMPLATE_EXIT -gt 2 ]; then
+        echo -e "${RED}  ✗ Failed to generate template.yaml${NC}"
+        cd "$JH_ROOT" || return 1
+        return 1
+    fi
+
+    # Generate samconfig.toml (script prints status and returns exit code)
+    python3 scripts/generate_samconfig.py
+    SAMCONFIG_EXIT=$?
+    if [ $SAMCONFIG_EXIT -gt 2 ]; then
+        echo -e "${RED}  ✗ Failed to generate samconfig.toml${NC}"
+        cd "$JH_ROOT" || return 1
+        return 1
+    fi
+
+    # Check if either file was modified or created
+    if [ $TEMPLATE_EXIT -ne 0 ] || [ $SAMCONFIG_EXIT -ne 0 ]; then
+        echo ""
+        echo -e "${YELLOW}Configuration files were updated. Review the changes above.${NC}"
+        echo -n -e "${YELLOW}Do these changes look good? [y/n]: ${NC}"
+        read CONFIG_OK
+
+        if [[ ! "$CONFIG_OK" =~ ^[Yy]$ ]]; then
+            echo -e "${RED}Configuration rejected - exiting${NC}"
+            cd "$JH_ROOT" || return 1
+            return 1
+        fi
+
+        # Commit the backend changes including generated files
+        echo ""
+        echo -e "${BLUE}Committing backend/ changes...${NC}"
+        cd "$JH_ROOT" || return 1
+        git add backend/
+
+        if git diff --cached --quiet; then
+            echo -e "${YELLOW}  ⚠ No backend changes to commit${NC}"
+        else
+            git commit -m "Auto-generated: Update deployment configuration (template.yaml/samconfig.toml)"
+            if [ $? -ne 0 ]; then
+                echo -e "${RED}✗ Commit failed${NC}"
+                cd "$JH_ROOT/backend" || return 1
+                return 1
+            fi
+            echo -e "${GREEN}✓ Changes committed${NC}"
+        fi
+
+        cd "$JH_ROOT/backend" || return 1
+    fi
+
+    # Step 4: Confirm deployment
+    echo ""
+    echo -e "${BLUE}[4/7] Deploy confirmation:${NC}"
+    echo -n -e "${YELLOW}Deploy backend to AWS Lambda? [y/n]: ${NC}"
+    read DEPLOY_CHOICE
+
+    if [[ ! "$DEPLOY_CHOICE" =~ ^[Yy]$ ]]; then
+        echo -e "${RED}Deployment cancelled by user${NC}"
+        cd "$JH_ROOT" || return 1
+        return 1
+    fi
+
+    # Step 5: Build with SAM
+    echo ""
+    echo -e "${BLUE}[5/7] Building with SAM...${NC}"
+    sam build
+    if [ $? -ne 0 ]; then
+        echo -e "${RED}✗ SAM build failed${NC}"
+        cd "$JH_ROOT" || return 1
+        return 1
+    fi
+    echo -e "${GREEN}  ✓ Build successful${NC}"
+
+    # Step 6: Deploy with SAM (uses samconfig.toml)
+    echo ""
+    echo -e "${BLUE}[6/7] Deploying to AWS...${NC}"
+    sam deploy
+    if [ $? -ne 0 ]; then
+        echo -e "${RED}✗ SAM deploy failed${NC}"
+        cd "$JH_ROOT" || return 1
+        return 1
+    fi
+    echo -e "${GREEN}  ✓ Deploy successful${NC}"
+
+    # Step 7: Verify deployment
+    echo ""
+    echo -e "${BLUE}[7/7] Verifying deployment...${NC}"
+
+    # Get API Gateway URL
+    API_URL=$(aws cloudformation describe-stacks --stack-name jh-backend-stack --query 'Stacks[0].Outputs[?OutputKey==`ApiUrl`].OutputValue' --output text 2>/dev/null)
+    if [ -n "$API_URL" ]; then
+        echo -e "${GREEN}  ✓ API URL: ${BLUE}$API_URL${NC}"
+    else
+        echo -e "${YELLOW}  ⚠ Could not retrieve API URL${NC}"
+    fi
+
+    # Verify environment variables
+    LAMBDA_VARS=$(aws lambda get-function --function-name JobHuntTrackerAPI --query 'Configuration.Environment.Variables' --output json 2>/dev/null)
+    if [ $? -eq 0 ]; then
+        echo -e "${GREEN}  ✓ Environment variables deployed:${NC}"
+        for VAR_NAME in "${(@k)BACKEND_CHECK}"; do
+            LAMBDA_VAL_RAW=$(echo "$LAMBDA_VARS" | python3 -c "import sys, json; data=json.load(sys.stdin); print(data.get('$VAR_NAME', ''))")
+            LAMBDA_VAL=$(_normalize_env_value "$LAMBDA_VAL_RAW")
+            if [ -n "$LAMBDA_VAL" ]; then
+                echo -e "${GREEN}    ✓ $VAR_NAME${NC}"
+            else
+                echo -e "${RED}    ✗ $VAR_NAME (missing)${NC}"
+            fi
+        done
+    fi
+
+    cd "$JH_ROOT" || return 1
+    echo ""
+    echo -e "${GREEN}=== Backend deployment complete ===${NC}"
+    echo -e "${BLUE}API Endpoint: ${API_URL}${NC}"
+}

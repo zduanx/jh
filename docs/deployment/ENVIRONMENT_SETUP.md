@@ -2,6 +2,10 @@
 
 This guide explains how to manage secrets securely across development and production environments.
 
+**Important:** This project uses `.env.local` files for local development only. Production deployments use platform-specific environment variables:
+- **Vercel**: Set in Vercel Dashboard
+- **AWS Lambda**: Set in template.yaml or Lambda Console
+
 ---
 
 ## 🔒 Security Principles
@@ -25,14 +29,14 @@ This guide explains how to manage secrets securely across development and produc
 ```
 project/
 ├── backend/
-│   ├── .env              # ❌ NOT in git (gitignored)
-│   ├── .env.example      # ✅ Committed (template only)
-│   └── .gitignore        # ✅ Contains .env
+│   ├── .env.local        # ❌ NOT in git (gitignored, local dev only)
+│   └── .gitignore        # ✅ Contains .env.local
 └── frontend/
-    ├── .env              # ❌ NOT in git (gitignored)
-    ├── .env.example      # ✅ Committed (template only)
-    └── .gitignore        # ✅ Contains .env
+    ├── .env.local        # ❌ NOT in git (gitignored, local dev only)
+    └── .gitignore        # ✅ Contains .env.local
 ```
+
+**Note:** Production environments (Vercel, AWS Lambda) do NOT use `.env.local` files. They use platform-specific environment variable configuration.
 
 ---
 
@@ -40,10 +44,11 @@ project/
 
 ### Backend Setup
 
-1. **Copy the example file:**
+1. **Create `.env.local` file:**
    ```bash
    cd backend
-   cp .env.example .env
+   # .env.local is already gitignored
+   # Add your environment variables
    ```
 
 2. **Generate SECRET_KEY:**
@@ -51,43 +56,56 @@ project/
    openssl rand -hex 32
    ```
 
-3. **Edit `.env` with real values:**
+3. **Edit `.env.local` with real values:**
    ```bash
-   # backend/.env
-   # Copy GOOGLE_CLIENT_ID from frontend/.env (same value for both)
-   GOOGLE_CLIENT_ID=<see frontend/.env for actual value>
+   # backend/.env.local (LOCAL DEVELOPMENT ONLY)
+   # Copy GOOGLE_CLIENT_ID from frontend/.env.local (same value for both)
+   GOOGLE_CLIENT_ID=<your-google-client-id>
    # Generate with: openssl rand -hex 32
    SECRET_KEY=<generate new secret key>
    ALGORITHM=HS256
    ACCESS_TOKEN_EXPIRE_MINUTES=1440
    ALLOWED_ORIGINS=http://localhost:3000,http://localhost:5173
+
+   # IMPORTANT: Use TEST/DEV database for local development
+   # This prevents accidental changes to production data
+   DATABASE_URL=<your-neon-test-branch-url>
+   TEST_DATABASE_URL=<your-neon-test-branch-url>  # Same as DATABASE_URL for local dev
    ```
+
+   **Database Safety:**
+   - Local development uses the Neon test/dev branch
+   - Production (Lambda) uses the production branch
+   - This prevents accidental production data modification during development
 
 4. **Verify it's gitignored:**
    ```bash
-   git status  # .env should NOT appear
+   git status  # .env.local should NOT appear
    ```
 
 ### Frontend Setup
 
-1. **Copy the example file:**
+1. **Create `.env.local` file:**
    ```bash
    cd frontend
-   cp .env.example .env
+   # .env.local is already gitignored
    ```
 
-2. **Edit `.env` with real values:**
+2. **Edit `.env.local` with real values:**
    ```bash
-   # frontend/.env
+   # frontend/.env.local (LOCAL DEVELOPMENT ONLY)
    # Get from: https://console.cloud.google.com/apis/credentials
    REACT_APP_GOOGLE_CLIENT_ID=<your-client-id>.apps.googleusercontent.com
+   # For local development, point to local backend
    REACT_APP_API_URL=http://localhost:8000
    ```
 
 3. **Verify it's gitignored:**
    ```bash
-   git status  # .env should NOT appear
+   git status  # .env.local should NOT appear
    ```
+
+**Important:** For production deployment to Vercel, set these variables in Vercel Dashboard, NOT in `.env.local`
 
 ---
 

@@ -102,33 +102,6 @@ Authorization: Bearer <your_jwt_token>
 
 ---
 
-## Future Endpoints (Phase 2+)
-
-### Jobs
-
-- `GET /api/jobs` - List all jobs (paginated)
-- `GET /api/jobs/{id}` - Get single job
-- `POST /api/jobs/search` - Search jobs with filters
-- `POST /api/jobs` - Create job (admin only)
-- `PUT /api/jobs/{id}` - Update job (admin only)
-- `DELETE /api/jobs/{id}` - Delete job (admin only)
-
-### Applications
-
-- `GET /api/applications` - Get user's applications
-- `POST /api/applications` - Track new application
-- `GET /api/applications/{id}` - Get application details
-- `PATCH /api/applications/{id}` - Update application status
-- `DELETE /api/applications/{id}` - Remove application
-
-### Scraping
-
-- `POST /api/scrape/start` - Trigger scraping job
-- `GET /api/scrape/status/{job_id}` - Get scraping progress
-- `WebSocket /api/scrape/live` - Real-time scraping updates
-
----
-
 ## Error Handling
 
 All errors follow this format:
@@ -149,18 +122,3 @@ Common HTTP status codes:
 - `422` - Validation Error (Pydantic validation failed)
 - `500` - Internal Server Error
 
----
-
-## Rate Limiting (Future)
-
-Phase 2 will implement rate limiting:
-- Auth endpoints: 5 requests per minute
-- Search endpoints: 20 requests per minute
-- Other endpoints: 60 requests per minute
-
-Response headers will include:
-```
-X-RateLimit-Limit: 60
-X-RateLimit-Remaining: 45
-X-RateLimit-Reset: 1702467890
-```

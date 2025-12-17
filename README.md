@@ -254,7 +254,7 @@ vercel --prod
 All concepts discussed during development are documented in `docs/learning/`:
 
 - **"What is OAuth?"** → [authentication.md](docs/learning/authentication.md#what-is-oauth)
-- **"EC2 or Lambda?"** → [aws-deployment.md](docs/learning/aws-deployment.md#ec2-vs-lambda)
+- **"EC2 or Lambda?"** → [aws.md](docs/learning/aws.md#ec2-vs-lambda)
 - **"JWT vs Sessions?"** → [authentication.md](docs/learning/authentication.md#jwt-vs-sessions)
 - **"FastAPI vs Django?"** → [backend.md](docs/learning/backend.md#fastapi-vs-django)
 - **"Is JWT secure?"** → [security.md](docs/learning/security.md#jwt-security)

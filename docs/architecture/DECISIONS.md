@@ -300,12 +300,19 @@ Create user record **on first login** (during auth callback).
 3. **Future-proof** - Will need user records for crawl history, saved jobs, notifications, etc.
 4. **User lifecycle tracking** - Can track `created_at`, `last_login`, and other analytics
 5. **Consistent state** - User always exists if they have a valid JWT
+6. **Profile freshness** - Update user profile data (name, picture_url) on every login to keep it reasonably fresh
 
 **Why NOT lazy creation:**
 - ❌ Need "create if not exists" logic in multiple endpoints
 - ❌ Can't track when users first joined vs when they first configured
 - ❌ Can't associate future features (crawl history, saved jobs) with unconfigured users
 - ❌ More complex error handling ("user not found" scenarios)
+
+**Why update profile on every login:**
+- ✅ Keeps cached profile data (name, picture_url) reasonably fresh without extra API calls
+- ✅ Already updating `last_login` anyway, minimal extra cost
+- ✅ Auto-corrects if user changes name/picture on Google (within days, not real-time)
+- ✅ Better UX than showing stale profile pictures for weeks/months
 
 ### Consequences
 
@@ -345,8 +352,8 @@ async def handle_google_callback(token: str):
             }
         )
     else:
-        # Returning user - update last_login
-        await db.update_last_login(user.id)
+        # Returning user - update profile data and last_login
+        await db.update_user(user.id, name=user_info.name, picture_url=user_info.picture, last_login=now())
 
     # 3. Generate JWT with user_id
     jwt_token = create_jwt(user.id)
