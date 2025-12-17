@@ -6,9 +6,9 @@ function IngestPage() {
     <div className="placeholder-container">
       <div className="placeholder-content">
         <div className="placeholder-icon">⬇️</div>
-        <h1>Ingest Pipeline</h1>
+        <h1>Ingest</h1>
         <p className="placeholder-description">
-          Start job ingestion pipeline to fetch job postings from various sources.
+          Fetch and import job postings from company career pages.
         </p>
         <div className="placeholder-features">
           <h3>Coming Soon:</h3>

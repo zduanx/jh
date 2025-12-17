@@ -6,9 +6,9 @@ function TrackPage() {
     <div className="placeholder-container">
       <div className="placeholder-content">
         <div className="placeholder-icon">📋</div>
-        <h1>Track Applications</h1>
+        <h1>Track</h1>
         <p className="placeholder-description">
-          Track and manage your job applications through every stage of the hiring process.
+          Manage your applications from applied to offer.
         </p>
         <div className="placeholder-features">
           <h3>Coming Soon:</h3>

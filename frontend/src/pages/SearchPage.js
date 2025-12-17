@@ -6,9 +6,9 @@ function SearchPage() {
     <div className="placeholder-container">
       <div className="placeholder-content">
         <div className="placeholder-icon">🔍</div>
-        <h1>Search Jobs</h1>
+        <h1>Search</h1>
         <p className="placeholder-description">
-          Search and filter through ingested job postings to find opportunities that match your criteria.
+          Find jobs by title, company, location, or keywords.
         </p>
         <div className="placeholder-features">
           <h3>Coming Soon:</h3>
