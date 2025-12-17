@@ -16,7 +16,17 @@ Globals:
         SECRET_KEY: !Ref JWTSecretKey
         TEST_DATABASE_URL: !Ref TestDatabaseUrl
         ACCESS_TOKEN_EXPIRE_MINUTES: 1440
+        ALGORITHM: HS256
+        GOOGLE_CLIENT_SECRET: optional-for-token-validation
 
+Parameters:
+  AllowedEmails:
+    Type: String
+    Description: Comma-separated list of allowed user emails
+    NoEcho: false
+    Default: "zduanx@gmail.com"
+
+  AllowedOrigins:
     Type: String
     Description: Comma-separated list of allowed CORS origins
     NoEcho: false
