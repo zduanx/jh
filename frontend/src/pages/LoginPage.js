@@ -12,7 +12,7 @@ function LoginPage() {
 
     try {
       // Exchange Google token with our backend for a JWT
-      const apiUrl = process.env.REACT_APP_API_URL || 'http://localhost:8000';
+      const apiUrl = process.env.REACT_APP_API_URL;
       const response = await fetch(`${apiUrl}/auth/google`, {
         method: 'POST',
         headers: {
@@ -33,8 +33,8 @@ function LoginPage() {
       // Store our backend JWT token
       localStorage.setItem('access_token', data.access_token);
 
-      // Navigate to info page
-      navigate('/info');
+      // Navigate to dashboard
+      navigate('/dashboard');
     } catch (error) {
       console.error('Backend authentication error:', error);
       alert(`Login failed: ${error.message}`);

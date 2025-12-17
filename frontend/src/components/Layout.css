@@ -1,0 +1,31 @@
+.app-layout {
+  display: flex;
+  height: 100vh;
+  overflow: hidden;
+  background: #f7fafc;
+  position: relative;
+}
+
+.main-content {
+  flex: 1;
+  margin-left: 240px;
+  height: 100vh;
+  overflow-y: auto;
+  transition: margin-left 0.3s ease;
+  background: #f7fafc;
+}
+
+.main-content.sidebar-collapsed {
+  margin-left: 72px;
+}
+
+/* Responsive */
+@media (max-width: 768px) {
+  .main-content {
+    margin-left: 72px;
+  }
+
+  .main-content.sidebar-collapsed {
+    margin-left: 0;
+  }
+}
