@@ -1,0 +1,52 @@
+# ============================================================================
+# AWS SAM DEPLOYMENT CONFIGURATION METADATA
+# ============================================================================
+# This file contains pure deployment metadata (no env vars, no secrets)
+# Should be committed to git
+#
+# USAGE:
+#   - Python scripts parse this file + .env.local to generate:
+#     - template.yaml (CloudFormation template)
+#     - samconfig.toml (SAM CLI deployment config)
+#   - Called automatically by jpushapi in dev.sh
+#
+# All environment variable metadata (PARAM_NAME, DESCRIPTION, NO_ECHO, DEFAULT)
+# is stored in .env.local as comments alongside the variables themselves
+# ============================================================================
+
+# ============================================================================
+# CloudFormation Stack Configuration
+# ============================================================================
+CFN_STACK_NAME=jh-backend-stack
+CFN_REGION=us-east-1
+CFN_CAPABILITIES=CAPABILITY_IAM
+
+# ============================================================================
+# Lambda Function Configuration
+# ============================================================================
+LAMBDA_FUNCTION_NAME=JobHuntTrackerAPI
+LAMBDA_FUNCTION_DESCRIPTION=FastAPI backend for Job Hunt Tracker
+LAMBDA_HANDLER=main.handler
+LAMBDA_TIMEOUT=30
+LAMBDA_MEMORY=512
+LAMBDA_RUNTIME=python3.13
+LAMBDA_CODE_URI=.
+
+# ============================================================================
+# API Gateway Configuration
+# ============================================================================
+API_STAGE_NAME=prod
+
+# CORS Configuration for API Gateway (separate from ALLOWED_ORIGINS env var)
+# These are the origins allowed at the API Gateway level
+API_CORS_ALLOW_ORIGINS=http://localhost:3000,https://zduan-job.vercel.app
+
+# ============================================================================
+# Static Environment Variables
+# ============================================================================
+# These are hardcoded in template.yaml (not CloudFormation parameters)
+# They don't need PROD_VALUE since they're the same for all environments
+
+ENV_VAR_ALGORITHM=HS256
+ENV_VAR_ACCESS_TOKEN_EXPIRE_MINUTES=1440
+ENV_VAR_GOOGLE_CLIENT_SECRET=optional-for-token-validation

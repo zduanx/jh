@@ -1,5 +1,6 @@
 from pydantic_settings import BaseSettings
 from typing import List
+import os
 
 
 class Settings(BaseSettings):
@@ -21,9 +22,15 @@ class Settings(BaseSettings):
     # Hardcoded for quick iteration (can edit directly in Lambda console)
     ALLOWED_EMAILS: str = "zduanx@gmail.com"  # Comma-separated list (hardcoded)
 
+    # Database Configuration
+    DATABASE_URL: str  # PostgreSQL connection string (production)
+    TEST_DATABASE_URL: str = ""  # PostgreSQL connection string (test/dev branch) - Optional
+
     class Config:
-        env_file = ".env"
+        # Prioritize .env.local for local development, fallback to .env
+        env_file = ".env.local" if os.path.exists(".env.local") else ".env"
         case_sensitive = True
+        extra = "ignore"  # Ignore extra fields from environment file
 
     def get_allowed_origins(self) -> List[str]:
         """Parse and return CORS origins as a list"""
@@ -34,4 +41,4 @@ class Settings(BaseSettings):
         return [email.strip().lower() for email in self.ALLOWED_EMAILS.split(",")]
 
 
-settings = Settings()
+settings = Settings()  # type: ignore[call-arg]  # Pydantic loads from .env

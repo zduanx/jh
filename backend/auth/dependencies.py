@@ -32,8 +32,9 @@ async def get_current_user(
     payload = decode_access_token(token)
 
     # Extract user info from token
+    user_id = payload.get("user_id")
     email = payload.get("email")
-    if email is None:
+    if email is None or user_id is None:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid authentication credentials",
@@ -41,7 +42,9 @@ async def get_current_user(
         )
 
     return {
+        "user_id": user_id,
         "email": payload.get("email"),
         "name": payload.get("name"),
         "picture": payload.get("picture"),
+        "last_login": payload.get("last_login"),  # Include last_login from JWT
     }

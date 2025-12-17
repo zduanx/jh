@@ -14,7 +14,9 @@ class TokenResponse(BaseModel):
 
 
 class UserInfo(BaseModel):
-    """User information from Google OAuth"""
+    """User information from JWT token and database"""
+    user_id: int  # Database user ID
     email: EmailStr
     name: str
     picture: str
+    last_login: str | None = None  # ISO 8601 datetime string
