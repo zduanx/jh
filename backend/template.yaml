@@ -10,32 +10,7 @@ Globals:
     Environment:
       Variables:
         ALLOWED_EMAILS: !Ref AllowedEmails
-        ALLOWED_ORIGINS: !Ref AllowedOrigins
-        DATABASE_URL: !Ref DatabaseUrl
-        GOOGLE_CLIENT_ID: !Ref GoogleClientId
-        SECRET_KEY: !Ref JWTSecretKey
-        TEST_DATABASE_URL: !Ref TestDatabaseUrl
-        ACCESS_TOKEN_EXPIRE_MINUTES: 1440
-        ALGORITHM: HS256
-        GOOGLE_CLIENT_SECRET: optional-for-token-validation
-
-Parameters:
-  AllowedEmails:
-    Type: String
-    Description: Comma-separated list of allowed user emails
-    NoEcho: false
-    Default: "zduanx@gmail.com"
-
-  GoogleClientId:
-    Type: String
-    Description: Google OAuth Client ID
-    NoEcho: false
-
-  JWTSecretKey:
-    Type: String
-    Description: Secret key for JWT signing (use openssl rand -hex 32)
-    NoEcho: true
-
+     
 Resources:
   JobHuntTrackerAPI:
     Type: AWS::Serverless::Function

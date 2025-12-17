@@ -242,30 +242,35 @@ def main():
     template_path = backend_dir / 'template.yaml'
 
     # Parse configuration files
-    print(f"Parsing {sam_config_path}...")
     sam_config = parse_env_file(sam_config_path)
-
-    print(f"Parsing {env_local_path}...")
     env_metadata = parse_env_local_comments(env_local_path)
 
     # Extract static env vars from sam_config
     static_env_vars = {k: v for k, v in sam_config.items() if k.startswith('ENV_VAR_')}
 
-    # Generate template.yaml
-    print("Generating template.yaml...")
-    template_content = generate_template_yaml(sam_config, env_metadata, static_env_vars)
+    # Generate template.yaml content
+    new_content = generate_template_yaml(sam_config, env_metadata, static_env_vars)
 
-    # Write template.yaml
-    with open(template_path, 'w') as f:
-        f.write(template_content)
+    # Check if file exists and compare content
+    if template_path.exists():
+        with open(template_path, 'r') as f:
+            existing_content = f.read()
 
-    print(f"✓ Generated {template_path}")
-
-    # Show summary
-    print(f"\nSummary:")
-    print(f"  - Parameterized env vars: {len([m for m in env_metadata.values() if 'PARAM_NAME' in m])}")
-    print(f"  - Static env vars: {len(static_env_vars)}")
-    print(f"  - Lambda function: {sam_config.get('LAMBDA_FUNCTION_NAME', 'JobHuntTrackerAPI')}")
+        if existing_content == new_content:
+            print("✓ template.yaml (no changes)")
+            sys.exit(0)  # No changes
+        else:
+            # Write the new content
+            with open(template_path, 'w') as f:
+                f.write(new_content)
+            print("⚠ template.yaml modified")
+            sys.exit(1)  # Modified
+    else:
+        # Write the new content
+        with open(template_path, 'w') as f:
+            f.write(new_content)
+        print("⚠ template.yaml created (new file)")
+        sys.exit(2)  # New file
 
 
 if __name__ == '__main__':

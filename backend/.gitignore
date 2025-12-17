@@ -36,7 +36,7 @@ wheels/
 
 # AWS
 .aws-sam/
-samconfig.toml  # Contains secrets, use samconfig.toml.example as template
+samconfig.toml  # Auto-generated from .sam-config and .env.local, contains secrets
 
 # Testing
 .pytest_cache/

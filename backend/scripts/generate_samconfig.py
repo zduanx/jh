@@ -12,6 +12,7 @@ Outputs:
 
 import os
 import re
+import sys
 from pathlib import Path
 
 
@@ -140,29 +141,32 @@ def main():
     samconfig_path = backend_dir / 'samconfig.toml'
 
     # Parse configuration files
-    print(f"Parsing {sam_config_path}...")
     sam_config = parse_env_file(sam_config_path)
-
-    print(f"Parsing {env_local_path}...")
     prod_values = parse_env_local_prod_values(env_local_path)
 
-    # Generate samconfig.toml
-    print("Generating samconfig.toml...")
-    samconfig_content = generate_samconfig_toml(sam_config, prod_values)
+    # Generate samconfig.toml content
+    new_content = generate_samconfig_toml(sam_config, prod_values)
 
-    # Write samconfig.toml
-    with open(samconfig_path, 'w') as f:
-        f.write(samconfig_content)
+    # Check if file exists and compare content
+    if samconfig_path.exists():
+        with open(samconfig_path, 'r') as f:
+            existing_content = f.read()
 
-    print(f"✓ Generated {samconfig_path}")
-
-    # Show summary
-    print(f"\nSummary:")
-    print(f"  - Stack name: {sam_config.get('CFN_STACK_NAME', 'jh-backend-stack')}")
-    print(f"  - Region: {sam_config.get('CFN_REGION', 'us-east-1')}")
-    print(f"  - Parameters: {len(prod_values)}")
-    for param_name in sorted(prod_values.keys()):
-        print(f"    - {param_name}")
+        if existing_content == new_content:
+            print("✓ samconfig.toml (no changes)")
+            sys.exit(0)  # No changes
+        else:
+            # Write the new content
+            with open(samconfig_path, 'w') as f:
+                f.write(new_content)
+            print("⚠ samconfig.toml modified")
+            sys.exit(1)  # Modified
+    else:
+        # Write the new content
+        with open(samconfig_path, 'w') as f:
+            f.write(new_content)
+        print("⚠ samconfig.toml created (new file)")
+        sys.exit(2)  # New file
 
 
 if __name__ == '__main__':
