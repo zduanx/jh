@@ -1,0 +1,15 @@
+[project]
+name = "jh"
+version = "0.1.0"
+description = "Job Hunter - Job extraction and tracking"
+requires-python = ">=3.11"
+
+[tool.setuptools]
+package-dir = {"" = "backend"}
+
+[tool.setuptools.packages.find]
+where = ["backend"]
+
+[tool.pytest.ini_options]
+testpaths = ["backend"]
+pythonpath = ["backend"]
