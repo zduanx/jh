@@ -11,16 +11,18 @@ This provides:
 - Type checking
 """
 
-from typing import List, Optional
+from typing import Dict, List, Optional
 from dataclasses import dataclass, field
 
 
 @dataclass
 class TitleFilters:
     """
-    Title filtering configuration
+    Title filtering configuration.
 
-    Used by all extractors for post-API title filtering
+    Used by:
+    - Extractors for post-API title filtering (as object)
+    - DB/API for JSONB storage (via to_dict/from_dict)
 
     Examples:
         # Include all jobs, exclude senior staff
@@ -31,6 +33,54 @@ class TitleFilters:
 
         # No filtering at all
         config = TitleFilters()
+
+        # From DB/API dict
+        config = TitleFilters.from_dict({"include": ["engineer"], "exclude": []})
+
+        # To DB/API dict
+        data = config.to_dict()
     """
     include: Optional[List[str]] = None  # None = include all, List = OR logic (match any)
     exclude: List[str] = field(default_factory=list)  # AND logic: reject all
+
+    def to_dict(self) -> Dict[str, Optional[List[str]]]:
+        """Convert to dict for DB/API serialization."""
+        return {"include": self.include, "exclude": self.exclude}
+
+    @classmethod
+    def from_dict(cls, data: Optional[Dict]) -> "TitleFilters":
+        """
+        Create from dict (DB/API deserialization).
+
+        Args:
+            data: Dict with include/exclude keys, or None
+
+        Returns:
+            TitleFilters instance
+
+        Raises:
+            ValueError: If data structure is invalid
+        """
+        if data is None:
+            return cls()
+
+        if not isinstance(data, dict):
+            raise ValueError("title_filters must be a dict")
+
+        include = data.get("include")
+        exclude = data.get("exclude", [])
+
+        # Validate include
+        if include is not None:
+            if not isinstance(include, list):
+                raise ValueError("title_filters.include must be a list or null")
+            if not all(isinstance(item, str) for item in include):
+                raise ValueError("title_filters.include items must be strings")
+
+        # Validate exclude
+        if not isinstance(exclude, list):
+            raise ValueError("title_filters.exclude must be a list")
+        if not all(isinstance(item, str) for item in exclude):
+            raise ValueError("title_filters.exclude items must be strings")
+
+        return cls(include=include, exclude=exclude)

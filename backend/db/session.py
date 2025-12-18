@@ -7,13 +7,15 @@ from sqlalchemy.orm import sessionmaker, Session
 from dotenv import load_dotenv
 
 # Load environment variables (.env.local takes precedence over .env)
-env_local = Path('.env.local')
-env_file = Path('.env')
+# Use absolute paths based on this file's location (backend/db/session.py)
+_backend_dir = Path(__file__).parent.parent
+env_local = _backend_dir / '.env.local'
+env_file = _backend_dir / '.env'
 
 if env_local.exists():
-    load_dotenv(env_local)
+    load_dotenv(env_local, override=True)
 elif env_file.exists():
-    load_dotenv(env_file)
+    load_dotenv(env_file, override=True)
 
 # Get database URL from environment
 DATABASE_URL = os.getenv("DATABASE_URL")

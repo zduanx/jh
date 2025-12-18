@@ -1,6 +1,11 @@
 from pydantic_settings import BaseSettings
 from typing import List
-import os
+from pathlib import Path
+
+# Get absolute path to backend directory (config/settings.py -> backend/)
+_backend_dir = Path(__file__).parent.parent
+_env_local = _backend_dir / '.env.local'
+_env_file = _backend_dir / '.env'
 
 
 class Settings(BaseSettings):
@@ -28,7 +33,8 @@ class Settings(BaseSettings):
 
     class Config:
         # Prioritize .env.local for local development, fallback to .env
-        env_file = ".env.local" if os.path.exists(".env.local") else ".env"
+        # Use absolute paths to avoid working directory issues
+        env_file = str(_env_local) if _env_local.exists() else str(_env_file)
         case_sensitive = True
         extra = "ignore"  # Ignore extra fields from environment file
 

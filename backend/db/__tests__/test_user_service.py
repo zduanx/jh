@@ -7,21 +7,12 @@ Tests use separate test database (TEST_DATABASE_URL) with:
 - Timestamp-based emails (avoid collisions, always unique)
 - Optional persistence for inspection (test_db_commit fixture)
 
-Running Tests:
-    # Run all tests in this file
-    pytest tests/test_user_service.py -v
-
-    # Run specific test class
-    pytest tests/test_user_service.py::TestCreateUser -v
-
-    # Run specific test
-    pytest tests/test_user_service.py::TestCreateUser::test_create_user_minimal -v
-
-    # Run all tests in project
-    pytest -v
-
-    # Run with print output
-    pytest tests/test_user_service.py -v -s
+Running Tests (from backend/):
+    pytest db/__tests__/test_user_service.py -v                              # All tests
+    pytest db/__tests__/test_user_service.py::TestCreateUser -v              # One class
+    pytest db/__tests__/test_user_service.py::TestCreateUser::test_create_user_minimal -v  # One test
+    pytest db/__tests__/test_user_service.py -v -s                           # With print output
+    pytest db/__tests__/ -v                                                  # All db tests
 """
 import pytest
 import time

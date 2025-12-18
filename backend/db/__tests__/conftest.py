@@ -1,25 +1,27 @@
 """
-Pytest configuration and fixtures for testing.
+Pytest configuration and fixtures for database service tests.
 
-Industry-standard approach: Separate test database on Neon PostgreSQL.
-- Uses TEST_DATABASE_URL from .env.local
+- Uses TEST_DATABASE_URL from .env.local (separate Neon test database)
 - Runs Alembic migrations to keep schema in sync
 - Each test runs in isolated transaction with rollback
-- Test data persists in database for manual inspection
 - Production database completely unaffected
 """
 import os
 import pytest
 from pathlib import Path
 from sqlalchemy import create_engine, text
-from sqlalchemy.orm import sessionmaker, Session
+from sqlalchemy.orm import sessionmaker
 from alembic.config import Config
 from alembic import command
 from dotenv import load_dotenv
+from db.__tests__.db_test_utils import get_or_create_fixed_test_user
+
+# Find backend directory (works from any working directory)
+BACKEND_DIR = Path(__file__).parent.parent.parent
 
 # Load environment variables (.env.local takes precedence over .env)
-env_local = Path('.env.local')
-env_file = Path('.env')
+env_local = BACKEND_DIR / '.env.local'
+env_file = BACKEND_DIR / '.env'
 
 if env_local.exists():
     load_dotenv(env_local)
@@ -32,15 +34,10 @@ def test_engine():
     """
     Create test database engine and run migrations.
 
-    - Uses TEST_DATABASE_URL from .env (separate Neon database)
+    - Uses TEST_DATABASE_URL from .env.local (separate Neon database)
     - Runs Alembic migrations to ensure schema is up to date
     - Runs once per test session
-    - Ensures test database matches production schema
-
-    Note: This connects to a separate test database, not production.
-    You need to create 'neondb_test' database in Neon console first.
     """
-    # Get test database URL
     test_db_url = os.getenv("TEST_DATABASE_URL")
     if not test_db_url:
         raise ValueError(
@@ -52,7 +49,6 @@ def test_engine():
             "4. Add to .env.local: TEST_DATABASE_URL=postgresql://...\n"
         )
 
-    # Create engine
     engine = create_engine(
         test_db_url,
         pool_pre_ping=True,
@@ -71,19 +67,17 @@ def test_engine():
             f"Please verify TEST_DATABASE_URL in .env.local is correct."
         )
 
-    # Run Alembic migrations to ensure schema is up to date
+    # Run Alembic migrations
     print("Running Alembic migrations on test database...")
-    alembic_cfg = Config("alembic.ini")
+    alembic_ini = BACKEND_DIR / "alembic.ini"
+    alembic_cfg = Config(str(alembic_ini))
     alembic_cfg.set_main_option("sqlalchemy.url", test_db_url)
-
-    # Upgrade to latest migration
     command.upgrade(alembic_cfg, "head")
     print("✓ Test database schema is up to date\n")
 
     yield engine
 
-    # Do NOT clean up test data - user wants to inspect it manually
-    print("\n✓ Test data persisted in database for manual inspection")
+    print("\n✓ Test session complete")
 
 
 @pytest.fixture(scope="function")
@@ -93,30 +87,20 @@ def test_db(test_engine):
 
     - Fresh transaction for every test (complete isolation)
     - All changes automatically rolled back after test
-    - No test data persists to database
-    - Fast and safe - tests don't interfere with each other
-
-    Usage:
-        def test_create_user(test_db):
-            from db.user_service import create_user
-
-            user = create_user(test_db, "test@example.com", "Test User")
-            assert user.user_id is not None
-            # Automatically rolled back after test finishes
+    - Tests don't interfere with each other
     """
-    # Create connection and begin transaction
     connection = test_engine.connect()
     transaction = connection.begin()
 
-    # Create session bound to this transaction
     TestSessionLocal = sessionmaker(bind=connection)
     db = TestSessionLocal()
 
     try:
-        yield db  # Give to test
+        yield db
     finally:
         db.close()
-        transaction.rollback()  # Rollback all changes
+        if transaction.is_active:
+            transaction.rollback()
         connection.close()
 
 
@@ -125,17 +109,8 @@ def test_db_commit(test_engine):
     """
     Create a database session that COMMITS changes (persists data).
 
-    - Changes are committed and persist in test database
-    - Useful for manual inspection after test run
-    - Data stays in database until manually deleted
-
-    Usage:
-        def test_create_and_inspect_user(test_db_commit):
-            from db.user_service import create_user
-
-            user = create_user(test_db_commit, "inspect@example.com", "Inspect Me")
-            test_db_commit.commit()
-            # Data persists - you can query test database to see this user
+    - Changes persist in test database for manual inspection
+    - Data stays until manually deleted
     """
     TestSessionLocal = sessionmaker(bind=test_engine)
     db = TestSessionLocal()
@@ -144,3 +119,14 @@ def test_db_commit(test_engine):
         yield db
     finally:
         db.close()
+
+
+@pytest.fixture
+def test_user(test_db):
+    """
+    Get the fixed test user for settings tests.
+
+    Uses a pre-defined user that persists in test DB.
+    For tests that need a user but aren't testing user creation.
+    """
+    return get_or_create_fixed_test_user(test_db)

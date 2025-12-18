@@ -10,7 +10,7 @@ Usage:
 import sys
 import os
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 
 # Add backend to path
 backend_path = os.path.join(os.path.dirname(__file__), '..')
@@ -37,6 +37,16 @@ def run_sourcing_test():
     print("Loading hardcoded sourcing settings (local_testing=True)...")
     settings = get_user_sourcing_settings(local_testing=True)
     print(f"Configured {len(settings)} companies: {', '.join([c.value for c in settings.keys()])}")
+    print()
+
+    # Show filters per company
+    print("Filters per company:")
+    print("-" * 80)
+    for company, filters in settings.items():
+        include_str = ', '.join(filters.include) if filters.include else 'All'
+        exclude_str = ', '.join(filters.exclude) if filters.exclude else 'None'
+        print(f"  {company.value.upper():12} | Include: {include_str:30} | Exclude: {exclude_str}")
+    print("-" * 80)
     print()
 
     # Run extraction
@@ -66,10 +76,17 @@ def run_sourcing_test():
     print("-" * 80)
     for result in results:
         status = "✓" if not result.error else "✗"
+        # Get filters for this company
+        company_enum = [c for c in settings.keys() if c.value == result.company][0]
+        filters = settings[company_enum]
+        include_str = ', '.join(filters.include) if filters.include else 'All'
+        exclude_str = ', '.join(filters.exclude) if filters.exclude else 'None'
+
         print(f"{status} {result.company.upper():12} | "
               f"Total: {result.total_count:3} | "
               f"Filtered: {result.filtered_count:3} | "
               f"URLs: {result.urls_count:3}")
+        print(f"   Filters - Include: [{include_str}] | Exclude: [{exclude_str}]")
         if result.error:
             print(f"   Error: {result.error}")
     print("-" * 80)
@@ -77,7 +94,7 @@ def run_sourcing_test():
 
     # Convert results to JSON-serializable format
     output = {
-        "timestamp": datetime.utcnow().isoformat() + "Z",
+        "timestamp": datetime.now(timezone.utc).isoformat(),
         "summary": {
             "total_companies": len(results),
             "successful_companies": successful,
@@ -89,6 +106,10 @@ def run_sourcing_test():
         "results": [
             {
                 "company": r.company,
+                "filters": {
+                    "include": settings[[c for c in settings.keys() if c.value == r.company][0]].include,
+                    "exclude": settings[[c for c in settings.keys() if c.value == r.company][0]].exclude
+                },
                 "total_count": r.total_count,
                 "filtered_count": r.filtered_count,
                 "urls_count": r.urls_count,
@@ -120,7 +141,7 @@ def run_sourcing_test():
     output_dir = os.path.join(backend_path, 'tests', 'output')
     os.makedirs(output_dir, exist_ok=True)
 
-    timestamp = datetime.utcnow().strftime('%Y%m%d_%H%M%S')
+    timestamp = datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')
     output_file = os.path.join(output_dir, f'sourcing_results_{timestamp}.json')
 
     with open(output_file, 'w') as f:
