@@ -1,4 +1,4 @@
-import { createContext, useState, useEffect, useContext } from 'react';
+import { createContext, useState, useEffect, useContext, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 
 const UserContext = createContext(null);
@@ -8,8 +8,14 @@ export function UserProvider({ children }) {
   const [loading, setLoading] = useState(true);
   const navigate = useNavigate();
 
-  // Shared fetch logic (DRY principle)
-  const fetchUserData = async (redirectOnError = true) => {
+  // Use ref to avoid re-creating fetchUserData when navigate changes
+  const navigateRef = useRef(navigate);
+  useEffect(() => {
+    navigateRef.current = navigate;
+  });
+
+  // Shared fetch logic (DRY principle) - stable reference
+  const fetchUserData = useCallback(async (redirectOnError = true) => {
     try {
       const token = localStorage.getItem('access_token');
 
@@ -33,7 +39,7 @@ export function UserProvider({ children }) {
           localStorage.removeItem('access_token');
           setUserData(null);
           if (redirectOnError) {
-            navigate('/login');
+            navigateRef.current('/login');
           }
           return;
         }
@@ -48,11 +54,12 @@ export function UserProvider({ children }) {
     } finally {
       setLoading(false);
     }
-  };
+  }, []); // No deps - stable reference
 
+  // Fetch once on mount
   useEffect(() => {
     fetchUserData();
-  }, [navigate]);
+  }, [fetchUserData]);
 
   const logout = () => {
     localStorage.removeItem('access_token');

@@ -292,12 +292,47 @@
   }
 
   .sidebar.collapsed {
-    width: 0;
-    border-right: none;
+    width: 72px; /* Stay visible on mobile, just show icons */
   }
 
   .title-text,
   .nav-label {
     display: none;
+  }
+
+  .toggle-button-edge {
+    display: none; /* Hide toggle on mobile - always show icon-only sidebar */
+  }
+
+  .logout-button span:not(.nav-icon) {
+    display: none;
+  }
+}
+
+/* Small screens */
+@media (max-width: 480px) {
+  .sidebar {
+    width: 60px;
+  }
+
+  .sidebar.collapsed {
+    width: 60px; /* Stay visible */
+  }
+
+  .nav-item {
+    padding: 10px 12px;
+    margin: 4px 8px;
+  }
+
+  .sidebar-header {
+    padding: 16px 12px;
+  }
+
+  .sidebar-footer {
+    padding: 12px 8px;
+  }
+
+  .logout-button {
+    padding: 10px 12px;
   }
 }

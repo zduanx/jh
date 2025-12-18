@@ -11,8 +11,10 @@
   margin-left: 240px;
   height: 100vh;
   overflow-y: auto;
+  overflow-x: hidden;
   transition: margin-left 0.3s ease;
   background: #f7fafc;
+  min-width: 0; /* Allow shrinking in flex contexts */
 }
 
 .main-content.sidebar-collapsed {
@@ -21,11 +23,15 @@
 
 /* Responsive */
 @media (max-width: 768px) {
-  .main-content {
-    margin-left: 72px;
-  }
-
+  .main-content,
   .main-content.sidebar-collapsed {
-    margin-left: 0;
+    margin-left: 72px; /* Sidebar always 72px on tablet */
+  }
+}
+
+@media (max-width: 480px) {
+  .main-content,
+  .main-content.sidebar-collapsed {
+    margin-left: 60px; /* Sidebar always 60px on mobile */
   }
 }

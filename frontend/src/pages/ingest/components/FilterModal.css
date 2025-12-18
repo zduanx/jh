@@ -1,0 +1,222 @@
+/* FilterModal - All classes prefixed with 'fm-' to avoid conflicts */
+
+.fm-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  padding: 20px;
+}
+
+.fm-content {
+  background: white;
+  border-radius: 12px;
+  width: 100%;
+  max-width: 500px;
+  box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.25);
+  animation: fm-slideIn 0.2s ease-out;
+  overflow: hidden;
+}
+
+@keyframes fm-slideIn {
+  from {
+    opacity: 0;
+    transform: translateY(-10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.fm-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 20px 24px;
+  border-bottom: 1px solid #e2e8f0;
+  background: white;
+}
+
+.fm-title-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.fm-company-logo {
+  width: 32px;
+  height: 32px;
+  border-radius: 6px;
+  object-fit: contain;
+}
+
+.fm-header h3 {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 600;
+  color: #1e293b;
+}
+
+.fm-close-btn {
+  width: 32px;
+  height: 32px;
+  border: none;
+  background: #f1f5f9;
+  border-radius: 6px;
+  font-size: 20px;
+  cursor: pointer;
+  color: #64748b;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.2s ease;
+  outline: none;
+}
+
+.fm-close-btn:hover {
+  background: #e2e8f0;
+}
+
+.fm-body {
+  padding: 24px;
+  background: white;
+}
+
+.fm-filter-group {
+  margin-bottom: 20px;
+}
+
+.fm-filter-group:last-child {
+  margin-bottom: 0;
+}
+
+.fm-filter-group label {
+  display: block;
+  font-size: 14px;
+  font-weight: 500;
+  color: #1e293b;
+  margin-bottom: 8px;
+}
+
+.fm-filter-hint {
+  display: block;
+  font-size: 12px;
+  font-weight: 400;
+  color: #64748b;
+  margin-top: 2px;
+}
+
+.fm-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 12px;
+  padding: 16px 24px;
+  border-top: 1px solid #e2e8f0;
+  background: #f8fafc;
+}
+
+.fm-cancel-btn {
+  padding: 10px 20px;
+  background: white;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  color: #475569;
+  transition: background 0.2s ease;
+  outline: none;
+}
+
+.fm-cancel-btn:hover {
+  background: #f8fafc;
+}
+
+.fm-save-btn {
+  padding: 10px 20px;
+  background: #3b82f6;
+  color: white;
+  border: none;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.2s ease;
+  outline: none;
+}
+
+.fm-save-btn:hover {
+  background: #2563eb;
+}
+
+/* Toggle Switch */
+.fm-toggle-group {
+  margin-bottom: 20px;
+  padding-bottom: 20px;
+  border-bottom: 1px solid #e2e8f0;
+}
+
+.fm-toggle-label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  cursor: pointer;
+}
+
+.fm-toggle-text {
+  font-size: 14px;
+  font-weight: 500;
+  color: #1e293b;
+}
+
+.fm-toggle-text .fm-filter-hint {
+  margin-top: 2px;
+}
+
+.fm-toggle {
+  position: relative;
+  width: 44px;
+  height: 24px;
+  background: #cbd5e1;
+  border: none;
+  border-radius: 12px;
+  cursor: pointer;
+  transition: background 0.2s ease;
+  padding: 0;
+  outline: none;
+}
+
+.fm-toggle:hover {
+  background: #94a3b8;
+}
+
+.fm-toggle.fm-toggle-on {
+  background: #3b82f6;
+}
+
+.fm-toggle.fm-toggle-on:hover {
+  background: #2563eb;
+}
+
+.fm-toggle-knob {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 20px;
+  height: 20px;
+  background: white;
+  border-radius: 50%;
+  transition: transform 0.2s ease;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+}
+
+.fm-toggle.fm-toggle-on .fm-toggle-knob {
+  transform: translateX(20px);
+}
