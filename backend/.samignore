@@ -1,0 +1,44 @@
+# SAM build exclusions (like .gitignore but for deployment)
+# These files will NOT be included in the Lambda deployment package
+
+# Environment files - Lambda uses CloudFormation env vars
+.env
+.env.local
+.env.example
+
+# Python virtual environments
+env/
+venv/
+.venv/
+
+# SAM build artifacts
+.aws-sam/
+
+# Tests (not needed in production)
+**/tests/
+**/__tests__/
+conftest.py
+pytest.ini
+
+# Development files
+*.md
+trials/
+
+# Git
+.git/
+.gitignore
+
+# IDE
+.vscode/
+.idea/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.mypy_cache/
+
+# SAM config (contains secrets)
+samconfig.toml
+.sam-config
