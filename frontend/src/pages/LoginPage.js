@@ -1,10 +1,12 @@
 import React from 'react';
 import { GoogleLogin } from '@react-oauth/google';
 import { useNavigate } from 'react-router-dom';
+import { useUser } from '../context/UserContext';
 import './LoginPage.css';
 
 function LoginPage() {
   const navigate = useNavigate();
+  const { refreshUserData } = useUser();
 
   const handleSuccess = async (credentialResponse) => {
     console.log('Google login success!');
@@ -32,6 +34,9 @@ function LoginPage() {
 
       // Store our backend JWT token
       localStorage.setItem('access_token', data.access_token);
+
+      // Fetch user data before navigating (prevents race condition)
+      await refreshUserData();
 
       // Navigate to dashboard
       navigate('/dashboard');
