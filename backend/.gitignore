@@ -36,7 +36,8 @@ wheels/
 
 # AWS
 .aws-sam/
-samconfig.toml  # Auto-generated from .sam-config and .env.local, contains secrets
+# samconfig.toml - Auto-generated from .sam-config and .env.local, contains secrets
+samconfig.toml
 
 # Testing
 .pytest_cache/
@@ -46,3 +47,6 @@ htmlcov/
 # OS
 .DS_Store
 Thumbs.db
+
+# Dev script logs (from jbe-bg)
+server.log

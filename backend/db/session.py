@@ -6,16 +6,21 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, Session
 from dotenv import load_dotenv
 
-# Load environment variables (.env.local takes precedence over .env)
-# Use absolute paths based on this file's location (backend/db/session.py)
-_backend_dir = Path(__file__).parent.parent
-env_local = _backend_dir / '.env.local'
-env_file = _backend_dir / '.env'
+# Load environment variables for LOCAL development only
+# In Lambda, env vars are set via CloudFormation - don't override them with .env files
+# AWS_LAMBDA_FUNCTION_NAME is set by Lambda runtime
+_is_lambda = os.getenv("AWS_LAMBDA_FUNCTION_NAME") is not None
 
-if env_local.exists():
-    load_dotenv(env_local, override=True)
-elif env_file.exists():
-    load_dotenv(env_file, override=True)
+if not _is_lambda:
+    # Local development: load .env.local (takes precedence over .env)
+    _backend_dir = Path(__file__).parent.parent
+    env_local = _backend_dir / '.env.local'
+    env_file = _backend_dir / '.env'
+
+    if env_local.exists():
+        load_dotenv(env_local, override=True)
+    elif env_file.exists():
+        load_dotenv(env_file, override=True)
 
 # Get database URL from environment
 DATABASE_URL = os.getenv("DATABASE_URL")
