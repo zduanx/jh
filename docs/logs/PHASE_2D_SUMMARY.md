@@ -1,147 +1,203 @@
-# Phase 2D: Dry Run Implementation (Stage 2)
+# Phase 2D: Ingestion Stage 1 (Configure)
 
-**Status**: 📋 Planning
-**Date**: TBD
-**Goal**: Enable URL extraction preview to validate company configurations before full ingestion
+**Status**: ✅ Completed
+**Date**: December 18, 2025
+**Goal**: Build Stage 1 of ingestion workflow - company selection with title filters, 5-stage stepper skeleton
 
 ---
 
 ## Overview
 
-Phase 2D implements Stage 2 of the ingestion workflow, providing a dry run feature that extracts job URLs without crawling full job details. This validation step allows users to preview exactly which jobs will be ingested and verify their company configurations are correct before committing to the full crawl.
+Phase 2D implements Stage 1 of the 5-stage ingestion workflow, allowing users to select companies and configure title filters before running job extraction.
 
 **Included in this phase**:
-- Dry run backend endpoint integrating Phase 2A extractors
-- Stage 2 UI with expandable URL preview
-- Per-company extraction results with error handling
-- Confirmation modal before starting full ingestion
-- Partial success support (some companies succeed, others fail)
+- 5-stage horizontal stepper UI (skeleton with Stage 1 functional)
+- `user_company_settings` database table
+- Backend endpoints: companies list, settings CRUD with batch operations
+- Frontend: two-column layout, company cards, filter configuration modal
+- Local state management with snapshot comparison
+- CSS naming convention (component prefixes)
+- Performance optimizations (batch API, stable callbacks)
 
 **Explicitly excluded** (deferred to Phase 2E):
-- Job archiving (Stage 3)
-- Full job crawling (Stage 4)
-- Ingestion runs persistence
-- Results display (Stage 5)
+- Dry run execution (Stage 2)
+- URL extraction preview
+- Extractor integration for preview
 
 ---
 
 ## Key Achievements
 
-### 1. Extractor Integration
-- **Reuse Phase 2A framework**: Registry pattern, title filtering, standardized metadata
-- **Dry run vs full crawl**: Extract URLs + basic metadata only (not descriptions)
-- **Extractor factory**: Route URLs to appropriate extractor by domain pattern
-- Reference: [PHASE_2A_SUMMARY.md](./PHASE_2A_SUMMARY.md)
+### 1. Database Schema
+- **Migration**: `87f2af0cf6df_user_company_settings.py` applied to test + prod
+- **Table**: `user_company_settings` with JSONB `title_filters`
+- **Constraints**: Unique `(user_id, company_name)`, cascade delete on user
+- **Index**: `ix_user_company_settings_user_id` for fast lookups
 
-### 2. Backend Dry Run Endpoint
-- **Route**: POST /api/ingest/dry-run
-- **Process**: Iterate companies, extract URLs, apply title filters, return grouped results
-- **Error handling**: Capture per-company failures without blocking others
-- **Partial success**: Return results even if some companies fail
+### 2. Backend Service Layer
+- **Model**: `models/user_company_settings.py` - SQLAlchemy definition
+- **Service**: `db/company_settings_service.py` - CRUD + batch operations
+- **Validation**: `TitleFilters` dataclass with `from_dict()` / `to_dict()`
+- **Tests**: `db/__tests__/test_company_settings_service.py`
 
-### 3. Stage 2 Preview UI
-- **Summary statistics**: Total URLs, company count, status breakdown
-- **Expandable company cards**: Show first 10 URLs, "... and N more" for large lists
-- **Color-coded badges**: Green (success), red (error), gray (in progress)
-- **Navigation**: Previous (back to Stage 1), Rerun (refresh), Start Ingestion (to Stage 3)
+### 3. Backend API Endpoints
+- **GET `/api/ingestion/companies`**: List available companies (public)
+- **GET `/api/ingestion/settings`**: Fetch user's settings (auth required)
+- **POST `/api/ingestion/settings`**: Batch operations with explicit `op` field
+- **Pydantic models**: `SettingOperation`, `OperationResult`, `CompanySettingResponse`
 
-### 4. Validation & Error Feedback
-- **Early issue detection**: Invalid URLs, no jobs found, rate limiting, timeouts
-- **Clear error messages**: Per-company error display with recovery guidance
-- **User-friendly recovery**: Easy return to Stage 1 to fix configuration
+### 4. Frontend Stage 1 UI
+- **IngestPage.js**: Main container with 5-stage stepper, DB mode indicator
+- **Stage1Configure.js**: Two-column layout (available | selected companies)
+- **FilterModal.js**: Modal for editing include/exclude filters
+- **TokenInput.js**: Reusable keyword input with Enter-to-add, X-to-remove
 
-### 5. Confirmation Modal
-- **Purpose**: Prevent accidental ingestion runs
-- **Content**: Total URL count, duration warning, archiving notice, cancellation warning
-- **Actions**: Cancel (stay on Stage 2) or Confirm (proceed to Stage 3)
+### 5. State Management
+- **Snapshot comparison**: Track original state, compute dirty/new/modified per item
+- **Local-first editing**: All changes local until explicit Save
+- **Frontend merge**: Response merged into local state (no refetch needed)
+
+### 6. CSS Architecture
+- **Prefix convention**: `s1-` (Stage1), `fm-` (FilterModal), `token-` (TokenInput)
+- **Added to SESSION_GUIDE.md**: Rule for all new components
+- **Responsive**: Grid layouts adapt to screen size
+
+### 7. Performance Optimizations
+- **Batch API**: Single POST with array of operations (not N separate calls)
+- **Operation results**: Backend returns `{success, id, updated_at}` per operation
+- **UserContext fix**: `useRef` pattern prevents `/api/user` refetch on navigation
+- **No extra GET**: Frontend merges response directly into state
+
+---
+
+## Database Schema
+
+**user_company_settings table** (migration: `87f2af0cf6df`):
+```sql
+CREATE TABLE user_company_settings (
+    id BIGSERIAL PRIMARY KEY,
+    user_id BIGINT NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
+    company_name VARCHAR(100) NOT NULL,
+    title_filters JSONB DEFAULT '{}' NOT NULL,
+    is_enabled BOOLEAN DEFAULT true NOT NULL,
+    created_at TIMESTAMPTZ DEFAULT NOW() NOT NULL,
+    updated_at TIMESTAMPTZ DEFAULT NOW() NOT NULL,
+    CONSTRAINT uq_user_company UNIQUE(user_id, company_name)
+);
+CREATE INDEX ix_user_company_settings_user_id ON user_company_settings(user_id);
+```
+
+**title_filters JSONB structure**:
+```json
+{"include": ["engineer", "developer"], "exclude": ["intern", "staff"]}
+```
+- `include`: null = all jobs, list = OR match any term
+- `exclude`: list of terms to reject (AND logic)
 
 ---
 
 ## API Endpoints
 
-**POST `/api/ingest/dry-run`**:
-- Purpose: Extract job URLs for configured companies without full crawl
-- Request: User's company configurations (from user_company_settings table)
-- Response: Array of results per company (name, URL count, status, URLs, error_message)
-- Validation: At least one company required
-- Auth: JWT required
+### GET `/api/ingestion/companies`
+- **Purpose**: List available companies from extractor registry
+- **Auth**: None (public)
+- **Response**: `[{ name, display_name, logo_url }]`
 
-Reference: [API_DESIGN.md](../architecture/API_DESIGN.md)
+### GET `/api/ingestion/settings`
+- **Purpose**: Fetch user's configured company settings
+- **Auth**: JWT required
+- **Response**: `[{ id, company_name, title_filters, is_enabled, updated_at }]`
+
+### POST `/api/ingestion/settings`
+- **Purpose**: Batch create/update/delete operations
+- **Auth**: JWT required
+- **Request**:
+```json
+[
+  {"op": "upsert", "company_name": "google", "title_filters": {"include": ["engineer"]}, "is_enabled": true},
+  {"op": "delete", "company_name": "netflix"}
+]
+```
+- **Response**:
+```json
+[
+  {"op": "upsert", "success": true, "company_name": "google", "id": 1, "updated_at": "2025-12-18T..."},
+  {"op": "delete", "success": true, "company_name": "netflix"}
+]
+```
 
 ---
 
 ## Highlights
 
-### Why Separate Dry Run from Full Ingestion?
-**Alternative**: Start ingestion immediately without preview
+### Batch API Design
+**Problem**: Frontend making N API calls for N changes (inefficient, race conditions)
 
-**Chosen**: Dedicated dry run stage with URL preview
+**Solution**: Single POST endpoint accepting array of operations with explicit `op` field
 
-**Rationale**: Users want verification before committing, prevents wasted crawl time on misconfigured filters, builds trust through transparency, allows iteration on filters
+**Why not full sync?**: Would require full DB query on every save. Operation-result pattern confirms each change without refetch.
 
-### Why Show URLs Instead of Just Counts?
-**Alternative**: Display only job counts per company
+**Industry patterns referenced**: Elasticsearch Bulk API, GraphQL mutations
 
-**Chosen**: Show expandable URL lists (first 10 visible)
+### CSS Prefix Convention
+**Problem**: Generic class names (`.modal`, `.spinner`) conflicting between components
 
-**Rationale**: Users can spot-check URLs to verify correctness, helps debug filter issues, increases confidence, minimal performance cost
+**Solution**: Component-specific prefixes (`s1-`, `fm-`, `token-`)
 
-### Why Allow Partial Success?
-**Alternative**: Fail entire dry run if any company fails
+**Rule added to SESSION_GUIDE.md**: All new components must use prefixes
 
-**Chosen**: Return partial results with per-company errors
+### UserContext Stability
+**Problem**: `/api/user` called on every navigation (useCallback recreated when navigate changes)
 
-**Rationale**: One misconfigured company shouldn't block others, users can start ingestion for successful companies, can fix failed companies later
+**Solution**: Store navigate in `useRef`, use `navigateRef.current()` in callback
 
-### Error Handling Strategy
-**Per-company isolation**: Each company's extraction runs independently, failures don't cascade
+**Pattern**: Industry-standard React pattern for stable callbacks with changing dependencies
 
-**Timeout thresholds**: 30 seconds per company, 5 minutes total request
+### Snapshot Comparison
+**Problem**: Need to track which items are new/modified/deleted for efficient saves
 
-**User guidance**: Clear recovery instructions for each error type (invalid URL, no jobs found, rate limiting, timeout)
+**Solution**: Store original snapshot on load, compare current state to compute deltas
+
+**Benefits**: Visual indicators (New/Modified badges), only send changed items to API
 
 ---
 
 ## Testing & Validation
 
 **Manual Testing**:
-- Add 3 companies → Run dry run → Verify URLs displayed
-- Invalid URL → Verify error message shown
-- No title filters → Verify all jobs shown
-- Overly restrictive filters → Verify "no jobs found" warning
-- Company with 500+ jobs → Verify "and N more" displays correctly
-- Very slow career site → Verify timeout after 30 seconds
-- Mixed success (2/5 companies) → Verify partial results shown
-- Confirmation modal → Verify displays correctly, cancel works
+- Add company from available list -> appears in selected with "New" badge
+- Edit filters -> "Modified" badge appears
+- Toggle enabled -> "Modified" badge appears
+- Remove company -> disappears, available again in left column
+- Save -> badges clear, timestamps update
+- Cancel -> reverts all local changes
+- Page refresh -> settings persist from database
 
 **Automated Testing**:
-- Future: Unit tests for extractor factory routing
-- Future: Integration tests for dry run endpoint
-- Future: Frontend component tests for results display
-- Future: End-to-end test for Stage 1 → Stage 2 flow
+- `pytest backend/db/__tests__/test_company_settings_service.py`
+- Tests: CRUD operations, batch upsert/delete, filter validation
 
 ---
 
 ## Metrics
 
-- **API Endpoints**: 1 (POST /api/ingest/dry-run)
-- **Frontend Components**: 4 (Stage 2, results, loader, confirmation modal)
-- **Error Types Handled**: 4 (invalid URL, no jobs, rate limiting, timeout)
-- **Timeout Thresholds**: 30s per company, 5min total
-- **Target Completion**: Stage 2 fully functional with preview and validation
+| Metric | Count |
+|--------|-------|
+| Database Tables | 1 (user_company_settings) |
+| API Endpoints | 3 (companies, GET settings, POST batch) |
+| Frontend Components | 5 (IngestPage, Stage1Configure, FilterModal, TokenInput, CSS files) |
+| Lines of CSS | ~550 (Stage1Configure.css) |
+| Test Coverage | Service layer unit tests |
 
 ---
 
-## Next Steps → Phase 2E
+## Next Steps -> Phase 2E
 
-Phase 2E will implement **Stages 3-5**:
-- Stage 3: Job archiving logic (remove outdated jobs)
-- Stage 4: Async job crawling via SQS + Lambda
-- Stage 5: Results display and ingestion history
-- Ingestion runs table for persistence
-- Stale run detection and recovery
-
-**Target**: Complete end-to-end ingestion workflow with async processing
+Phase 2E will implement **Stage 2: Preview**:
+- Integrate with Phase 2A extractors
+- Backend endpoint to trigger URL extraction (dry run)
+- Frontend display of extracted URLs with filtering results
+- Validation before proceeding to Archive stage
 
 ---
 
@@ -149,43 +205,51 @@ Phase 2E will implement **Stages 3-5**:
 
 ```
 backend/
+├── models/
+│   └── user_company_settings.py      # SQLAlchemy model
+├── db/
+│   ├── company_settings_service.py   # CRUD + batch operations
+│   └── __tests__/
+│       └── test_company_settings_service.py
 ├── api/
-│   └── ingest_routes.py     # Add POST /api/ingest/dry-run
-└── tests/
-    └── test_dry_run.py      # Dry run endpoint tests
+│   └── ingestion_routes.py           # REST endpoints
+└── alembic/versions/
+    └── 87f2af0cf6df_user_company_settings.py
 
-frontend/src/pages/Ingest/
-├── Stage2_Preview.js        # Main Stage 2 component
-├── DryRunResults.js         # Results display component
-├── DryRunLoader.js          # Loading state component
-└── ConfirmIngestionModal.js # Confirmation dialog
+frontend/src/
+├── context/
+│   └── UserContext.js                # Fixed useRef pattern
+├── pages/
+│   ├── IngestPage.js                 # Main container + stepper
+│   ├── IngestPage.css
+│   └── ingest/
+│       ├── Stage1Configure.js        # Two-column layout
+│       ├── Stage1Configure.css       # s1- prefixed styles
+│       └── components/
+│           ├── FilterModal.js
+│           ├── FilterModal.css       # fm- prefixed styles
+│           ├── TokenInput.js
+│           └── TokenInput.css        # token- prefixed styles
 ```
-
-**Key Files**:
-- [ingest_routes.py](../../backend/api/ingest_routes.py) - Dry run endpoint
-- [Stage2_Preview.js](../../frontend/src/pages/Ingest/Stage2_Preview.js) - Stage 2 UI
 
 ---
 
 ## Key Learnings
 
-### Dry Run Pattern
-Preview operations before execution reduces errors and builds user confidence. Small upfront cost (extracting URLs) prevents large waste (full crawl with bad config).
+### Batch Operation Pattern
+Use explicit `op` field in request array, return per-operation results. Avoids N+1 API calls and provides clear success/failure feedback per item.
 
-### Partial Success Strategy
-Independent processing of items (companies) with graceful degradation provides better UX than all-or-nothing failures. Users get value even when some operations fail.
+### React Callback Stability
+When callbacks depend on values that change frequently (like router navigate), use `useRef` to store the value and access via `.current` in the callback. Keeps callback reference stable.
 
-### Error Transparency
-Clear, actionable error messages with recovery guidance reduce support burden and empower users to self-serve fixes.
+### CSS Isolation
+Always prefix component CSS classes. Generic names will eventually conflict as the app grows. Establish the convention early.
 
 ---
 
 ## References
 
 **External Documentation**:
-- [PostgreSQL JSONB](https://www.postgresql.org/docs/current/datatype-json.html) - User company settings storage
-- [React State Management](https://react.dev/learn/managing-state) - Stage workflow state
-
----
-
-**Status**: Ready for Phase 2E
+- [PostgreSQL JSONB](https://www.postgresql.org/docs/current/datatype-json.html)
+- [SQLAlchemy Upsert](https://docs.sqlalchemy.org/en/20/dialects/postgresql.html#insert-on-conflict-upsert)
+- [Elasticsearch Bulk API](https://www.elastic.co/guide/en/elasticsearch/reference/current/docs-bulk.html) - batch operation pattern

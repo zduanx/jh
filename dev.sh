@@ -66,8 +66,24 @@ _normalize_env_value() {
     echo "$value" | tr -d '"' | sed 's/\\n//g' | sed 's/\\r//g' | sed 's/\\t//g'
 }
 
+# Get test database URL from backend/.env.local
+_get_test_db_url() {
+    grep "^DATABASE_URL=" "$JH_ROOT/backend/.env.local" 2>/dev/null | cut -d= -f2-
+}
+
+# Get prod database URL from backend/.env.local (from PROD_VALUE comment)
+_get_prod_db_url() {
+    grep "^# DATABASE_URL_PROD_VALUE=" "$JH_ROOT/backend/.env.local" 2>/dev/null | cut -d= -f2-
+}
+
+# Mask password in database URL for display
+_mask_db_url() {
+    echo "$1" | sed 's/:[^:@]*@/:***@/'
+}
+
 # Backend shortcuts
 jbe() {
+    cd "$JH_ROOT" || return 1
     echo -e "${BLUE}Starting backend server...${NC}"
     cd "$JH_ROOT/backend" || return 1
     source venv/bin/activate
@@ -76,6 +92,7 @@ jbe() {
 
 # Frontend shortcuts
 jfe() {
+    cd "$JH_ROOT" || return 1
     echo -e "${BLUE}Starting frontend server...${NC}"
     cd "$JH_ROOT/frontend" || return 1
     npm start
@@ -100,6 +117,7 @@ jkillall() {
 
 # Background process starters (process stays alive after terminal close)
 jbe-bg() {
+    cd "$JH_ROOT" || return 1
     echo -e "${BLUE}Starting backend in background...${NC}"
     cd "$JH_ROOT/backend" || return 1
     source venv/bin/activate
@@ -109,6 +127,7 @@ jbe-bg() {
 }
 
 jfe-bg() {
+    cd "$JH_ROOT" || return 1
     echo -e "${BLUE}Starting frontend in background...${NC}"
     cd "$JH_ROOT/frontend" || return 1
     nohup npm start > "$JH_ROOT/frontend/server.log" 2>&1 &
@@ -411,7 +430,8 @@ jpushvercel() {
     echo -e "${BLUE}=== Deploying Frontend to Vercel ===${NC}"
     echo ""
 
-    cd "$JH_ROOT/frontend" || return 1
+    cd "$JH_ROOT" || return 1
+    cd frontend || return 1
 
     # Check Vercel project status
     echo -e "${BLUE}[1/5] Checking Vercel project status...${NC}"
@@ -531,7 +551,9 @@ jpushvercel() {
     echo -e "${BLUE}[3/5] Checking git status...${NC}"
     cd "$JH_ROOT" || return 1
 
-    if git diff --quiet frontend/ && git diff --cached --quiet frontend/; then
+    # Check for uncommitted changes (including untracked files)
+    FRONTEND_CHANGES=$(git status --porcelain frontend/ 2>/dev/null)
+    if [ -z "$FRONTEND_CHANGES" ]; then
         echo -e "${GREEN}  ✓ No uncommitted frontend/ changes${NC}"
     else
         echo -e "${YELLOW}  ⚠ You have uncommitted frontend/ changes${NC}"
@@ -703,6 +725,11 @@ jhelp() {
     echo "  jkill-fe           - Kill frontend"
     echo "  jkillall           - Kill both"
     echo ""
+    echo -e "${GREEN}Database:${NC}"
+    echo "  jdbcreate <name>   - Create new Alembic migration"
+    echo "  jdbpush            - Apply migrations to test + prod databases"
+    echo "  jdbstatus          - Show current migration status"
+    echo ""
     echo -e "${GREEN}Deployment:${NC}"
     echo "  jpushapi           - Deploy backend to AWS Lambda (SAM)"
     echo "  jpushvercel        - Deploy frontend to Vercel (git CI/CD)"
@@ -719,6 +746,221 @@ jhelp() {
     echo "  jkillall           # Stop everything"
 }
 
+# ==============================================================================
+# DATABASE COMMANDS
+# ==============================================================================
+
+# Create a new Alembic migration
+jdbcreate() {
+    if [ -z "$1" ]; then
+        echo -e "${RED}Usage: jdbcreate <migration_name>${NC}"
+        echo -e "${YELLOW}Example: jdbcreate create_user_company_settings${NC}"
+        return 1
+    fi
+
+    local MIGRATION_NAME="$1"
+    echo -e "${BLUE}=== Creating Alembic Migration ===${NC}"
+    echo ""
+
+    cd "$JH_ROOT" || return 1
+    cd backend || return 1
+    source venv/bin/activate
+
+    # Check current status first
+    echo -e "${BLUE}[1/3] Checking current migration status...${NC}"
+    alembic current 2>/dev/null
+    echo ""
+
+    # Generate new migration
+    echo -e "${BLUE}[2/3] Generating migration: ${YELLOW}$MIGRATION_NAME${NC}"
+    alembic revision --autogenerate -m "$MIGRATION_NAME"
+
+    if [ $? -ne 0 ]; then
+        echo -e "${RED}✗ Failed to create migration${NC}"
+        deactivate 2>/dev/null || true
+        cd "$JH_ROOT" || return 1
+        return 1
+    fi
+
+    # Find the newly created migration file
+    echo ""
+    echo -e "${BLUE}[3/3] Migration created:${NC}"
+    LATEST_MIGRATION=$(ls -t alembic/versions/*.py 2>/dev/null | head -1)
+    if [ -n "$LATEST_MIGRATION" ]; then
+        echo -e "${GREEN}  ✓ $LATEST_MIGRATION${NC}"
+        echo ""
+        echo -e "${YELLOW}Next steps:${NC}"
+        echo -e "  1. Review and edit the migration file"
+        echo -e "  2. Run ${BLUE}jdbpush${NC} to apply to test + prod databases"
+    fi
+
+    deactivate 2>/dev/null || true
+    cd "$JH_ROOT" || return 1
+}
+
+# Show migration status for both databases
+jdbstatus() {
+    echo -e "${BLUE}=== Database Migration Status ===${NC}"
+    echo ""
+
+    cd "$JH_ROOT" || return 1
+    cd backend || return 1
+    source venv/bin/activate
+
+    # Check test database
+    echo -e "${BLUE}Test Database (DATABASE_URL):${NC}"
+    local TEST_DB_URL=$(_get_test_db_url)
+    if [ -n "$TEST_DB_URL" ]; then
+        echo -e "${YELLOW}  URL: $(_mask_db_url "$TEST_DB_URL")${NC}"
+        export DATABASE_URL="$TEST_DB_URL"
+        echo -e "${BLUE}  Migration:${NC}"
+        alembic current 2>&1 | sed 's/^/    /'
+        echo -e "${BLUE}  Tables:${NC}"
+        python3 -c "
+from sqlalchemy import create_engine, inspect
+import os
+engine = create_engine(os.environ['DATABASE_URL'])
+inspector = inspect(engine)
+tables = inspector.get_table_names()
+for t in sorted(tables):
+    print(f'    - {t}')
+" 2>/dev/null || echo -e "${RED}    ✗ Could not list tables${NC}"
+    else
+        echo -e "${RED}  ✗ DATABASE_URL not configured${NC}"
+    fi
+
+    echo ""
+
+    # Check prod database
+    echo -e "${BLUE}Prod Database (DATABASE_URL_PROD_VALUE):${NC}"
+    local PROD_DB_URL=$(_get_prod_db_url)
+    if [ -n "$PROD_DB_URL" ]; then
+        echo -e "${YELLOW}  URL: $(_mask_db_url "$PROD_DB_URL")${NC}"
+        export DATABASE_URL="$PROD_DB_URL"
+        echo -e "${BLUE}  Migration:${NC}"
+        alembic current 2>&1 | sed 's/^/    /'
+        echo -e "${BLUE}  Tables:${NC}"
+        python3 -c "
+from sqlalchemy import create_engine, inspect
+import os
+engine = create_engine(os.environ['DATABASE_URL'])
+inspector = inspect(engine)
+tables = inspector.get_table_names()
+for t in sorted(tables):
+    print(f'    - {t}')
+" 2>/dev/null || echo -e "${RED}    ✗ Could not list tables${NC}"
+    else
+        echo -e "${YELLOW}  ⊘ DATABASE_URL_PROD_VALUE not configured${NC}"
+    fi
+
+    deactivate 2>/dev/null || true
+    cd "$JH_ROOT" || return 1
+}
+
+# Apply migrations to both test and prod databases
+jdbpush() {
+    echo -e "${BLUE}=== Applying Database Migrations ===${NC}"
+    echo ""
+
+    cd "$JH_ROOT" || return 1
+    cd backend || return 1
+    source venv/bin/activate
+
+    # Get database URLs using helper functions
+    local TEST_DB_URL=$(_get_test_db_url)
+    local PROD_DB_URL=$(_get_prod_db_url)
+
+    if [ -z "$TEST_DB_URL" ]; then
+        echo -e "${RED}✗ DATABASE_URL not found in .env.local${NC}"
+        deactivate 2>/dev/null || true
+        cd "$JH_ROOT" || return 1
+        return 1
+    fi
+
+    # Show pending migrations
+    echo -e "${BLUE}[1/4] Checking pending migrations...${NC}"
+    export DATABASE_URL="$TEST_DB_URL"
+
+    CURRENT=$(alembic current 2>&1 | grep -oE '[a-f0-9]{12}' | head -1)
+    HEAD=$(alembic heads 2>&1 | grep -oE '[a-f0-9]{12}' | head -1)
+
+    if [ "$CURRENT" = "$HEAD" ]; then
+        echo -e "${GREEN}  ✓ Already at latest migration: $HEAD${NC}"
+        echo -e "${YELLOW}  No migrations to apply${NC}"
+        deactivate 2>/dev/null || true
+        cd "$JH_ROOT" || return 1
+        return 0
+    fi
+
+    echo -e "${YELLOW}  Current: ${CURRENT:-none}${NC}"
+    echo -e "${YELLOW}  Head:    $HEAD${NC}"
+    echo ""
+
+    # Show migration history
+    echo -e "${BLUE}[2/4] Migration history:${NC}"
+    alembic history --verbose 2>&1 | head -20 | sed 's/^/  /'
+    echo ""
+
+    # Confirm
+    echo -e "${YELLOW}This will apply migrations to:${NC}"
+    echo -e "${YELLOW}  1. Test database (DATABASE_URL)${NC}"
+    if [ -n "$PROD_DB_URL" ]; then
+        echo -e "${YELLOW}  2. Prod database (DATABASE_URL_PROD_VALUE)${NC}"
+    else
+        echo -e "${YELLOW}  2. Prod database: ${RED}NOT CONFIGURED${NC}"
+    fi
+    echo ""
+    echo -n -e "${YELLOW}Proceed with migrations? [y/n]: ${NC}"
+    read CONFIRM
+
+    if [[ ! "$CONFIRM" =~ ^[Yy]$ ]]; then
+        echo -e "${RED}Migration cancelled${NC}"
+        deactivate 2>/dev/null || true
+        cd "$JH_ROOT" || return 1
+        return 1
+    fi
+
+    # Apply to test database
+    echo ""
+    echo -e "${BLUE}[3/4] Applying to TEST database...${NC}"
+    export DATABASE_URL="$TEST_DB_URL"
+    alembic upgrade head
+
+    if [ $? -ne 0 ]; then
+        echo -e "${RED}✗ Migration failed on test database${NC}"
+        echo -e "${RED}  Prod database NOT updated${NC}"
+        deactivate 2>/dev/null || true
+        cd "$JH_ROOT" || return 1
+        return 1
+    fi
+    echo -e "${GREEN}  ✓ Test database updated${NC}"
+
+    # Apply to prod database
+    echo ""
+    echo -e "${BLUE}[4/4] Applying to PROD database...${NC}"
+    if [ -n "$PROD_DB_URL" ]; then
+        export DATABASE_URL="$PROD_DB_URL"
+        alembic upgrade head
+
+        if [ $? -ne 0 ]; then
+            echo -e "${RED}✗ Migration failed on prod database${NC}"
+            echo -e "${YELLOW}  Test database was updated, but prod failed${NC}"
+            deactivate 2>/dev/null || true
+            cd "$JH_ROOT" || return 1
+            return 1
+        fi
+        echo -e "${GREEN}  ✓ Prod database updated${NC}"
+    else
+        echo -e "${YELLOW}  ⊘ Skipped (DATABASE_URL_PROD_VALUE not configured)${NC}"
+    fi
+
+    echo ""
+    echo -e "${GREEN}=== Migration complete ===${NC}"
+
+    deactivate 2>/dev/null || true
+    cd "$JH_ROOT" || return 1
+}
+
 # Show help on load
 echo -e "${GREEN}Job Hunter dev shortcuts loaded!${NC} Type ${BLUE}jhelp${NC} for commands."
 # Deploy backend to AWS Lambda via SAM
@@ -733,8 +975,9 @@ jpushapi() {
     CURRENT_BRANCH=$(git branch --show-current)
     echo -e "${BLUE}  Current branch: ${YELLOW}$CURRENT_BRANCH${NC}"
 
-    # Check for uncommitted changes in backend/
-    if git diff --quiet backend/ && git diff --cached --quiet backend/; then
+    # Check for uncommitted changes in backend/ (including untracked files)
+    BACKEND_CHANGES=$(git status --porcelain backend/ 2>/dev/null)
+    if [ -z "$BACKEND_CHANGES" ]; then
         echo -e "${GREEN}  ✓ No uncommitted backend/ changes${NC}"
     else
         echo -e "${RED}  ✗ You have uncommitted backend/ changes${NC}"
@@ -905,6 +1148,13 @@ jpushapi() {
     # Step 5: Build with SAM
     echo ""
     echo -e "${BLUE}[5/7] Building with SAM...${NC}"
+
+    # Clean up dev files that SAM doesn't exclude (hardcoded EXCLUDED_FILES doesn't include these)
+    if [ -f "server.log" ]; then
+        echo -e "${YELLOW}  Removing server.log (dev artifact)...${NC}"
+        rm -f server.log
+    fi
+
     sam build
     if [ $? -ne 0 ]; then
         echo -e "${RED}✗ SAM build failed${NC}"

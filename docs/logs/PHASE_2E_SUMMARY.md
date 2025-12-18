@@ -1,121 +1,69 @@
-# Phase 2E: Full Ingestion Pipeline (Stages 3-5)
+# Phase 2E: Dry Run Implementation (Stage 2)
 
 **Status**: 📋 Planning
 **Date**: TBD
-**Goal**: Complete end-to-end job ingestion with archiving, async crawling, and results display
+**Goal**: Enable URL extraction preview to validate company configurations before full ingestion
 
 ---
 
 ## Overview
 
-Phase 2E implements the final three stages of the ingestion workflow, completing the job ingestion pipeline with job archiving, asynchronous SQS-based crawling via Lambda workers, and results display with ingestion history. This phase adds production-grade features including stale run recovery, real-time progress tracking, and comprehensive error handling.
+Phase 2D implements Stage 2 of the ingestion workflow, providing a dry run feature that extracts job URLs without crawling full job details. This validation step allows users to preview exactly which jobs will be ingested and verify their company configurations are correct before committing to the full crawl.
 
 **Included in this phase**:
-- Ingestion runs table for workflow persistence
-- Stage 3: Job archiving based on source URLs
-- Stage 4: Async crawling via SQS + Lambda with decentralized completion detection
-- Stage 5: Results summary and ingestion history
-- Stale run detection and automated recovery
-- User-triggered reset functionality
+- Dry run backend endpoint integrating Phase 2A extractors
+- Stage 2 UI with expandable URL preview
+- Per-company extraction results with error handling
+- Confirmation modal before starting full ingestion
+- Partial success support (some companies succeed, others fail)
 
-**Explicitly excluded** (deferred to Phase 3):
-- Job search functionality
-- Application tracking
-- User preferences and recommendations
+**Explicitly excluded** (deferred to Phase 2F):
+- Job archiving (Stage 3)
+- Full job crawling (Stage 4)
+- Ingestion runs persistence
+- Results display (Stage 5)
 
 ---
 
 ## Key Achievements
 
-### 1. Ingestion Runs Table
-- **Purpose**: Persist workflow state across async operations
-- **Key fields**: Run metadata, progress counters (processed, added, failed, archived), status tracking, heartbeat timestamps
-- **Design features**: JSONB for company config, atomic counter updates, retry count for recovery
-- **Stale detection**: Heartbeat field enables timeout detection for stuck runs
+### 1. Extractor Integration
+- **Reuse Phase 2A framework**: Registry pattern, title filtering, standardized metadata
+- **Dry run vs full crawl**: Extract URLs + basic metadata only (not descriptions)
+- **Extractor factory**: Route URLs to appropriate extractor by domain pattern
+- Reference: [PHASE_2A_SUMMARY.md](./PHASE_2A_SUMMARY.md)
 
-### 2. Stage 3 - Job Archiving
-- **Strategy**: Query-based soft delete (mark as archived, not hard delete)
-- **Process**: Extract current URLs via dry run, find jobs with source URLs not in current list, update status='archived'
-- **Per-company archiving**: Prevents accidentally archiving jobs from companies not being updated
-- **Historical tracking**: Preserved for audit trail and future "show archived" feature
+### 2. Backend Dry Run Endpoint
+- **Route**: POST /api/ingest/dry-run
+- **Process**: Iterate companies, extract URLs, apply title filters, return grouped results
+- **Error handling**: Capture per-company failures without blocking others
+- **Partial success**: Return results even if some companies fail
 
-### 3. Stage 4 - Async Job Crawling
-- **Architecture**: SQS queue with Lambda workers processing jobs in parallel
-- **Decentralized completion**: Each Lambda checks if it processed the last job, WHERE clause prevents race conditions
-- **Progress tracking**: Atomic counter updates with heartbeat timestamps
-- **Scalability**: Auto-scaling up to account concurrency limit (default 100)
-- **Error handling**: Per-job failures don't block queue, increment jobs_failed counter
-- Reference: [AWS Lambda Guide](../learning/aws.md), [Lambda-SQS Integration](../learning/lambda-sqs.md)
+### 3. Stage 2 Preview UI
+- **Summary statistics**: Total URLs, company count, status breakdown
+- **Expandable company cards**: Show first 10 URLs, "... and N more" for large lists
+- **Color-coded badges**: Green (success), red (error), gray (in progress)
+- **Navigation**: Previous (back to Stage 1), Rerun (refresh), Start Ingestion (to Stage 3)
 
-### 4. Stage 5 - Results Display
-- **Success metrics**: Jobs added, jobs archived, jobs failed, total duration
-- **Actions**: Start new ingestion (reset to Stage 1), Go to search (navigate with pre-fill)
-- **Ingestion history**: Past runs table with date, companies, job counts, duration, status
-- **Display format**: Success checkmark, summary cards, color-coded values
+### 4. Validation & Error Feedback
+- **Early issue detection**: Invalid URLs, no jobs found, rate limiting, timeouts
+- **Clear error messages**: Per-company error display with recovery guidance
+- **User-friendly recovery**: Easy return to Stage 1 to fix configuration
 
-### 5. Stale Run Detection & Recovery
-- **Background job**: Runs every 5 minutes (Celery Beat or EventBridge)
-- **Detection logic**: Query runs with old heartbeats (15+ minutes), retry up to 3 times
-- **User reset**: Manual abort button for stuck runs with confirmation dialog
-- **Failure threshold**: After 3 retries, mark as failed with error message
-
-### 6. Real-Time Progress Tracking
-- **Polling**: Frontend polls every 3 seconds during Stage 4
-- **Displayed metrics**: Progress bar, jobs processed/added/failed, elapsed time
-- **Auto-navigation**: When status='completed', navigate to Stage 5
-- **Non-blocking**: User can close page, progress continues
-
----
-
-## Database Schema
-
-**ingestion_runs table**:
-- `run_id`: Integer primary key (auto-increment)
-- `user_id`: Foreign key to users table, indexed
-- `status`: VARCHAR (archiving, ingesting, completed, failed)
-- `current_stage`: Integer (3-5)
-- `total_jobs_found`, `jobs_processed`, `jobs_added`, `jobs_failed`, `jobs_archived`: Integer counters
-- `companies`: JSONB array of company configurations
-- `created_at`, `started_at`, `completed_at`, `last_heartbeat`: TIMESTAMP WITH TIMEZONE
-- `retry_count`: Integer for recovery attempts
-- `error_message`: TEXT for failure details
-
-**Design rationale**:
-- JSONB for flexible company config storage
-- Atomic counters prevent race conditions in Lambda workers
-- Heartbeat field enables stale run detection
-- Retry count for automatic recovery attempts
-
-Reference: [SQLAlchemy Guide](../learning/sqlalchemy.md)
+### 5. Confirmation Modal
+- **Purpose**: Prevent accidental ingestion runs
+- **Content**: Total URL count, duration warning, archiving notice, cancellation warning
+- **Actions**: Cancel (stay on Stage 2) or Confirm (proceed to Stage 3)
 
 ---
 
 ## API Endpoints
 
-**POST `/api/ingest/start`**:
-- Purpose: Create ingestion run and start archiving (Stage 3)
-- Request: Company configurations from user settings
-- Response: Run object with run_id, status, current_stage
-- Process: Create run record, trigger archiving, send URLs to SQS
-- Auth: JWT required
-
-**GET `/api/ingest/runs/{run_id}/progress`**:
-- Purpose: Get real-time progress for Stage 4 polling
-- Request: Path parameter run_id
-- Response: Progress counters, status, current_stage, elapsed time
-- Auth: JWT required, verify ownership
-
-**GET `/api/ingest/history?limit=10`**:
-- Purpose: Fetch past ingestion runs for history table
-- Request: Query parameter limit (default 10)
-- Response: Array of completed/failed runs ordered by created_at DESC
-- Auth: JWT required
-
-**POST `/api/ingest/runs/{run_id}/reset`**:
-- Purpose: User-triggered abort of stuck run
-- Request: Path parameter run_id
-- Response: Success message
-- Validation: Verify ownership, check status is archiving/ingesting
+**POST `/api/ingest/dry-run`**:
+- Purpose: Extract job URLs for configured companies without full crawl
+- Request: User's company configurations (from user_company_settings table)
+- Response: Array of results per company (name, URL count, status, URLs, error_message)
+- Validation: At least one company required
 - Auth: JWT required
 
 Reference: [API_DESIGN.md](../architecture/API_DESIGN.md)
@@ -124,96 +72,76 @@ Reference: [API_DESIGN.md](../architecture/API_DESIGN.md)
 
 ## Highlights
 
-### Decentralized Completion Detection
-**Alternative**: Central coordinator tracks job count
+### Why Separate Dry Run from Full Ingestion?
+**Alternative**: Start ingestion immediately without preview
 
-**Chosen**: Each Lambda checks completion independently
+**Chosen**: Dedicated dry run stage with URL preview
 
-**Rationale**: No single point of failure, scales horizontally without bottleneck, simple implementation via WHERE clause, Lambdas are stateless
+**Rationale**: Users want verification before committing, prevents wasted crawl time on misconfigured filters, builds trust through transparency, allows iteration on filters
 
-**Implementation**: WHERE clause prevents race condition (`WHERE status = 'ingesting'`), only one Lambda's UPDATE succeeds
+### Why Show URLs Instead of Just Counts?
+**Alternative**: Display only job counts per company
 
-### Soft Delete for Archived Jobs
-**Alternative**: Hard delete (DELETE FROM jobs)
+**Chosen**: Show expandable URL lists (first 10 visible)
 
-**Chosen**: Set status='archived', keep records
+**Rationale**: Users can spot-check URLs to verify correctness, helps debug filter issues, increases confidence, minimal performance cost
 
-**Rationale**: Historical tracking for debugging, audit trail, potential future "show archived jobs" feature, easy to purge later if needed
+### Why Allow Partial Success?
+**Alternative**: Fail entire dry run if any company fails
 
-### Heartbeat-Based Stale Detection
-**Alternative**: Timeout based on created_at only
+**Chosen**: Return partial results with per-company errors
 
-**Chosen**: Update last_heartbeat on every Lambda execution
+**Rationale**: One misconfigured company shouldn't block others, users can start ingestion for successful companies, can fix failed companies later
 
-**Rationale**: Distinguishes "not started" from "stuck mid-execution", more accurate for long-running ingestions, allows flexible timeout thresholds, enables health monitoring
+### Error Handling Strategy
+**Per-company isolation**: Each company's extraction runs independently, failures don't cascade
 
-### Lambda Performance Optimization
-**Batch size**: 10 messages per invocation balances cold start overhead vs parallelism
+**Timeout thresholds**: 30 seconds per company, 5 minutes total request
 
-**Timeout**: 5 minutes prevents hanging
-
-**Memory**: 512 MB estimated for crawling + parsing
-
-**Connection pooling**: Lambda reuses DB connections when warm
-
-Reference: [AWS Lambda Guide](../learning/aws.md)
-
-### SQS Configuration
-**Visibility timeout**: 6 minutes (longer than Lambda timeout)
-
-**Message retention**: 24 hours
-
-**Dead letter queue**: Captures permanent failures after retries
-
-**Long polling**: 20 seconds receive message wait time
-
-Reference: [Lambda-SQS Integration](../learning/lambda-sqs.md)
+**User guidance**: Clear recovery instructions for each error type (invalid URL, no jobs found, rate limiting, timeout)
 
 ---
 
 ## Testing & Validation
 
 **Manual Testing**:
-- Start ingestion → Verify Stage 3 archiving works
-- Verify Stage 4 progress updates every 3 seconds
-- Check jobs appear in database as processed
-- Confirm auto-navigation to Stage 5 on completion
-- Test user reset button aborts run
-- Verify stale run detector catches stuck runs (simulate old heartbeat)
-- Check history page shows past runs with correct data
+- Add 3 companies → Run dry run → Verify URLs displayed
+- Invalid URL → Verify error message shown
+- No title filters → Verify all jobs shown
+- Overly restrictive filters → Verify "no jobs found" warning
+- Company with 500+ jobs → Verify "and N more" displays correctly
+- Very slow career site → Verify timeout after 30 seconds
+- Mixed success (2/5 companies) → Verify partial results shown
+- Confirmation modal → Verify displays correctly, cancel works
 
 **Automated Testing**:
-- Future: Unit tests for ingestion run creation, atomic progress updates
-- Future: Completion detection test (simulate race condition)
-- Future: Stale run detection logic test
-- Future: Integration test for end-to-end flow (Stage 3 → 4 → 5)
-- Future: Partial success test (some jobs succeed, some fail)
+- Future: Unit tests for extractor factory routing
+- Future: Integration tests for dry run endpoint
+- Future: Frontend component tests for results display
+- Future: End-to-end test for Stage 1 → Stage 2 flow
 
 ---
 
 ## Metrics
 
-- **Database Tables**: 1 (ingestion_runs)
-- **API Endpoints**: 4 (start, progress, history, reset)
-- **Frontend Components**: 4 (Stage 3, 4, 5, history table)
-- **Lambda Functions**: 1 (crawl job worker)
-- **SQS Queues**: 1 (crawl jobs queue + DLQ)
-- **Background Jobs**: 1 (stale run detector)
-- **Target Performance**: 10-20 jobs/second at peak
-- **Target Completion**: Complete end-to-end ingestion workflow
+- **API Endpoints**: 1 (POST /api/ingest/dry-run)
+- **Frontend Components**: 4 (Stage 2, results, loader, confirmation modal)
+- **Error Types Handled**: 4 (invalid URL, no jobs, rate limiting, timeout)
+- **Timeout Thresholds**: 30s per company, 5min total
+- **Target Completion**: Stage 2 fully functional with preview and validation
 
 ---
 
-## Next Steps → Phase 3
+## Next Steps → Phase 2F
 
-Phase 3 will focus on **Search & Track**:
-- Job search with filters (title, location, company)
-- Advanced search (salary, remote, date posted)
-- Job tracking dashboard with application status
-- Notes and reminders
-- Job recommendations based on user preferences
+Phase 2F will implement **Stages 3-5**:
+- Stage 3: Job archiving logic (remove outdated jobs)
+- Stage 4: Async job crawling via SQS + Lambda
+- Stage 5: Results display and ingestion history
+- Ingestion runs table for persistence
+- Stale run detection and recovery
 
-**Target**: Complete user-facing job search and tracking features
+**Target**: Complete end-to-end ingestion workflow with async processing
 
 ---
 
@@ -221,66 +149,39 @@ Phase 3 will focus on **Search & Track**:
 
 ```
 backend/
-├── models/
-│   └── ingestion_run.py          # SQLAlchemy model
-├── lambda/
-│   └── crawl_job_lambda.py       # SQS-triggered Lambda worker
-├── jobs/
-│   └── stale_run_detector.py     # Background stale run detector
 ├── api/
-│   └── ingest_routes.py          # Add /start, /progress, /history, /reset
-├── celery_config.py              # Celery Beat schedule (if using Celery)
-└── alembic/versions/
-    └── xxx_create_ingestion_runs.py  # Migration
+│   └── ingest_routes.py     # Add POST /api/ingest/dry-run
+└── tests/
+    └── test_dry_run.py      # Dry run endpoint tests
 
 frontend/src/pages/Ingest/
-├── Stage3_Archive.js             # Stage 3 loading state
-├── Stage4_Ingest.js              # Stage 4 with progress polling
-├── Stage5_Results.js             # Results summary
-├── IngestionHistory.js           # History table component
-└── ResetRunButton.js             # User-triggered reset
-
-cloudformation/
-├── sqs-queues.yml                # SQS queue definitions
-└── lambda-functions.yml          # Lambda function definitions
+├── Stage2_Preview.js        # Main Stage 2 component
+├── DryRunResults.js         # Results display component
+├── DryRunLoader.js          # Loading state component
+└── ConfirmIngestionModal.js # Confirmation dialog
 ```
 
 **Key Files**:
-- [ingestion_run.py](../../backend/models/ingestion_run.py) - SQLAlchemy model
-- [crawl_job_lambda.py](../../backend/lambda/crawl_job_lambda.py) - Lambda worker
-- [stale_run_detector.py](../../backend/jobs/stale_run_detector.py) - Background job
-- [Stage4_Ingest.js](../../frontend/src/pages/Ingest/Stage4_Ingest.js) - Progress UI
+- [ingest_routes.py](../../backend/api/ingest_routes.py) - Dry run endpoint
+- [Stage2_Preview.js](../../frontend/src/pages/Ingest/Stage2_Preview.js) - Stage 2 UI
 
 ---
 
 ## Key Learnings
 
-### Atomic Operations in Distributed Systems
-Single UPDATE statement with RETURNING clause enables thread-safe progress tracking across concurrent Lambda workers. PostgreSQL handles high write throughput with proper indexing.
+### Dry Run Pattern
+Preview operations before execution reduces errors and builds user confidence. Small upfront cost (extracting URLs) prevents large waste (full crawl with bad config).
 
-**Reference**: [SQLAlchemy Guide](../learning/sqlalchemy.md)
+### Partial Success Strategy
+Independent processing of items (companies) with graceful degradation provides better UX than all-or-nothing failures. Users get value even when some operations fail.
 
-### Heartbeat Pattern for Long-Running Jobs
-Regular heartbeat updates distinguish active processing from stuck jobs, enabling accurate timeout detection and automated recovery without false positives.
-
-### Graceful Degradation in Async Pipelines
-Per-job error handling with continued queue processing provides better user experience than blocking entire run on single failures. Users get partial results even with errors.
-
-### SQS + Lambda Scalability
-Auto-scaling Lambda workers with SQS queue provides cost-effective horizontal scaling for bursty workloads. Pay only for actual processing time.
-
-**Reference**: [AWS Lambda Guide](../learning/aws.md), [Lambda-SQS Integration](../learning/lambda-sqs.md)
+### Error Transparency
+Clear, actionable error messages with recovery guidance reduce support burden and empower users to self-serve fixes.
 
 ---
 
 ## References
 
 **External Documentation**:
-- [AWS Lambda](https://docs.aws.amazon.com/lambda/) - Serverless compute
-- [Amazon SQS](https://docs.aws.amazon.com/sqs/) - Message queue service
-- [PostgreSQL Atomic Operations](https://www.postgresql.org/docs/current/sql-update.html) - UPDATE with RETURNING
-- [CloudWatch Metrics](https://docs.aws.amazon.com/cloudwatch/) - Monitoring and logging
-
----
-
-**Status**: Ready for Phase 3
+- [PostgreSQL JSONB](https://www.postgresql.org/docs/current/datatype-json.html) - User company settings storage
+- [React State Management](https://react.dev/learn/managing-state) - Stage workflow state
