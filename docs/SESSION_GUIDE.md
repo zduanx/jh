@@ -95,7 +95,18 @@ This prevents context loss and ensures continuity of coding standards (CSS prefi
 | Location | Colocate with code: `<module>/__tests__/test_*.py` |
 | Shared fixtures | Root `backend/conftest.py` |
 | Discovery | `pytest` finds `__tests__/` automatically |
+| Header | Every test file must start with docstring showing how to run it |
 
+**Test file header format**:
+```python
+"""
+Tests for <module_name>.
+
+Run: python3 -m pytest <path/to/test_file.py> -v
+"""
+```
+
+**Example structure**:
 ```
 backend/
 ├── auth/__tests__/test_auth.py
@@ -175,8 +186,31 @@ samconfig.toml  # This file contains secrets
 
 ### When Adding API Endpoints
 1. Implement endpoint code (with permission)
-2. **Automatically update** [API_DESIGN.md](./architecture/API_DESIGN.md)
-3. Include: route, method, purpose, request/response, auth
+2. **MANDATORY: Update** [API_DESIGN.md](./architecture/API_DESIGN.md) immediately after implementation
+3. Include: endpoint, method, auth requirement, request body, response examples, error cases
+
+**API_DESIGN.md format**:
+```markdown
+### N. Endpoint Name
+
+**Endpoint:** `METHOD /path`
+**Authentication:** Required (JWT) | Not required
+
+**Request Body:** (if applicable)
+```json
+{ ... }
+```
+
+**Success Response:** `200 OK`
+```json
+{ ... }
+```
+
+**Error Response:** `4XX` (description)
+```json
+{ "detail": "..." }
+```
+```
 
 ### When Trade-offs Discussed
 **Offer ADR**: "This involves trade-offs. Should I create an ADR?"

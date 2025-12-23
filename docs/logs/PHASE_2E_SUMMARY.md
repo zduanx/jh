@@ -1,14 +1,14 @@
 # Phase 2E: Dry Run Implementation (Stage 2)
 
-**Status**: 📋 Planning
-**Date**: TBD
+**Status**: ✅ Complete
+**Date**: December 22, 2025
 **Goal**: Enable URL extraction preview to validate company configurations before full ingestion
 
 ---
 
 ## Overview
 
-Phase 2D implements Stage 2 of the ingestion workflow, providing a dry run feature that extracts job URLs without crawling full job details. This validation step allows users to preview exactly which jobs will be ingested and verify their company configurations are correct before committing to the full crawl.
+Phase 2E implements Stage 2 of the ingestion workflow, providing a dry run feature that extracts job URLs without crawling full job details. This validation step allows users to preview exactly which jobs will be ingested and verify their company configurations are correct before committing to the full crawl.
 
 **Included in this phase**:
 - Dry run backend endpoint integrating Phase 2A extractors
@@ -27,43 +27,58 @@ Phase 2D implements Stage 2 of the ingestion workflow, providing a dry run featu
 
 ## Key Achievements
 
-### 1. Extractor Integration
+### 1. Async HTTP Migration (httpx)
+- **Migration**: Replaced `requests` library with `httpx` async client
+- **Parallelism**: `ThreadPoolExecutor` → `asyncio.gather()` for concurrent extraction
+- **Scope**: All 6 extractors + base class + dry-run endpoint converted to async
+- **ADR**: [ADR-015](../architecture/DECISIONS.md#adr-015-use-httpx-with-asyncio-for-http-requests)
+
+### 2. Extractor Integration
 - **Reuse Phase 2A framework**: Registry pattern, title filtering, standardized metadata
 - **Dry run vs full crawl**: Extract URLs + basic metadata only (not descriptions)
 - **Extractor factory**: Route URLs to appropriate extractor by domain pattern
 - Reference: [PHASE_2A_SUMMARY.md](./PHASE_2A_SUMMARY.md)
 
-### 2. Backend Dry Run Endpoint
-- **Route**: POST /api/ingest/dry-run
+### 3. Backend Dry Run Endpoint
+- **Route**: POST /api/ingestion/dry-run
 - **Process**: Iterate companies, extract URLs, apply title filters, return grouped results
 - **Error handling**: Capture per-company failures without blocking others
 - **Partial success**: Return results even if some companies fail
 
-### 3. Stage 2 Preview UI
+### 4. Stage 2 Preview UI
 - **Summary statistics**: Total URLs, company count, status breakdown
-- **Expandable company cards**: Show first 10 URLs, "... and N more" for large lists
-- **Color-coded badges**: Green (success), red (error), gray (in progress)
-- **Navigation**: Previous (back to Stage 1), Rerun (refresh), Start Ingestion (to Stage 3)
+- **Two-column layout**: Company cards (left 1/4) | job details (right 3/4)
+- **Expandable job lists**: Show first 10 jobs, "... and N more" for large lists
+- **Color-coded status**: Green (success), red (error), gray (pending)
+- **Inline filter editing**: Edit filters directly from Stage 2 via FilterModal
+- **Navigation**: Back / Save Settings / Dry Run (Rerun) / Start Ingestion
 
-### 4. Validation & Error Feedback
+### 5. Validation & Error Feedback
 - **Early issue detection**: Invalid URLs, no jobs found, rate limiting, timeouts
 - **Clear error messages**: Per-company error display with recovery guidance
-- **User-friendly recovery**: Easy return to Stage 1 to fix configuration
+- **Dirty state tracking**: Warn when filters changed, require save before dry-run
+- **Stale results warning**: Show when results don't match current filter settings
 
-### 5. Confirmation Modal
+### 6. Confirmation Modal
 - **Purpose**: Prevent accidental ingestion runs
-- **Content**: Total URL count, duration warning, archiving notice, cancellation warning
+- **Content**: Company count, job count, duration warning
 - **Actions**: Cancel (stay on Stage 2) or Confirm (proceed to Stage 3)
+
+### 7. Filter Normalization Fix
+- **Bug**: `include=[]` caused all jobs to be excluded (treated as "match none")
+- **Fix**: Backend normalizes `[]` to `None` in `TitleFilters.from_dict()`
+- **API contract**: Backend always returns `[]` (never `null`) for consistent frontend handling
+- **Comparison**: Both stages use `normalizeFilters()` to sort arrays before comparison
 
 ---
 
 ## API Endpoints
 
-**POST `/api/ingest/dry-run`**:
+**POST `/api/ingestion/dry-run`**:
 - Purpose: Extract job URLs for configured companies without full crawl
-- Request: User's company configurations (from user_company_settings table)
-- Response: Array of results per company (name, URL count, status, URLs, error_message)
-- Validation: At least one company required
+- Request: User's enabled company settings (from user_company_settings table)
+- Response: Dict mapping company_name to result (status, counts, included_jobs, excluded_jobs)
+- Validation: At least one enabled company required
 - Auth: JWT required
 
 Reference: [API_DESIGN.md](../architecture/API_DESIGN.md)
@@ -105,30 +120,39 @@ Reference: [API_DESIGN.md](../architecture/API_DESIGN.md)
 ## Testing & Validation
 
 **Manual Testing**:
+
+*Success cases*:
 - Add 3 companies → Run dry run → Verify URLs displayed
-- Invalid URL → Verify error message shown
 - No title filters → Verify all jobs shown
-- Overly restrictive filters → Verify "no jobs found" warning
-- Company with 500+ jobs → Verify "and N more" displays correctly
-- Very slow career site → Verify timeout after 30 seconds
-- Mixed success (2/5 companies) → Verify partial results shown
+- Company with 100+ jobs → Verify "and N more" displays correctly
 - Confirmation modal → Verify displays correctly, cancel works
+- Edit filters in Stage 2 → Save → Rerun → Verify new results
+
+*Failure/edge cases*:
+- No enabled companies → Verify 400 error with clear message
+- Network disconnected → Verify error message per company
+- Overly restrictive filters → Verify 0 included jobs shown
+- Edit filters without saving → Verify "Save settings first" warning
+- Run dry-run → Edit filters → Verify "Rerun" warning (stale results)
+- Click Start Ingestion without dry-run → Verify button disabled
+- Mixed success (some companies fail) → Verify partial results shown
 
 **Automated Testing**:
-- Future: Unit tests for extractor factory routing
-- Future: Integration tests for dry run endpoint
-- Future: Frontend component tests for results display
-- Future: End-to-end test for Stage 1 → Stage 2 flow
+- `api/__tests__/test_dry_run.py` - 9 integration tests for dry-run endpoint
+  - Auth validation (401 without token)
+  - No enabled companies (400 error)
+  - Single/multiple company success
+  - Partial failure handling
+  - Error mapping (timeout, connect, rate limit, format errors)
 
 ---
 
 ## Metrics
 
-- **API Endpoints**: 1 (POST /api/ingest/dry-run)
-- **Frontend Components**: 4 (Stage 2, results, loader, confirmation modal)
-- **Error Types Handled**: 4 (invalid URL, no jobs, rate limiting, timeout)
-- **Timeout Thresholds**: 30s per company, 5min total
-- **Target Completion**: Stage 2 fully functional with preview and validation
+- **API Endpoints**: 1 (POST /api/ingestion/dry-run)
+- **Frontend Components**: 2 (Stage2Preview with inline confirmation modal, reuses FilterModal)
+- **Error Types Handled**: 4 (timeout, connect error, rate limiting, format error)
+- **Automated Tests**: 9 integration tests
 
 ---
 
@@ -150,24 +174,31 @@ Phase 2F will implement **Stages 3-5**:
 ```
 backend/
 ├── api/
-│   └── ingest_routes.py     # Add POST /api/ingest/dry-run
-└── tests/
-    └── test_dry_run.py      # Dry run endpoint tests
+│   ├── ingestion_routes.py          # Dry-run endpoint
+│   └── __tests__/test_dry_run.py    # Integration tests
+└── extractors/
+    └── config.py                    # TitleFilters normalization
 
-frontend/src/pages/Ingest/
-├── Stage2_Preview.js        # Main Stage 2 component
-├── DryRunResults.js         # Results display component
-├── DryRunLoader.js          # Loading state component
-└── ConfirmIngestionModal.js # Confirmation dialog
+frontend/src/pages/ingest/
+├── Stage2Preview.js                 # Main Stage 2 component (includes confirmation modal)
+├── Stage2Preview.css                # Styles
+└── components/
+    └── FilterModal.js               # Reused from Stage 1
 ```
 
 **Key Files**:
-- [ingest_routes.py](../../backend/api/ingest_routes.py) - Dry run endpoint
-- [Stage2_Preview.js](../../frontend/src/pages/Ingest/Stage2_Preview.js) - Stage 2 UI
+- [ingestion_routes.py](../../backend/api/ingestion_routes.py) - Dry run endpoint
+- [Stage2Preview.js](../../frontend/src/pages/ingest/Stage2Preview.js) - Stage 2 UI
+- [config.py](../../backend/extractors/config.py) - TitleFilters with normalization
 
 ---
 
 ## Key Learnings
+
+### Async vs Threading for I/O-bound Work
+Python's GIL (Global Interpreter Lock) allows only one thread to execute Python bytecode at a time, but releases during I/O operations. For HTTP requests, both `ThreadPoolExecutor` and `asyncio` provide parallelism, but asyncio is more efficient with modern async libraries like httpx.
+
+Reference: [python-fastapi.md](../learning/python-fastapi.md#pythons-gil-global-interpreter-lock)
 
 ### Dry Run Pattern
 Preview operations before execution reduces errors and builds user confidence. Small upfront cost (extracting URLs) prevents large waste (full crawl with bad config).
@@ -178,6 +209,12 @@ Independent processing of items (companies) with graceful degradation provides b
 ### Error Transparency
 Clear, actionable error messages with recovery guidance reduce support burden and empower users to self-serve fixes.
 
+### API Boundary Normalization
+When data has multiple valid representations (e.g., `[]` vs `null` for "include all"), normalize at API boundaries:
+- Backend always returns consistent representation (`[]` in API responses)
+- Backend handles conversion internally (`[]` → `None` for filtering logic)
+- Frontend doesn't need conditional logic for different representations
+
 ---
 
 ## References
@@ -185,3 +222,4 @@ Clear, actionable error messages with recovery guidance reduce support burden an
 **External Documentation**:
 - [PostgreSQL JSONB](https://www.postgresql.org/docs/current/datatype-json.html) - User company settings storage
 - [React State Management](https://react.dev/learn/managing-state) - Stage workflow state
+- [httpx Documentation](https://www.python-httpx.org/) - Async HTTP client

@@ -1,7 +1,7 @@
-# Python Generators and FastAPI Dependency Injection
+# Python Generators, Concurrency, and FastAPI
 
-**Date:** 2024-12-16
-**Topics:** Generators, yield vs return, FastAPI dependency injection, resource management
+**Date:** 2024-12-16 (updated 2024-12-22)
+**Topics:** Generators, yield vs return, FastAPI dependency injection, resource management, ThreadPoolExecutor vs asyncio, GIL
 
 ---
 
@@ -14,6 +14,8 @@
 5. [Complete Dependency Lifecycle](#complete-dependency-lifecycle)
 6. [When to Use yield vs return](#when-to-use-yield-vs-return)
 7. [Sync vs Async Dependencies](#sync-vs-async-dependencies)
+8. [Python's GIL (Global Interpreter Lock)](#pythons-gil-global-interpreter-lock)
+9. [ThreadPoolExecutor vs asyncio](#threadpoolexecutor-vs-asyncio)
 
 ---
 
@@ -717,9 +719,239 @@ def get_data(
 
 ---
 
+## Python's GIL (Global Interpreter Lock)
+
+### What is the GIL?
+
+The GIL is a mutex (lock) in CPython that allows only **one thread to execute Python bytecode at a time**, even on multi-core machines.
+
+```
+┌─────────────────────────────────────────────────────────┐
+│                    Python Process                        │
+│  ┌─────────────────────────────────────────────────────┐│
+│  │                       GIL                            ││
+│  │  Only ONE thread can hold this lock at a time       ││
+│  └─────────────────────────────────────────────────────┘│
+│                                                          │
+│  Thread 1: [waiting...] → [RUN] → [waiting...] → [RUN]  │
+│  Thread 2: [RUN] → [waiting...] → [RUN] → [waiting...]  │
+│  Thread 3: [waiting...] → [waiting...] → [RUN] → ...    │
+│                                                          │
+│  Threads take turns holding the GIL                      │
+└─────────────────────────────────────────────────────────┘
+```
+
+### Why Does the GIL Exist?
+
+1. **Memory safety** - CPython uses reference counting for garbage collection. Without GIL, multiple threads could corrupt reference counts.
+2. **Simplicity** - Makes C extension development easier (no need for fine-grained locking)
+3. **Historical** - Designed when single-core CPUs were the norm
+
+### GIL Impact by Workload Type
+
+| Workload Type | GIL Impact | Example |
+|---------------|------------|---------|
+| **I/O-bound** | Minimal | HTTP requests, file reads, DB queries |
+| **CPU-bound** | Severe | Math computation, image processing, parsing |
+
+**Key insight:** The GIL is **released** during I/O operations!
+
+```python
+# During I/O wait, GIL is released - other threads can run
+response = requests.get(url)  # GIL released while waiting for network
+#          ^^^^^^^^^^^^^^^^
+#          Thread gives up GIL here, other threads can execute
+
+# During CPU work, GIL is held - blocks other threads
+result = heavy_computation(data)  # GIL held entire time
+#        ^^^^^^^^^^^^^^^^^^^^^^^
+#        No other Python thread can run until this finishes
+```
+
+### GIL and Parallelism
+
+**Threads (threading, ThreadPoolExecutor):**
+- Share memory, share GIL
+- Good for I/O-bound: threads release GIL during I/O wait
+- Bad for CPU-bound: only one thread computes at a time
+
+**Processes (multiprocessing, ProcessPoolExecutor):**
+- Separate memory, separate GIL per process
+- Good for CPU-bound: true parallelism across cores
+- More overhead: data must be serialized between processes
+
+```
+Threads (shared GIL):          Processes (separate GILs):
+┌────────────────────┐         ┌──────────┐  ┌──────────┐
+│  Process           │         │ Process 1│  │ Process 2│
+│  ┌──────┐          │         │ ┌──────┐ │  │ ┌──────┐ │
+│  │ GIL  │          │         │ │ GIL  │ │  │ │ GIL  │ │
+│  └──────┘          │         │ └──────┘ │  │ └──────┘ │
+│  T1  T2  T3        │         │   T1     │  │   T1     │
+│  (take turns)      │         │ (runs)   │  │ (runs)   │
+└────────────────────┘         └──────────┘  └──────────┘
+                                True parallel execution!
+```
+
+---
+
+## ThreadPoolExecutor vs asyncio
+
+### Decision Matrix
+
+| Situation | Use | Why |
+|-----------|-----|-----|
+| I/O with **sync libraries** (requests, psycopg2) | `ThreadPoolExecutor` | Libraries block; threads let them run in parallel |
+| I/O with **async libraries** (aiohttp, asyncpg) | `asyncio` | Native async, more efficient, no thread overhead |
+| **CPU-bound** work | `ProcessPoolExecutor` | Bypass GIL with separate processes |
+
+### How Each Works
+
+**ThreadPoolExecutor (threads):**
+```python
+from concurrent.futures import ThreadPoolExecutor
+
+def fetch_url(url):
+    return requests.get(url)  # Blocking call, but releases GIL during I/O wait
+
+# Threads run in parallel during I/O waits
+with ThreadPoolExecutor(max_workers=5) as executor:
+    futures = [executor.submit(fetch_url, url) for url in urls]
+    results = [f.result() for f in futures]
+```
+
+```
+Timeline:
+Thread 1: [request]----[waiting for response]----[process]
+Thread 2:    [request]----[waiting for response]----[process]
+Thread 3:       [request]----[waiting for response]----[process]
+                ↑
+                GIL released during "waiting" - all threads progress
+```
+
+**asyncio (event loop):**
+```python
+import asyncio
+import aiohttp
+
+async def fetch_url(session, url):
+    async with session.get(url) as response:
+        return await response.text()  # Non-blocking, yields control
+
+# Single thread, but concurrent via event loop
+async def main():
+    async with aiohttp.ClientSession() as session:
+        tasks = [fetch_url(session, url) for url in urls]
+        results = await asyncio.gather(*tasks)
+```
+
+```
+Timeline (single thread):
+[req1]→[req2]→[req3]→[wait]→[resp1]→[resp2]→[resp3]→[process all]
+       ↑
+       Event loop switches between tasks at await points
+```
+
+### When `async def` is Misleading
+
+```python
+# ❌ BAD - says async but uses blocking library
+async def fetch_data():
+    return requests.get(url)  # BLOCKS the event loop!
+
+# ✅ GOOD - honest sync function
+def fetch_data():
+    return requests.get(url)  # Caller knows it blocks
+
+# ✅ GOOD - truly async
+async def fetch_data():
+    async with aiohttp.ClientSession() as session:
+        async with session.get(url) as response:
+            return await response.text()  # Non-blocking
+```
+
+### Real Example: Dry Run Endpoint
+
+Our extractors use `requests` (synchronous). Options:
+
+**Option 1: Sync function + ThreadPoolExecutor (what we use)**
+```python
+@router.post("/dry-run")
+def dry_run(db: Session = Depends(get_db)):  # Note: `def`, not `async def`
+    with ThreadPoolExecutor(max_workers=5) as executor:
+        futures = {
+            executor.submit(_run_extractor, s.company_name, s.title_filters): s.company_name
+            for s in settings
+        }
+        for future in as_completed(futures):
+            results[futures[future]] = future.result()
+    return results
+```
+
+- Honest: function is sync, uses threads for parallelism
+- FastAPI runs sync endpoints in thread pool automatically
+
+**Option 2: Async function + run_in_executor**
+```python
+@router.post("/dry-run")
+async def dry_run(db: Session = Depends(get_db)):
+    loop = asyncio.get_event_loop()
+    tasks = [
+        loop.run_in_executor(executor, _run_extractor, s.company_name, s.title_filters)
+        for s in settings
+    ]
+    results = await asyncio.gather(*tasks)
+    return results
+```
+
+- More complex, same performance
+- Use if rest of codebase is async
+
+**Option 3: True async (would require rewriting extractors)**
+```python
+# Would need to rewrite extractors to use aiohttp
+async def _run_extractor_async(company_name, filters):
+    async with aiohttp.ClientSession() as session:
+        # ... async HTTP calls
+
+@router.post("/dry-run")
+async def dry_run(db: Session = Depends(get_db)):
+    tasks = [_run_extractor_async(s.company_name, s.title_filters) for s in settings]
+    results = await asyncio.gather(*tasks)
+    return results
+```
+
+- Most efficient, but requires rewriting all extractors
+- Not worth it for our use case (extractors are already written with requests)
+
+### Summary: Choosing the Right Tool
+
+```
+Is the library async-native (aiohttp, asyncpg)?
+    │
+    ├── Yes → Use asyncio
+    │         async def foo():
+    │             results = await asyncio.gather(*tasks)
+    │
+    └── No (uses requests, psycopg2, etc.)
+            │
+            ├── I/O-bound → Use ThreadPoolExecutor
+            │               with ThreadPoolExecutor() as executor:
+            │                   futures = [executor.submit(fn, arg) for arg in args]
+            │
+            └── CPU-bound → Use ProcessPoolExecutor
+                            with ProcessPoolExecutor() as executor:
+                                futures = [executor.submit(fn, arg) for arg in args]
+```
+
+---
+
 ## References
 
 - [PEP 255 - Simple Generators](https://peps.python.org/pep-0255/)
 - [FastAPI Dependencies with yield](https://fastapi.tiangolo.com/tutorial/dependencies/dependencies-with-yield/)
 - [Python Generators Tutorial](https://realpython.com/introduction-to-python-generators/)
 - [typing.Generator Documentation](https://docs.python.org/3/library/typing.html#typing.Generator)
+- [Python GIL Explained](https://realpython.com/python-gil/)
+- [concurrent.futures Documentation](https://docs.python.org/3/library/concurrent.futures.html)
+- [asyncio Documentation](https://docs.python.org/3/library/asyncio.html)

@@ -937,3 +937,112 @@ The following architectural decisions are deferred for future discussion and wil
 ---
 
 **Review Process:** These decisions will be reviewed and resolved as we implement each component of Phase 2.
+
+---
+
+## ADR-015: Use httpx with asyncio for HTTP Requests
+
+**Date:** 2024-12-22
+**Status:** Accepted
+
+### Context
+The extractors were using the synchronous `requests` library with `ThreadPoolExecutor` for parallel HTTP requests. Need to decide whether to:
+1. Keep `requests` with threading
+2. Migrate to `httpx` with native asyncio support
+
+### Decision
+Migrate from `requests` to **httpx with async/await** throughout the extractor codebase.
+
+### Alternatives Considered
+1. **requests + ThreadPoolExecutor** (previous approach)
+2. **httpx async + asyncio.gather** (chosen)
+3. **aiohttp** (another async HTTP library)
+
+### Reasoning
+
+**Why httpx async:**
+
+1. **Native asyncio integration** - Works naturally with FastAPI's async handlers
+2. **Modern Python patterns** - async/await is more readable than thread callbacks
+3. **Single event loop** - All async operations share one loop (no thread overhead)
+4. **Better resource efficiency** - No thread pool management, no GIL context switching
+5. **API compatibility** - httpx API is similar to requests (easy migration)
+6. **Industry standard** - httpx is the recommended async HTTP library for modern Python
+
+**Why NOT keep requests + ThreadPoolExecutor:**
+- ❌ Threads add overhead (context switching, memory per thread)
+- ❌ GIL limits true parallelism (though I/O-bound work still benefits)
+- ❌ Mixing sync requests with async FastAPI creates complexity
+- ✅ Was working (but not optimal)
+
+**Why NOT aiohttp:**
+- ❌ Different API from requests (steeper learning curve)
+- ❌ httpx is more modern and better maintained
+- ✅ Also a valid async option
+
+### Technical Details
+
+**Python's GIL (Global Interpreter Lock):**
+- Only one thread executes Python bytecode at a time
+- Threads release GIL during I/O wait (network, disk)
+- For I/O-bound work (HTTP requests), threads still provide parallelism
+- For CPU-bound work, need ProcessPoolExecutor to bypass GIL
+
+**ThreadPoolExecutor vs asyncio:**
+| Aspect | ThreadPoolExecutor | asyncio |
+|--------|-------------------|---------|
+| Memory | ~8KB per thread | Shared event loop |
+| Switching | OS context switch | Cooperative at await |
+| Best for | Sync I/O libraries | Async-native code |
+| Complexity | Futures, callbacks | async/await syntax |
+
+### Consequences
+
+**Positive:**
+- ✅ Cleaner async code throughout (no thread management)
+- ✅ Better fit with FastAPI's async model
+- ✅ More efficient resource usage
+- ✅ Easier to reason about (single-threaded async)
+- ✅ Modern Python best practice
+
+**Negative:**
+- ❌ Async propagates upward (all callers must be async)
+- ❌ Migration effort (convert all extractors and endpoints)
+- ❌ Slightly different error types to handle
+
+**Mitigations:**
+- Error type mapping: `requests.Timeout` → `httpx.TimeoutException`
+- Response API is nearly identical: `.json()`, `.text`, `.status_code`
+
+### Implementation
+
+**Before (ThreadPoolExecutor):**
+```python
+def _run_extractor(company_name, filters):
+    result = extractor.extract_source_urls_metadata()
+    return result
+
+with ThreadPoolExecutor(max_workers=5) as executor:
+    futures = {executor.submit(_run_extractor, ...): ...}
+    for future in as_completed(futures):
+        results[company] = future.result()
+```
+
+**After (asyncio.gather):**
+```python
+async def _run_extractor(company_name, filters):
+    result = await extractor.extract_source_urls_metadata()
+    return result
+
+tasks = [_run_extractor(name, filters) for ...]
+results_list = await asyncio.gather(*tasks)
+```
+
+### Files Modified
+- `backend/extractors/base_extractor.py` - Core async methods
+- `backend/extractors/*.py` - All 6 extractors converted
+- `backend/api/ingestion_routes.py` - Async dry-run endpoint
+- `backend/requirements.txt` - Removed `requests`
+
+### Related
+- See [python-fastapi.md](../learning/python-fastapi.md) for GIL and concurrency documentation
