@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import './IngestPage.css';
 import Stage1Configure from './ingest/Stage1Configure';
+import Stage2Preview from './ingest/Stage2Preview';
 
 const STAGES = [
   { id: 1, name: 'Configure', description: 'Select companies & filters' },
@@ -134,7 +135,29 @@ function IngestPage() {
           />
         );
       case 2:
-        return renderComingSoon('Preview');
+        // Build enabled companies list for Stage 2
+        const enabledCompanies = savedSettings
+          .filter(s => s.is_enabled !== false)
+          .map(s => {
+            const company = companies.find(c => c.name === s.company_name);
+            return {
+              company_name: s.company_name,
+              display_name: company?.display_name || s.company_name,
+              logo_url: company?.logo_url,
+              title_filters: s.title_filters || { include: [], exclude: [] },
+            };
+          })
+          .sort((a, b) => a.display_name.localeCompare(b.display_name));
+
+        return (
+          <Stage2Preview
+            companies={enabledCompanies}
+            savedSettings={savedSettings}
+            onSettingsUpdate={setSavedSettings}
+            onBack={() => setCurrentStage(1)}
+            onNext={() => setCurrentStage(3)}
+          />
+        );
       case 3:
         return renderComingSoon('Archive');
       case 4:

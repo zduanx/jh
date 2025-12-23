@@ -4,8 +4,20 @@ import './FilterModal.css';
 
 /**
  * Modal for configuring company filters (include/exclude keywords)
+ *
+ * Props:
+ * - showEnabledToggle: Whether to show the enable/disable toggle (default: true)
+ * - saveButtonText: Custom text for save button (default: "Add to Selected")
  */
-function FilterModal({ company, initialFilters, initialEnabled = true, onSave, onCancel }) {
+function FilterModal({
+  company,
+  initialFilters,
+  initialEnabled = true,
+  showEnabledToggle = true,
+  saveButtonText = "Add to Selected",
+  onSave,
+  onCancel
+}) {
   const [includeTokens, setIncludeTokens] = useState([]);
   const [excludeTokens, setExcludeTokens] = useState([]);
   const [isEnabled, setIsEnabled] = useState(true);
@@ -23,7 +35,7 @@ function FilterModal({ company, initialFilters, initialEnabled = true, onSave, o
 
   const handleSave = () => {
     onSave({
-      include: includeTokens.length > 0 ? includeTokens : null,
+      include: includeTokens,
       exclude: excludeTokens,
       is_enabled: isEnabled,
     });
@@ -48,24 +60,26 @@ function FilterModal({ company, initialFilters, initialEnabled = true, onSave, o
         </div>
 
         <div className="fm-body">
-          <div className="fm-toggle-group">
-            <label className="fm-toggle-label">
-              <span className="fm-toggle-text">
-                Enabled
-                <span className="fm-filter-hint">
-                  Include this company in job extraction
+          {showEnabledToggle && (
+            <div className="fm-toggle-group">
+              <label className="fm-toggle-label">
+                <span className="fm-toggle-text">
+                  Enabled
+                  <span className="fm-filter-hint">
+                    Include this company in job extraction
+                  </span>
                 </span>
-              </span>
-              <button
-                type="button"
-                className={`fm-toggle ${isEnabled ? 'fm-toggle-on' : ''}`}
-                onClick={() => setIsEnabled(!isEnabled)}
-                aria-pressed={isEnabled}
-              >
-                <span className="fm-toggle-knob" />
-              </button>
-            </label>
-          </div>
+                <button
+                  type="button"
+                  className={`fm-toggle ${isEnabled ? 'fm-toggle-on' : ''}`}
+                  onClick={() => setIsEnabled(!isEnabled)}
+                  aria-pressed={isEnabled}
+                >
+                  <span className="fm-toggle-knob" />
+                </button>
+              </label>
+            </div>
+          )}
 
           <div className="fm-filter-group">
             <label>
@@ -98,7 +112,7 @@ function FilterModal({ company, initialFilters, initialEnabled = true, onSave, o
 
         <div className="fm-footer">
           <button className="fm-cancel-btn" onClick={onCancel}>Cancel</button>
-          <button className="fm-save-btn" onClick={handleSave}>Add to Selected</button>
+          <button className="fm-save-btn" onClick={handleSave}>{saveButtonText}</button>
         </div>
       </div>
     </div>

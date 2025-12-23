@@ -4,12 +4,10 @@ import './Stage1Configure.css';
 
 /**
  * Normalize filters for consistent comparison:
- * - Sort include/exclude arrays lexicographically
- * - Convert null/undefined include to null
- * - Convert null/undefined exclude to []
+ * - Sort arrays so order doesn't affect equality
  */
 const normalizeFilters = (filters) => {
-  const include = filters?.include ? [...filters.include].sort() : null;
+  const include = filters?.include ? [...filters.include].sort() : [];
   const exclude = filters?.exclude ? [...filters.exclude].sort() : [];
   return { include, exclude };
 };
@@ -116,6 +114,11 @@ function Stage1Configure({
     // Check for additions or modifications
     return localSelected.some(item => isItemNew(item) || isItemModified(item));
   }, [localSelected, originalSnapshot, isItemNew, isItemModified]);
+
+  // Count enabled companies (for Next button validation)
+  const enabledCount = useMemo(() => {
+    return localSelected.filter(item => item.is_enabled).length;
+  }, [localSelected]);
 
   // Open modal to add a new company
   const handleAddCompany = (company) => {
@@ -491,14 +494,17 @@ function Stage1Configure({
           {/* Footer with Next button */}
           <div className="s1-footer">
             <div className="s1-selection-summary">
-              {localSelected.length} {localSelected.length === 1 ? 'company' : 'companies'} selected
+              {enabledCount} of {localSelected.length} {localSelected.length === 1 ? 'company' : 'companies'} enabled
               {isDirty && <span className="s1-unsaved-indicator"> • Unsaved changes</span>}
             </div>
             <button
               className="s1-next-btn"
-              disabled={localSelected.length === 0 || isDirty}
+              disabled={enabledCount === 0 || isDirty}
               onClick={onNext}
-              title={isDirty ? 'Save changes before proceeding' : ''}
+              title={
+                isDirty ? 'Save changes before proceeding' :
+                enabledCount === 0 ? 'Enable at least one company' : ''
+              }
             >
               Next: Preview →
             </button>
