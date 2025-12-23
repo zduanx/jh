@@ -241,7 +241,7 @@ class AnthropicExtractor(BaseJobExtractor[TitleFilters]):
 
         return results
 
-    def _fetch_all_jobs(self) -> List[Dict[str, Any]]:
+    async def _fetch_all_jobs(self) -> List[Dict[str, Any]]:
         """
         Fetch all jobs from Anthropic careers page
 
@@ -263,7 +263,7 @@ class AnthropicExtractor(BaseJobExtractor[TitleFilters]):
 
         try:
             # Fetch page
-            response = self.make_request(url, timeout=10)
+            response = await self.make_request(url, timeout=10.0)
 
             # Extract RSC payload
             rsc_data = self._extract_rsc_payload(response.text)

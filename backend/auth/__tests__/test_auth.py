@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Test script for authentication endpoints
+Test script for authentication endpoints.
 
 This script tests:
 1. Health check endpoint
@@ -8,8 +8,7 @@ This script tests:
 3. JWT token generation
 4. Protected endpoint access with JWT
 
-Usage:
-    python test_auth.py
+Run: python3 -m pytest auth/__tests__/test_auth.py -v
 """
 
 import requests

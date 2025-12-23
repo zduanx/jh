@@ -79,7 +79,7 @@ class AmazonExtractor(BaseJobExtractor[TitleFilters]):
 
         return params
 
-    def _fetch_jobs_page(self, offset: int, result_limit: int) -> tuple[List[Dict], int]:
+    async def _fetch_jobs_page(self, offset: int, result_limit: int) -> tuple[List[Dict], int]:
         """
         Fetch one page of jobs
 
@@ -93,10 +93,10 @@ class AmazonExtractor(BaseJobExtractor[TitleFilters]):
         params = self._build_params(offset, result_limit)
 
         try:
-            response = self.make_request(
+            response = await self.make_request(
                 self.API_URL,
                 params=params,
-                timeout=10
+                timeout=10.0
             )
 
             data = response.json()
@@ -108,7 +108,7 @@ class AmazonExtractor(BaseJobExtractor[TitleFilters]):
             print(f"Error fetching Amazon jobs: {e}")
             return [], 0
 
-    def _fetch_all_jobs(self) -> List[Dict[str, Any]]:
+    async def _fetch_all_jobs(self) -> List[Dict[str, Any]]:
         """
         Fetch all jobs using pagination
 
@@ -127,7 +127,7 @@ class AmazonExtractor(BaseJobExtractor[TitleFilters]):
         offset = 0
 
         # First call to get total
-        jobs, total = self._fetch_jobs_page(offset=0, result_limit=BATCH_SIZE)
+        jobs, total = await self._fetch_jobs_page(offset=0, result_limit=BATCH_SIZE)
         if not jobs:
             return []
 
@@ -145,7 +145,7 @@ class AmazonExtractor(BaseJobExtractor[TitleFilters]):
 
         # Fetch remaining pages
         while offset < total:
-            jobs, _ = self._fetch_jobs_page(offset=offset, result_limit=BATCH_SIZE)
+            jobs, _ = await self._fetch_jobs_page(offset=offset, result_limit=BATCH_SIZE)
             if not jobs:
                 break
 

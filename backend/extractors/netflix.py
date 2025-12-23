@@ -75,7 +75,7 @@ class NetflixExtractor(BaseJobExtractor[TitleFilters]):
 
         return params
 
-    def _fetch_all_jobs(self) -> List[Dict[str, Any]]:
+    async def _fetch_all_jobs(self) -> List[Dict[str, Any]]:
         """
         Fetch all jobs using pagination and return standardized job objects
 
@@ -99,10 +99,10 @@ class NetflixExtractor(BaseJobExtractor[TitleFilters]):
         try:
             # First call to get total count
             params = self._build_params(start=0, num=BATCH_SIZE)
-            response = self.make_request(
+            response = await self.make_request(
                 self.API_URL,
                 params=params,
-                timeout=10
+                timeout=10.0
             )
 
             data = response.json()
@@ -127,10 +127,10 @@ class NetflixExtractor(BaseJobExtractor[TitleFilters]):
             # Fetch remaining pages
             while start < total:
                 params = self._build_params(start=start, num=BATCH_SIZE)
-                response = self.make_request(
+                response = await self.make_request(
                     self.API_URL,
                     params=params,
-                    timeout=10
+                    timeout=10.0
                 )
 
                 data = response.json()

@@ -119,7 +119,7 @@ class TikTokExtractor(BaseJobExtractor[TitleFilters]):
             'offset': offset,
         }
 
-    def _fetch_jobs_page(self, limit: int, offset: int) -> tuple[List[Dict], int]:
+    async def _fetch_jobs_page(self, limit: int, offset: int) -> tuple[List[Dict], int]:
         """
         Fetch one page of jobs
 
@@ -133,11 +133,11 @@ class TikTokExtractor(BaseJobExtractor[TitleFilters]):
         payload = self._build_payload(limit, offset)
 
         try:
-            response = self.make_request(
+            response = await self.make_request(
                 self.API_URL,
                 method='POST',
                 json=payload,
-                timeout=10
+                timeout=10.0
             )
 
             data = response.json()
@@ -154,7 +154,7 @@ class TikTokExtractor(BaseJobExtractor[TitleFilters]):
             print(f"Error fetching TikTok jobs: {e}")
             return [], 0
 
-    def _fetch_all_jobs(self) -> List[Dict[str, Any]]:
+    async def _fetch_all_jobs(self) -> List[Dict[str, Any]]:
         """
         Fetch all jobs using pagination
 
@@ -173,7 +173,7 @@ class TikTokExtractor(BaseJobExtractor[TitleFilters]):
         offset = 0
 
         # First call to get total
-        jobs, total = self._fetch_jobs_page(limit=BATCH_SIZE, offset=0)
+        jobs, total = await self._fetch_jobs_page(limit=BATCH_SIZE, offset=0)
         if not jobs:
             return []
 
@@ -182,7 +182,7 @@ class TikTokExtractor(BaseJobExtractor[TitleFilters]):
 
         # Fetch remaining pages
         while offset < total:
-            jobs, _ = self._fetch_jobs_page(limit=BATCH_SIZE, offset=offset)
+            jobs, _ = await self._fetch_jobs_page(limit=BATCH_SIZE, offset=offset)
             if not jobs:
                 break
             all_jobs.extend(jobs)

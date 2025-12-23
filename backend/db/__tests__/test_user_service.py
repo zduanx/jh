@@ -1,18 +1,13 @@
 """
 Test suite for user service (database operations).
 
+Run: python3 -m pytest db/__tests__/test_user_service.py -v
+
 Tests use separate test database (TEST_DATABASE_URL) with:
 - Automatic Alembic migrations (schema always in sync)
 - Transaction rollback for isolation (test_db fixture)
 - Timestamp-based emails (avoid collisions, always unique)
 - Optional persistence for inspection (test_db_commit fixture)
-
-Running Tests (from backend/):
-    pytest db/__tests__/test_user_service.py -v                              # All tests
-    pytest db/__tests__/test_user_service.py::TestCreateUser -v              # One class
-    pytest db/__tests__/test_user_service.py::TestCreateUser::test_create_user_minimal -v  # One test
-    pytest db/__tests__/test_user_service.py -v -s                           # With print output
-    pytest db/__tests__/ -v                                                  # All db tests
 """
 import pytest
 import time

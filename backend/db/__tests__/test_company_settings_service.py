@@ -1,18 +1,13 @@
 """
 Test suite for company settings service (user company settings CRUD).
 
+Run: python3 -m pytest db/__tests__/test_company_settings_service.py -v
+
 Tests use separate test database (TEST_DATABASE_URL) with:
 - Automatic Alembic migrations (schema always in sync)
 - Transaction rollback for isolation (test_db fixture)
 - Fixed test user from db_test_utils (avoids creating users per test)
 - Optional persistence for inspection (test_db_commit fixture)
-
-Running Tests (from backend/):
-    pytest db/__tests__/test_company_settings_service.py -v                         # All tests
-    pytest db/__tests__/test_company_settings_service.py::TestCreateSetting -v      # One class
-    pytest db/__tests__/test_company_settings_service.py::TestCreateSetting::test_create_minimal -v  # One test
-    pytest db/__tests__/test_company_settings_service.py -v -s                      # With print output
-    pytest db/__tests__/ -v                                                         # All db tests
 """
 import pytest
 import time

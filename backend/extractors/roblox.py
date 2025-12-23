@@ -53,7 +53,7 @@ class RobloxExtractor(BaseJobExtractor[TitleFilters]):
         headers['Accept'] = 'application/json'
         return headers
 
-    def _fetch_all_jobs(self) -> List[Dict[str, Any]]:
+    async def _fetch_all_jobs(self) -> List[Dict[str, Any]]:
         """
         Fetch all jobs from API and return standardized job objects
 
@@ -73,7 +73,7 @@ class RobloxExtractor(BaseJobExtractor[TitleFilters]):
         LOCATION = 'San Mateo, CA, United States'
 
         try:
-            response = self.make_request(self.API_URL, timeout=10)
+            response = await self.make_request(self.API_URL, timeout=10.0)
             jobs = response.json()
             if not isinstance(jobs, list):
                 return []

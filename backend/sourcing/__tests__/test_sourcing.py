@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """
-Test script for job URL sourcing
+Test script for job URL sourcing.
 
 Runs sourcing with hardcoded config in dry_run mode and dumps results to JSON.
-Usage:
-    python -m backend.tests.test_sourcing
+
+Run: python3 -m pytest sourcing/__tests__/test_sourcing.py -v
 """
 
 import sys

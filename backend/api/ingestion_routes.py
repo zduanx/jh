@@ -1,11 +1,11 @@
 """
-API routes for ingestion workflow - Stage 1 (company settings configuration).
+API routes for ingestion workflow.
 
 Endpoints:
 - GET  /api/ingestion/companies       List available companies from extractor registry
 - GET  /api/ingestion/settings        Get user's configured company settings
-- POST /api/ingestion/settings        Create or update company setting (upsert)
-- DELETE /api/ingestion/settings/:id  Delete company setting
+- POST /api/ingestion/settings        Batch create/update/delete company settings
+- POST /api/ingestion/dry-run         Extract job URLs for enabled companies (preview)
 
 Interactive API docs:
 - Swagger UI: http://localhost:8000/docs
@@ -16,18 +16,25 @@ Running locally:
     uvicorn main:app --reload
 """
 
+import asyncio
+import logging
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, field_validator
-from typing import Optional, Literal
+from typing import Optional, Literal, Any
 from datetime import datetime
 from sqlalchemy.orm import Session
+import httpx
 from auth.dependencies import get_current_user
 from db.session import get_db
 from db.company_settings_service import (
     get_user_settings,
+    get_enabled_settings,
     batch_operations,
 )
-from extractors.registry import list_companies
+from extractors.registry import list_companies, get_extractor
+from extractors.config import TitleFilters
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -209,5 +216,172 @@ async def batch_update_settings(
     ops_data = [op.model_dump() for op in operations]
 
     results = batch_operations(db, user_id, ops_data)
+
+    return results
+
+
+# =============================================================================
+# Dry Run Endpoint
+# =============================================================================
+
+class JobMetadata(BaseModel):
+    """Single job metadata from extraction."""
+    id: str
+    title: str
+    location: str
+    url: str
+
+
+class CompanyDryRunResult(BaseModel):
+    """Dry run result for a single company."""
+    status: Literal['success', 'error']
+    total_count: int = 0
+    filtered_count: int = 0
+    urls_count: int = 0
+    included_jobs: list[JobMetadata] = []
+    excluded_jobs: list[JobMetadata] = []
+    error_message: Optional[str] = None
+
+
+def _map_extractor_error(e: Exception) -> str:
+    """Map exception to user-friendly error message."""
+    if isinstance(e, httpx.TimeoutException):
+        return "Request timed out - career site may be slow"
+    elif isinstance(e, httpx.ConnectError):
+        return "Could not connect to career site"
+    elif isinstance(e, httpx.HTTPStatusError):
+        status_code = e.response.status_code
+        if status_code == 403:
+            return "Access denied - site may be blocking requests"
+        elif status_code == 429:
+            return "Rate limited - try again later"
+        elif status_code >= 500:
+            return "Career site is temporarily unavailable"
+        else:
+            return f"HTTP error: {status_code}"
+    elif isinstance(e, (KeyError, TypeError, ValueError)):
+        return "Unexpected response format - API may have changed"
+    else:
+        # Generic fallback - don't expose internal details
+        return f"Extraction failed: {type(e).__name__}"
+
+
+async def _run_extractor(company_name: str, title_filters: dict) -> dict:
+    """
+    Run extractor for a single company.
+
+    Returns dict with status and results or error.
+    """
+    try:
+        config = TitleFilters.from_dict(title_filters)
+        extractor = get_extractor(company_name, config=config)
+        result = await extractor.extract_source_urls_metadata()
+
+        return {
+            "status": "success",
+            "total_count": result["total_count"],
+            "filtered_count": result["filtered_count"],
+            "urls_count": result["urls_count"],
+            "included_jobs": result["included_jobs"],
+            "excluded_jobs": result["excluded_jobs"],
+            "error_message": None,
+        }
+    except Exception as e:
+        logger.exception(f"Extractor failed for {company_name}: {e}")
+        return {
+            "status": "error",
+            "total_count": 0,
+            "filtered_count": 0,
+            "urls_count": 0,
+            "included_jobs": [],
+            "excluded_jobs": [],
+            "error_message": _map_extractor_error(e),
+        }
+
+
+@router.post("/dry-run", response_model=dict[str, CompanyDryRunResult])
+async def dry_run(
+    current_user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Extract job URLs for all enabled companies (preview/dry run).
+
+    Reads user's enabled company settings from DB, runs extractors in parallel,
+    and returns results keyed by company name. Each company extraction is
+    independent - one failure doesn't block others.
+
+    Auth: JWT required
+
+    Returns:
+        Dict mapping company_name to CompanyDryRunResult
+
+    Example:
+        POST /api/ingestion/dry-run
+        Authorization: Bearer <jwt_token>
+
+        Response:
+        {
+            "google": {
+                "status": "success",
+                "total_count": 128,
+                "filtered_count": 3,
+                "urls_count": 125,
+                "included_jobs": [
+                    {"id": "123", "title": "Software Engineer", "location": "NYC", "url": "https://..."},
+                    ...
+                ],
+                "excluded_jobs": [...],
+                "error_message": null
+            },
+            "amazon": {
+                "status": "error",
+                "total_count": 0,
+                "filtered_count": 0,
+                "urls_count": 0,
+                "included_jobs": [],
+                "excluded_jobs": [],
+                "error_message": "Request timed out - career site may be slow"
+            }
+        }
+    """
+    user_id = current_user["user_id"]
+
+    # Get enabled settings from DB
+    settings = get_enabled_settings(db, user_id)
+
+    if not settings:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No enabled companies configured. Add companies in Stage 1."
+        )
+
+    # Run extractors in parallel using asyncio.gather
+    tasks = [
+        _run_extractor(setting.company_name, setting.title_filters)
+        for setting in settings
+    ]
+    company_names = [setting.company_name for setting in settings]
+
+    # Execute all tasks concurrently
+    results_list = await asyncio.gather(*tasks, return_exceptions=True)
+
+    # Build results dict
+    results: dict[str, Any] = {}
+    for company_name, result in zip(company_names, results_list):
+        if isinstance(result, Exception):
+            # Should not happen since _run_extractor catches exceptions
+            logger.exception(f"Unexpected error for {company_name}: {result}")
+            results[company_name] = {
+                "status": "error",
+                "total_count": 0,
+                "filtered_count": 0,
+                "urls_count": 0,
+                "included_jobs": [],
+                "excluded_jobs": [],
+                "error_message": "Unexpected error occurred",
+            }
+        else:
+            results[company_name] = result
 
     return results

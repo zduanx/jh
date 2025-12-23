@@ -100,7 +100,7 @@ class GoogleExtractor(BaseJobExtractor[TitleFilters]):
 
         return jobs
 
-    def _fetch_jobs_page(self, page: int = 1) -> List[Dict[str, str]]:
+    async def _fetch_jobs_page(self, page: int = 1) -> List[Dict[str, str]]:
         """
         Fetch one page of jobs
 
@@ -113,10 +113,10 @@ class GoogleExtractor(BaseJobExtractor[TitleFilters]):
         params = self._build_params(page)
 
         try:
-            response = self.make_request(
+            response = await self.make_request(
                 self.API_URL,
                 params=params,
-                timeout=10
+                timeout=10.0
             )
 
             jobs = self._extract_jobs_from_html(response.text)
@@ -126,7 +126,7 @@ class GoogleExtractor(BaseJobExtractor[TitleFilters]):
             print(f"Error fetching Google jobs page {page}: {e}")
             return []
 
-    def _fetch_all_jobs(self) -> List[Dict[str, Any]]:
+    async def _fetch_all_jobs(self) -> List[Dict[str, Any]]:
         """
         Fetch all jobs using pagination
 
@@ -147,7 +147,7 @@ class GoogleExtractor(BaseJobExtractor[TitleFilters]):
         page = 1
 
         while True:
-            jobs = self._fetch_jobs_page(page)
+            jobs = await self._fetch_jobs_page(page)
 
             if not jobs:
                 # No jobs found, stop

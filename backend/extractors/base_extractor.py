@@ -10,7 +10,7 @@ Future phases (crawling, parsing) will be added as separate modules.
 
 from abc import ABC, abstractmethod
 from typing import List, Dict, Any, Optional, TypeVar, Generic, TYPE_CHECKING
-import requests
+import httpx
 
 if TYPE_CHECKING:
     from .enums import Company
@@ -88,7 +88,7 @@ class BaseJobExtractor(ABC, Generic[ConfigType]):
         self.config = config
 
     @abstractmethod
-    def _fetch_all_jobs(self) -> List[Dict[str, Any]]:
+    async def _fetch_all_jobs(self) -> List[Dict[str, Any]]:
         """
         Fetch all jobs and return standardized job objects
 
@@ -128,7 +128,7 @@ class BaseJobExtractor(ABC, Generic[ConfigType]):
         """
         pass
 
-    def extract_source_urls_metadata(self) -> Dict[str, Any]:
+    async def extract_source_urls_metadata(self) -> Dict[str, Any]:
         """
         Extract job URLs with full metadata (included and excluded jobs)
 
@@ -149,7 +149,7 @@ class BaseJobExtractor(ABC, Generic[ConfigType]):
             }
         """
         # Step 1: Fetch all jobs
-        all_jobs = self._fetch_all_jobs()
+        all_jobs = await self._fetch_all_jobs()
         total_count = len(all_jobs)
 
         if not all_jobs:
@@ -317,15 +317,15 @@ class BaseJobExtractor(ABC, Generic[ConfigType]):
             'Accept-Language': 'en-US,en;q=0.9',
         }
 
-    def make_request(
+    async def make_request(
         self,
         url: str,
         method: str = 'GET',
         params: Optional[Dict] = None,
         json: Optional[Dict] = None,
         headers: Optional[Dict] = None,
-        timeout: int = 10
-    ) -> requests.Response:
+        timeout: float = 10.0
+    ) -> httpx.Response:
         """
         Helper method to make HTTP requests with consistent error handling
 
@@ -338,25 +338,28 @@ class BaseJobExtractor(ABC, Generic[ConfigType]):
             timeout: Request timeout in seconds
 
         Returns:
-            requests.Response object
+            httpx.Response object
 
         Raises:
-            requests.exceptions.RequestException: On request failure
+            httpx.HTTPStatusError: On HTTP error responses
+            httpx.TimeoutException: On request timeout
+            httpx.ConnectError: On connection failure
         """
         request_headers = self.get_headers()
         if headers:
             request_headers.update(headers)
 
-        response = requests.request(
-            method=method,
-            url=url,
-            params=params,
-            json=json,
-            headers=request_headers,
-            timeout=timeout
-        )
-        response.raise_for_status()
-        return response
+        async with httpx.AsyncClient() as client:
+            response = await client.request(
+                method=method,
+                url=url,
+                params=params,
+                json=json,
+                headers=request_headers,
+                timeout=timeout
+            )
+            response.raise_for_status()
+            return response
 
     def filter_by_title(
         self,

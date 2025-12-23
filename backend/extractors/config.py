@@ -43,9 +43,9 @@ class TitleFilters:
     include: Optional[List[str]] = None  # None = include all, List = OR logic (match any)
     exclude: List[str] = field(default_factory=list)  # AND logic: reject all
 
-    def to_dict(self) -> Dict[str, Optional[List[str]]]:
-        """Convert to dict for DB/API serialization."""
-        return {"include": self.include, "exclude": self.exclude}
+    def to_dict(self) -> Dict[str, List[str]]:
+        """Convert to dict for API response. Always returns [] instead of None."""
+        return {"include": self.include or [], "exclude": self.exclude}
 
     @classmethod
     def from_dict(cls, data: Optional[Dict]) -> "TitleFilters":
@@ -76,6 +76,9 @@ class TitleFilters:
                 raise ValueError("title_filters.include must be a list or null")
             if not all(isinstance(item, str) for item in include):
                 raise ValueError("title_filters.include items must be strings")
+            # Normalize empty list to None (empty list = include all)
+            if len(include) == 0:
+                include = None
 
         # Validate exclude
         if not isinstance(exclude, list):
