@@ -1,14 +1,13 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import './IngestPage.css';
-import Stage1Configure from './ingest/Stage1Configure';
-import Stage2Preview from './ingest/Stage2Preview';
+import Stage1Configure, { Stage1ActionBar } from './ingest/Stage1Configure';
+import Stage2Preview, { Stage2ActionBar } from './ingest/Stage2Preview';
+import Stage3Progress from './ingest/Stage3Progress';
 
 const STAGES = [
   { id: 1, name: 'Configure', description: 'Select companies & filters' },
   { id: 2, name: 'Preview', description: 'Review extracted URLs' },
-  { id: 3, name: 'Archive', description: 'Snapshot job pages' },
-  { id: 4, name: 'Ingest', description: 'Process into database' },
-  { id: 5, name: 'Results', description: 'View summary' },
+  { id: 3, name: 'Ingest', description: 'Sync & process jobs' },
 ];
 
 function IngestPage() {
@@ -18,6 +17,11 @@ function IngestPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [dbMode, setDbMode] = useState(null); // 'TEST' or 'PRODUCTION'
+  const [activeRunId, setActiveRunId] = useState(null);
+  const [startingIngestion, setStartingIngestion] = useState(false);
+
+  // Action bar state - passed up from stage components
+  const [actionBarState, setActionBarState] = useState({});
 
   const apiUrl = process.env.REACT_APP_API_URL;
 
@@ -35,6 +39,30 @@ function IngestPage() {
       }
     };
     fetchDbMode();
+  }, [apiUrl]);
+
+  // Check for active ingestion run on mount (for page refresh)
+  useEffect(() => {
+    const checkCurrentRun = async () => {
+      const token = localStorage.getItem('access_token');
+      if (!token) return;
+
+      try {
+        const res = await fetch(`${apiUrl}/api/ingestion/current-run`, {
+          headers: { 'Authorization': `Bearer ${token}` }
+        });
+        if (res.ok) {
+          const data = await res.json();
+          if (data.run_id) {
+            setActiveRunId(data.run_id);
+            setCurrentStage(3);
+          }
+        }
+      } catch {
+        // Ignore errors - just start at stage 1
+      }
+    };
+    checkCurrentRun();
   }, [apiUrl]);
 
   // Fetch companies and settings on mount
@@ -80,6 +108,65 @@ function IngestPage() {
   useEffect(() => {
     fetchData();
   }, [fetchData]);
+
+  // Start ingestion - called from Stage 2 confirm
+  const handleStartIngestion = async () => {
+    setStartingIngestion(true);
+    setError(null);
+
+    try {
+      const token = localStorage.getItem('access_token');
+      const res = await fetch(`${apiUrl}/api/ingestion/start`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+      });
+
+      if (!res.ok) {
+        const data = await res.json();
+        throw new Error(data.detail || 'Failed to start ingestion');
+      }
+
+      const data = await res.json();
+      setActiveRunId(data.run_id);
+      setCurrentStage(3);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setStartingIngestion(false);
+    }
+  };
+
+  // Handle abort from Stage 3
+  const handleAbort = () => {
+    setActiveRunId(null);
+    setCurrentStage(1);
+  };
+
+  // Render action bar based on current stage
+  const renderActionBar = () => {
+    switch (currentStage) {
+      case 1:
+        return (
+          <Stage1ActionBar
+            {...actionBarState}
+            onNext={() => setCurrentStage(2)}
+          />
+        );
+      case 2:
+        return (
+          <Stage2ActionBar
+            {...actionBarState}
+            onBack={() => setCurrentStage(1)}
+            onNext={() => setCurrentStage(3)}
+          />
+        );
+      default:
+        return null;
+    }
+  };
 
   // Render stepper
   const renderStepper = () => (
@@ -131,7 +218,7 @@ function IngestPage() {
             error={error}
             onError={setError}
             onSettingsUpdate={setSavedSettings}
-            onNext={() => setCurrentStage(2)}
+            onActionBarChange={setActionBarState}
           />
         );
       case 2:
@@ -154,16 +241,18 @@ function IngestPage() {
             companies={enabledCompanies}
             savedSettings={savedSettings}
             onSettingsUpdate={setSavedSettings}
-            onBack={() => setCurrentStage(1)}
-            onNext={() => setCurrentStage(3)}
+            onActionBarChange={setActionBarState}
+            onNext={handleStartIngestion}
+            startingIngestion={startingIngestion}
           />
         );
       case 3:
-        return renderComingSoon('Archive');
-      case 4:
-        return renderComingSoon('Ingest');
-      case 5:
-        return renderComingSoon('Results');
+        return (
+          <Stage3Progress
+            runId={activeRunId}
+            onAbort={handleAbort}
+          />
+        );
       default:
         return renderComingSoon('Unknown Stage');
     }
@@ -182,7 +271,14 @@ function IngestPage() {
       </div>
 
       {renderStepper()}
-      {renderStageContent()}
+      <div className="stage-wrapper">
+        {renderActionBar() && (
+          <div className="ingest-action-bar">
+            {renderActionBar()}
+          </div>
+        )}
+        {renderStageContent()}
+      </div>
     </div>
   );
 }

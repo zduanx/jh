@@ -1,0 +1,163 @@
+/* Stage 3 Progress - Ingestion Status */
+/* All classes prefixed with 's3-' to avoid conflicts */
+
+/* Header Row */
+.s3-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  background: white;
+  border-radius: 12px;
+  border: 1px solid #e2e8f0;
+  padding: 16px 24px;
+  margin-bottom: 24px;
+}
+
+.s3-run-info {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.s3-run-label {
+  font-size: 14px;
+  color: #64748b;
+}
+
+.s3-run-id {
+  font-size: 16px;
+  font-weight: 600;
+  color: #1e293b;
+  font-family: 'SF Mono', 'Monaco', 'Inconsolata', monospace;
+}
+
+.s3-abort-btn {
+  padding: 8px 16px;
+  background: #fef2f2;
+  color: #dc2626;
+  border: 1px solid #fecaca;
+  border-radius: 6px;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.s3-abort-btn:hover:not(:disabled) {
+  background: #fee2e2;
+  border-color: #fca5a5;
+}
+
+.s3-abort-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+/* Error Banner */
+.s3-error-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+  border-radius: 8px;
+  color: #dc2626;
+  margin-bottom: 24px;
+}
+
+.s3-error-banner button {
+  background: none;
+  border: none;
+  color: #dc2626;
+  text-decoration: underline;
+  cursor: pointer;
+  font-size: 14px;
+}
+
+/* Sections */
+.s3-section {
+  background: white;
+  border-radius: 12px;
+  border: 1px solid #e2e8f0;
+  margin-bottom: 24px;
+}
+
+.s3-section-header {
+  padding: 16px 24px;
+  font-size: 16px;
+  font-weight: 600;
+  color: #1e293b;
+  border-bottom: 1px solid #e2e8f0;
+}
+
+/* Status Row (compact inline) */
+.s3-status-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: white;
+  border-radius: 8px;
+  border: 1px solid #e2e8f0;
+  padding: 12px 20px;
+  margin-bottom: 24px;
+}
+
+.s3-status-label {
+  font-size: 14px;
+  color: #64748b;
+}
+
+.s3-status-value {
+  font-size: 14px;
+  font-weight: 600;
+  padding: 2px 10px;
+  border-radius: 4px;
+}
+
+.s3-status-pending {
+  background: #fef3c7;
+  color: #92400e;
+}
+
+.s3-status-initializing {
+  background: #dbeafe;
+  color: #1e40af;
+}
+
+.s3-status-ingesting {
+  background: #d1fae5;
+  color: #065f46;
+}
+
+.s3-status-hint {
+  font-size: 12px;
+  color: #94a3b8;
+}
+
+/* Placeholder States */
+.s3-details-placeholder {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 48px 24px;
+  text-align: center;
+}
+
+.s3-placeholder-icon {
+  font-size: 48px;
+  margin-bottom: 16px;
+}
+
+.s3-details-placeholder p {
+  margin: 0;
+  color: #64748b;
+  font-size: 14px;
+}
+
+.s3-placeholder-hint {
+  margin-top: 8px !important;
+  font-size: 12px !important;
+  color: #94a3b8 !important;
+}

@@ -382,19 +382,11 @@
   font-size: 13px;
 }
 
-/* Stage Footer */
-.s1-footer {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding-top: 24px;
-  margin-top: 24px;
-  border-top: 1px solid #e2e8f0;
-}
-
+/* Selection Summary (in page content) */
 .s1-selection-summary {
   font-size: 14px;
   color: #64748b;
+  margin-bottom: 16px;
 }
 
 .s1-unsaved-indicator {

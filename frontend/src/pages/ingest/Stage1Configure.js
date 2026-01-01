@@ -32,6 +32,39 @@ const snapshotsEqual = (a, b) => {
 };
 
 /**
+ * Stage 1 Action Bar - rendered separately in IngestPage
+ */
+export function Stage1ActionBar({
+  enabledCount,
+  isDirty,
+  onNext,
+}) {
+  return (
+    <>
+      <div className="s1-action-bar-left">
+        {/* Stage 1 has no back button */}
+      </div>
+      <div className="s1-action-bar-center">
+        {/* Status moved to page content */}
+      </div>
+      <div className="s1-action-bar-right">
+        <button
+          className="s1-next-btn"
+          disabled={enabledCount === 0 || isDirty}
+          onClick={onNext}
+          title={
+            isDirty ? 'Save changes before proceeding' :
+            enabledCount === 0 ? 'Enable at least one company' : ''
+          }
+        >
+          Next: Preview →
+        </button>
+      </div>
+    </>
+  );
+}
+
+/**
  * Stage 1: Configure companies and filters
  *
  * Two-column layout:
@@ -47,7 +80,7 @@ function Stage1Configure({
   error,
   onError,
   onSettingsUpdate,
-  onNext
+  onActionBarChange,
 }) {
   // Local state for selected companies (modified from savedSettings)
   const [localSelected, setLocalSelected] = useState([]);
@@ -119,6 +152,15 @@ function Stage1Configure({
   const enabledCount = useMemo(() => {
     return localSelected.filter(item => item.is_enabled).length;
   }, [localSelected]);
+
+  // Update action bar state in parent
+  useEffect(() => {
+    onActionBarChange({
+      enabledCount,
+      selectedCount: localSelected.length,
+      isDirty,
+    });
+  }, [enabledCount, localSelected.length, isDirty, onActionBarChange]);
 
   // Open modal to add a new company
   const handleAddCompany = (company) => {
@@ -418,6 +460,12 @@ function Stage1Configure({
             </div>
           </div>
 
+          {/* Selection summary */}
+          <div className="s1-selection-summary">
+            {enabledCount} of {localSelected.length} {localSelected.length === 1 ? 'company' : 'companies'} enabled
+            {isDirty && <span className="s1-unsaved-indicator"> • Unsaved changes</span>}
+          </div>
+
           <div className="s1-selected-grid">
             {localSelected.map((item, index) => {
               const itemIsNew = isItemNew(item);
@@ -489,25 +537,6 @@ function Stage1Configure({
                 <span>Click a company on the left to add it</span>
               </div>
             )}
-          </div>
-
-          {/* Footer with Next button */}
-          <div className="s1-footer">
-            <div className="s1-selection-summary">
-              {enabledCount} of {localSelected.length} {localSelected.length === 1 ? 'company' : 'companies'} enabled
-              {isDirty && <span className="s1-unsaved-indicator"> • Unsaved changes</span>}
-            </div>
-            <button
-              className="s1-next-btn"
-              disabled={enabledCount === 0 || isDirty}
-              onClick={onNext}
-              title={
-                isDirty ? 'Save changes before proceeding' :
-                enabledCount === 0 ? 'Enable at least one company' : ''
-              }
-            >
-              Next: Preview →
-            </button>
           </div>
         </div>
       </div>

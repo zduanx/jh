@@ -245,6 +245,16 @@ samconfig.toml  # This file contains secrets
 - Inline refs for internal docs, end section for external URLs
 - Sequential phases (no Dependencies section)
 
+### Dates in Documentation
+**Rule**: Always use the **actual current date** when writing dates in docs (ADRs, phase summaries, learning files).
+
+| Action | Do | Don't |
+|--------|-----|-------|
+| Writing ADR date | Check system date, use real date | Guess or use training data dates |
+| Phase summary date | Use today's date | Copy dates from previous docs |
+
+**How to verify**: The current date is provided in the system context at session start.
+
 ---
 
 ## Quick Reference

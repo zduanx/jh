@@ -13,6 +13,70 @@ const normalizeFilters = (filters) => {
 };
 
 /**
+ * Stage 2 Action Bar - rendered separately in IngestPage
+ */
+export function Stage2ActionBar({
+  isDirty,
+  saving,
+  loading,
+  hasResults,
+  resultsStale,
+  canStartIngestion,
+  onBack,
+  onSave,
+  onDryRun,
+  onConfirmOpen,
+}) {
+  const canDryRun = !isDirty && !loading && !saving;
+
+  return (
+    <>
+      <div className="s2-action-bar-left">
+        <button className="s2-back-btn" onClick={onBack} disabled={loading || saving}>
+          ← Back
+        </button>
+      </div>
+
+      <div className="s2-action-bar-center">
+        {isDirty && (
+          <button
+            className="s2-save-btn"
+            onClick={onSave}
+            disabled={saving || loading}
+          >
+            {saving ? 'Saving...' : 'Save Settings'}
+          </button>
+        )}
+
+        <button
+          className="s2-dryrun-btn"
+          onClick={onDryRun}
+          disabled={!canDryRun}
+          title={isDirty ? 'Save settings first' : ''}
+        >
+          {loading ? 'Running...' : hasResults ? 'Rerun' : 'Dry Run'}
+        </button>
+      </div>
+
+      <div className="s2-action-bar-right">
+        <button
+          className="s2-next-btn"
+          onClick={onConfirmOpen}
+          disabled={!canStartIngestion}
+          title={
+            !hasResults ? 'Run dry-run first' :
+            resultsStale ? 'Rerun dry-run - settings changed' :
+            isDirty ? 'Save settings first' : ''
+          }
+        >
+          Start Ingestion →
+        </button>
+      </div>
+    </>
+  );
+}
+
+/**
  * Stage 2: Preview dry-run results
  *
  * Layout:
@@ -29,8 +93,9 @@ function Stage2Preview({
   companies,  // Array of { company_name, display_name, logo_url, title_filters } from enabled settings
   savedSettings,  // Full settings array from parent (for save API)
   onSettingsUpdate,  // Callback to update parent settings after save
-  onBack,
-  onNext,
+  onActionBarChange,
+  onNext,  // Called when user confirms ingestion start
+  startingIngestion = false,  // True while /start API call is in progress
 }) {
   // Local editable copy of companies (for filter editing)
   const [localCompanies, setLocalCompanies] = useState([]);
@@ -395,8 +460,22 @@ function Stage2Preview({
 
   const stats = getSummaryStats();
   const hasResults = results !== null;
-  const canDryRun = !isDirty && !loading && !saving;
   const canStartIngestion = hasResults && !resultsStale && !isDirty && !loading;
+
+  // Update action bar state in parent
+  useEffect(() => {
+    onActionBarChange({
+      isDirty,
+      saving,
+      loading,
+      hasResults,
+      resultsStale,
+      canStartIngestion,
+      onSave: handleSave,
+      onDryRun: handleDryRun,
+      onConfirmOpen: () => setConfirmModalOpen(true),
+    });
+  }, [isDirty, saving, loading, hasResults, resultsStale, canStartIngestion, onActionBarChange]);
 
   return (
     <div className="stage-content">
@@ -505,47 +584,6 @@ function Stage2Preview({
         </div>
       </div>
 
-      {/* Footer */}
-      <div className="s2-footer">
-        <button className="s2-back-btn" onClick={onBack} disabled={loading || saving}>
-          ← Back
-        </button>
-
-        <div className="s2-footer-center">
-          {isDirty && (
-            <button
-              className="s2-save-btn"
-              onClick={handleSave}
-              disabled={saving || loading}
-            >
-              {saving ? 'Saving...' : 'Save Settings'}
-            </button>
-          )}
-
-          <button
-            className="s2-dryrun-btn"
-            onClick={handleDryRun}
-            disabled={!canDryRun}
-            title={isDirty ? 'Save settings first' : ''}
-          >
-            {loading ? 'Running...' : hasResults ? 'Rerun' : 'Dry Run'}
-          </button>
-        </div>
-
-        <button
-          className="s2-next-btn"
-          onClick={() => setConfirmModalOpen(true)}
-          disabled={!canStartIngestion}
-          title={
-            !hasResults ? 'Run dry-run first' :
-            resultsStale ? 'Rerun dry-run - settings changed' :
-            isDirty ? 'Save settings first' : ''
-          }
-        >
-          Start Ingestion →
-        </button>
-      </div>
-
       {/* Confirmation Modal */}
       {confirmModalOpen && (
         <div className="s2-confirm-overlay" onClick={() => setConfirmModalOpen(false)}>
@@ -573,17 +611,18 @@ function Stage2Preview({
               <button
                 className="s2-confirm-cancel"
                 onClick={() => setConfirmModalOpen(false)}
+                disabled={startingIngestion}
               >
                 Cancel
               </button>
               <button
                 className="s2-confirm-proceed"
                 onClick={() => {
-                  setConfirmModalOpen(false);
                   onNext();
                 }}
+                disabled={startingIngestion}
               >
-                Start Ingestion
+                {startingIngestion ? 'Starting...' : 'Start Ingestion'}
               </button>
             </div>
           </div>

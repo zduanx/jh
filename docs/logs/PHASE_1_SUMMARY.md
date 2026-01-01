@@ -155,14 +155,6 @@ Shell function wrapper that handles cd + venv activation + dependency checks + p
 
 ## Next Steps → Phase 2
 
-Phase 2 will add job tracking core functionality:
-
-**Phase 2A**: Job URL sourcing (extractor architecture)
-**Phase 2B**: Database setup + user management
-**Phase 2C**: Ingestion workflow UI (5-stage stepper)
-**Phase 2D**: Dry run implementation (URL preview)
-**Phase 2E**: Full ingestion pipeline (SQS + Lambda crawlers)
-
 **Target**: Complete job ingestion workflow from URL sourcing to database persistence
 
 ---

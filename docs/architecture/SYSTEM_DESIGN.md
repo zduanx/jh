@@ -246,14 +246,15 @@ See [Environment Setup Guide](../deployment/ENVIRONMENT_SETUP.md) for complete d
 
 ---
 
-## Phase 2 Architecture: Job URL Sourcing & Crawling Pipeline
+## Phase 2 Architecture: Job Ingestion Pipeline
 
 **Status**: In Progress 🚧
 **Goals**:
 1. Generate job URLs from company career pages
 2. Crawl job pages to get raw HTML
-3. Parse HTML to extract structured job data
-4. Store in database for application tracking
+3. Extract structured job data from HTML
+4. Track ingestion progress with real-time updates
+5. Deduplicate content to avoid redundant extraction
 
 ### Architecture Overview
 
@@ -261,132 +262,331 @@ See [Environment Setup Guide](../deployment/ENVIRONMENT_SETUP.md) for complete d
 ┌─────────────────────────────────────────────────────────────────────┐
 │                         User Interface (React)                      │
 │  - Settings Page: Configure companies & filters                    │
-│  - Crawl Control: Trigger dry-run or live crawl                   │
-│  - Real-time Status: WebSocket updates (future)                   │
+│  - Ingest Control: Dry-run preview → Confirm → Start              │
+│  - Real-time Status: SSE updates during ingestion                  │
 └────────────────┬────────────────────────────────────────────────────┘
-                 │ HTTPS API calls
+                 │ HTTPS API calls + SSE stream
                  ↓
 ┌─────────────────────────────────────────────────────────────────────┐
-│                  API Gateway + SourceURLLambda                      │
-│                    (URL Generation Service)                         │
+│                      API Gateway + Lambda                           │
 │                                                                     │
-│  POST /api/sourcing (dry_run=true)  → Return URL metadata         │
-│  POST /api/sourcing (dry_run=false) → Send to SQS Queue A         │
-└────────────┬────────────────────────────────────────────────────────┘
-             │
-             │ dry_run=false
-             ↓
+│  POST /api/ingest/preview  → Dry-run, return job counts           │
+│  POST /api/ingest/start    → Create run, async initialize         │
+│  GET  /api/ingest/progress → SSE stream for real-time updates     │
+└────────────────┬────────────────────────────────────────────────────┘
+                 │
+                 │ Async (Lambda invoke)
+                 ↓
 ┌─────────────────────────────────────────────────────────────────────┐
-│                         SQS Queue A                                 │
-│                   (Job URLs to Crawl)                              │
-│  Message: {job_id, company, title, location, url}                 │
-└────────────┬────────────────────────────────────────────────────────┘
-             │ Triggers
-             ↓
-┌─────────────────────────────────────────────────────────────────────┐
-│                  JobCrawlerLambda (Crawling)                       │
-│  1. Fetch raw HTML from job URL                                   │
-│  2. Save metadata + S3 reference to DB                            │
-│  3. Save raw HTML to S3                                           │
-│  4. Send job DB ID to SQS Queue B                                 │
-└────────────┬────────────────────────────────────────────────────────┘
-             │
-             ├─→ S3 Bucket: raw/{company}/{job_id}.html
-             │
-             └─→ Database: jobs table (status: 'crawled')
+│                    Initializer Lambda (Async)                       │
+│  1. Fetch job URLs from all company APIs                           │
+│  2. Create job records in DB (status: pending)                     │
+│  3. Send messages to SQS1 (crawl queue)                            │
+│  4. Update run status: initializing → ingesting                    │
+└────────────────┬────────────────────────────────────────────────────┘
                  │
                  ↓
 ┌─────────────────────────────────────────────────────────────────────┐
-│                         SQS Queue B                                 │
-│                   (Job IDs to Parse)                               │
-│  Message: {job_db_id}                                             │
-└────────────┬────────────────────────────────────────────────────────┘
-             │ Triggers
-             ↓
+│                         SQS1 (Crawl Queue)                          │
+│  Message: {job_id (DB), run_id, company, url}                      │
+└────────────────┬────────────────────────────────────────────────────┘
+                 │ Triggers (batch size: 1)
+                 ↓
 ┌─────────────────────────────────────────────────────────────────────┐
-│                  JobParserLambda (Parsing)                         │
-│  1. Read job metadata from DB (get S3 key)                        │
-│  2. Read raw HTML from S3                                         │
-│  3. Parse HTML → structured data                                  │
-│  4. Update DB with parsed data                                    │
-└────────────┬────────────────────────────────────────────────────────┘
-             │
-             ↓
+│                    CrawlerLambda (Worker 1)                         │
+│  1. Fetch raw HTML from job URL                                    │
+│  2. Compute SimHash of content                                     │
+│  3. Compare with existing SimHash in DB                            │
+│  4. If changed: Save to S3, update DB, send to SQS2               │
+│  5. If unchanged: Update status to 'ready' (skip extraction)       │
+│  6. Check if run complete → update run status                      │
+└────────────────┬────────────────────────────────────────────────────┘
+                 │
+                 ├─→ S3 Bucket: raw/{company}/{job_id}.html
+                 │
+                 └─→ Database: jobs.status = 'crawled' or 'ready'
+                     │
+                     ↓ (only if content changed)
+┌─────────────────────────────────────────────────────────────────────┐
+│                       SQS2 (Extract Queue)                          │
+│  Message: {job_id (DB), run_id}                                    │
+└────────────────┬────────────────────────────────────────────────────┘
+                 │ Triggers (batch size: 1)
+                 ↓
+┌─────────────────────────────────────────────────────────────────────┐
+│                   ExtractorLambda (Worker 2)                        │
+│  1. Read job record from DB (get s3_key)                           │
+│  2. Download raw HTML from S3                                      │
+│  3. Extract structured data (title, description, etc.)             │
+│  4. Update DB with extracted fields, status = 'ready'              │
+│  5. Check if run complete → update run status                      │
+└────────────────┬────────────────────────────────────────────────────┘
+                 │
+                 ↓
 ┌─────────────────────────────────────────────────────────────────────┐
 │                          Database                                   │
-│  jobs table: Complete job data (status: 'parsed')                 │
+│  ingestion_runs: Track overall progress                            │
+│  jobs: Individual job status and data                              │
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
-### Data Flow Detail
+### Status Flows
 
-**1. URL Generation (SourceURLLambda)**
+**Ingestion Run Status**
 ```
-Input:  POST /api/sourcing {dry_run: boolean, user_id: string}
-
-Process:
-  1. Read user settings from DB (companies, filters)
-  2. For each company:
-     - Get extractor: get_extractor(company, filters)
-     - Call: extractor.extract_source_urls_metadata()
-  3. If dry_run=true:
-     - Return: {summary, results: [CompanyResult, ...]}
-  4. If dry_run=false:
-     - For each job in results.included_jobs:
-       - Send message to SQS Queue A
-     - Return: {message: "Crawl started", job_count: N}
-
-Output: JSON response OR SQS messages
+pending → initializing → ingesting → finished
+                    ↘            ↘
+                     → error      → error
 ```
 
-**2. Crawling (JobCrawlerLambda)**
+| Status | Description |
+|--------|-------------|
+| `pending` | Run created, waiting to start |
+| `initializing` | Fetching URLs from company APIs, creating job records |
+| `ingesting` | Workers processing jobs (crawl + extract) |
+| `finished` | All jobs processed successfully |
+| `error` | Catastrophic failure (can't proceed) |
+
+**Job Status**
 ```
-Input:  SQS message from Queue A
-        {job_id, company, title, location, url}
+pending → crawled → ready
+    ↘        ↘
+     → error  → error
+     → expired (URL 404)
 
-Process:
-  1. Get extractor for company
-  2. Call: raw_html = extractor.crawl_job(url)
-  3. Generate S3 key: raw/{company}/{job_id}.html
-  4. Upload raw_html to S3
-  5. Insert to DB:
-     - job_id, company, title, location, url
-     - s3_key, status='crawled', created_at
-  6. Get DB record ID
-  7. Send {job_db_id} to SQS Queue B
-
-Output: DB record + S3 file + SQS message
+With SimHash optimization:
+pending → ready (if content unchanged, skip extraction)
 ```
 
-**3. Parsing (JobParserLambda)**
-```
-Input:  SQS message from Queue B
-        {job_db_id}
+| Status | Description |
+|--------|-------------|
+| `pending` | Job created, waiting for crawler |
+| `crawled` | HTML fetched, waiting for extraction |
+| `ready` | Extraction complete (or skipped via SimHash) |
+| `error` | Processing failed (see error_message) |
+| `expired` | Job URL returned 404 |
 
-Process:
-  1. Read job record from DB (get s3_key)
-  2. Download raw_html from S3
-  3. Get extractor for company
-  4. Call: parsed_data = extractor.parse_job(raw_html)
-     Returns: {
-       description: str,
-       requirements: [str],
-       responsibilities: [str],
-       salary_range: str,
-       job_type: str,
-       ...
-     }
-  5. Update DB record:
-     - Add parsed fields
-     - status='parsed'
-     - updated_at
+### SimHash Deduplication
 
-Output: Updated DB record
+To avoid expensive extraction when job content hasn't changed:
+
+1. **Crawler** computes SimHash (64-bit fuzzy hash) of HTML content
+2. **Compare** with stored SimHash in DB (if job existed before)
+3. **If similar** (Hamming distance ≤ 3): Skip extraction, mark as 'ready'
+4. **If different**: Proceed to extraction queue
+
+See [ADR-017: SimHash for Raw Content Deduplication](./DECISIONS.md#adr-017-simhash-for-raw-content-deduplication)
+
+### Real-Time Progress (SSE)
+
+Frontend receives progress updates via Server-Sent Events:
+
 ```
+GET /api/ingest/progress/{run_id}
+Accept: text/event-stream
+
+← event: progress
+← data: {"status":"ingesting","pending":45,"crawled":30,"ready":25,"error":0}
+
+← event: progress
+← data: {"status":"ingesting","pending":20,"crawled":35,"ready":45,"error":0}
+
+← event: complete
+← data: {"status":"finished","total":100,"ready":98,"error":2}
+```
+
+**Implementation**:
+- SSE endpoint queries DB for current counts
+- Emits events every 2-3 seconds
+- Auto-reconnects every 29s (API Gateway limit)
+- Uses `Last-Event-ID` header for resume
+
+See [ADR-016: SSE for Real-Time Progress Updates](./DECISIONS.md#adr-016-sse-for-real-time-progress-updates)
+
+### Database Schema
+
+**ingestion_runs table**
+```sql
+CREATE TABLE ingestion_runs (
+    id SERIAL PRIMARY KEY,
+    user_id INTEGER REFERENCES users(id),
+    status VARCHAR(20) DEFAULT 'pending',
+    -- pending, initializing, ingesting, finished, error
+    error_message TEXT,              -- Only for catastrophic failures
+    created_at TIMESTAMP DEFAULT NOW(),
+    finished_at TIMESTAMP
+);
+```
+
+**jobs table**
+```sql
+CREATE TABLE jobs (
+    id SERIAL PRIMARY KEY,
+    run_id INTEGER REFERENCES ingestion_runs(id),
+    user_id INTEGER REFERENCES users(id),
+    company VARCHAR(100),
+    external_id VARCHAR(255),        -- Company's job ID
+    url TEXT NOT NULL,
+    status VARCHAR(20) DEFAULT 'pending',
+    -- pending, crawled, ready, error, expired
+    simhash BIGINT,                  -- For content deduplication
+    s3_key TEXT,                     -- Path to raw HTML
+    title TEXT,
+    location TEXT,
+    description TEXT,
+    error_message TEXT,              -- Job-specific errors
+    created_at TIMESTAMP DEFAULT NOW(),
+    updated_at TIMESTAMP DEFAULT NOW(),
+    UNIQUE(user_id, company, external_id)
+);
+```
+
+### API Endpoints
+
+#### Implemented (Stage 1 & 2)
+
+**GET /api/ingestion/companies** - List available companies
+```json
+Response:
+[
+  {"name": "google", "display_name": "Google", "logo_url": "https://..."},
+  {"name": "amazon", "display_name": "Amazon", "logo_url": "https://..."},
+  ...
+]
+```
+
+**GET /api/ingestion/settings** - Get user's company settings (Auth: JWT)
+```json
+Response:
+[
+  {
+    "id": 1,
+    "company_name": "anthropic",
+    "title_filters": {"include": ["engineer"], "exclude": ["intern"]},
+    "is_enabled": true,
+    "updated_at": "2024-12-18T..."
+  },
+  ...
+]
+```
+
+**POST /api/ingestion/settings** - Batch update settings (Auth: JWT)
+```json
+Request:
+[
+  {"op": "upsert", "company_name": "google", "title_filters": {"include": ["engineer"]}, "is_enabled": true},
+  {"op": "upsert", "company_name": "amazon", "title_filters": {}, "is_enabled": false},
+  {"op": "delete", "company_name": "netflix"}
+]
+
+Response:
+[
+  {"op": "upsert", "success": true, "company_name": "google", "id": 1, "updated_at": "2025-12-18T..."},
+  {"op": "upsert", "success": true, "company_name": "amazon", "id": 2, "updated_at": "2025-12-18T..."},
+  {"op": "delete", "success": true, "company_name": "netflix"}
+]
+```
+
+**POST /api/ingestion/dry-run** - Preview jobs for enabled companies (Auth: JWT)
+```json
+Response:
+{
+  "google": {
+    "status": "success",
+    "total_count": 128,
+    "filtered_count": 3,
+    "urls_count": 125,
+    "included_jobs": [
+      {"id": "123", "title": "Software Engineer", "location": "NYC", "url": "https://..."},
+      ...
+    ],
+    "excluded_jobs": [...],
+    "error_message": null
+  },
+  "amazon": {
+    "status": "error",
+    "total_count": 0,
+    "filtered_count": 0,
+    "urls_count": 0,
+    "included_jobs": [],
+    "excluded_jobs": [],
+    "error_message": "Request timed out - career site may be slow"
+  }
+}
+```
+
+#### Planned (Stage 3: Sync & Ingest)
+
+**POST /api/ingestion/start** - Start ingestion run (Auth: JWT)
+```json
+Request: {}
+
+Response:
+{
+  "run_id": 123
+}
+```
+Note: Only `run_id` returned. Status/progress comes from SSE endpoint.
+
+**GET /api/ingestion/progress/{run_id}** - SSE stream (Auth: JWT)
+```
+Accept: text/event-stream
+
+Response: Server-Sent Events stream (see Real-Time Progress section)
+```
+
+**GET /api/ingestion/status/{run_id}** - One-time status check (Auth: JWT)
+```json
+Response:
+{
+  "run_id": 123,
+  "status": "ingesting",
+  "counts": {
+    "pending": 45,
+    "crawled": 30,
+    "ready": 25,
+    "error": 0
+  },
+  "created_at": "2024-12-31T10:00:00Z"
+}
+```
+
+### Run Completion Detection
+
+Each worker checks if the run is complete after processing a job:
+
+```python
+def check_run_complete(run_id: int):
+    """Called by worker after updating job status"""
+    pending = db.query(
+        "SELECT COUNT(*) FROM jobs WHERE run_id = ? AND status IN ('pending', 'crawled')",
+        run_id
+    )
+    if pending == 0:
+        db.execute(
+            "UPDATE ingestion_runs SET status = 'finished', finished_at = NOW() WHERE id = ?",
+            run_id
+        )
+```
+
+### Error Handling
+
+| Level | Condition | Action |
+|-------|-----------|--------|
+| **Run-level** | Can't fetch any company APIs | `ingestion_runs.status = 'error'` |
+| **Run-level** | DB connection failed | `ingestion_runs.status = 'error'` |
+| **Job-level** | Single URL fetch failed | `jobs.status = 'error'`, continue others |
+| **Job-level** | Extraction failed | `jobs.status = 'error'`, continue others |
+| **Job-level** | URL returned 404 | `jobs.status = 'expired'` |
+
+- **Run errors**: Catastrophic, entire run fails
+- **Job errors**: Isolated, logged in `jobs.error_message`, other jobs continue
+- **Developer visibility**: CloudWatch logs for debugging
+- **User visibility**: Error counts in progress stream, details in job records
 
 ### Extractor Class Structure
 
-Each company has a single extractor class with all 3 phases:
+Each company has a single extractor class with all phases:
 
 ```python
 from extractors.base_extractor import BaseJobExtractor
@@ -395,191 +595,47 @@ from extractors.enums import Company
 class GoogleExtractor(BaseJobExtractor):
     COMPANY_NAME = Company.GOOGLE
     API_URL = "https://careers.google.com/api/v3/search"
-    URL_PREFIX_JOB = "https://www.google.com/about/careers/..."
 
-    # Phase 1: URL Generation (✅ Implemented)
+    # Phase 1: URL Generation
     def _fetch_all_jobs(self) -> List[Dict]:
         """Fetch jobs from API, return standardized metadata"""
         pass
 
-    # Phase 2: Crawling (🚧 To Implement)
+    # Phase 2: Crawling
     def crawl_job(self, url: str) -> str:
         """Fetch raw HTML from job URL"""
         pass
 
-    # Phase 3: Parsing (🚧 To Implement)
-    def parse_job(self, raw_html: str) -> Dict:
-        """Parse HTML to extract structured data"""
+    # Phase 3: Extraction
+    def extract_job(self, raw_html: str) -> Dict:
+        """Extract structured data from HTML"""
         pass
 ```
 
-### API Endpoints (Phase 2)
+### Phase 2 Implementation Status
 
-**POST /api/sourcing**
-```json
-Request:
-{
-  "dry_run": true  // or false
-}
+**Completed:**
+- ✅ Extractor base class and 6 company extractors (Google, Amazon, Anthropic, TikTok, Roblox, Netflix)
+- ✅ Async URL sourcing with httpx + asyncio.gather (parallel company fetches)
+- ✅ Database schema: users, user_settings, company_settings tables
+- ✅ API endpoints: GET /companies, GET/POST /settings, POST /dry-run
+- ✅ Frontend Stage 1: Company selection with filters
+- ✅ Frontend Stage 2: Dry-run preview with job counts
 
-Response (dry_run=true):
-{
-  "summary": {
-    "total_jobs": 480,
-    "total_companies": 6
-  },
-  "results": [
-    {
-      "company": "google",
-      "total_count": 117,
-      "filtered_count": 15,
-      "urls_count": 102,
-      "included_jobs": [
-        {"id": "...", "title": "...", "location": "...", "url": "..."},
-        ...
-      ]
-    },
-    ...
-  ]
-}
+**In Progress (Stage 3: Sync & Ingest):**
+- 🚧 ingestion_runs and jobs tables (schema defined, not yet migrated)
+- 🚧 POST /ingestion/start endpoint
+- 🚧 SQS queues setup (crawl queue, extract queue)
+- 🚧 CrawlerLambda (Worker 1)
+- 🚧 ExtractorLambda (Worker 2)
+- 🚧 SSE progress endpoint
+- 🚧 SimHash integration
+- 🚧 Frontend Stage 3: Sync & Ingest with progress display
 
-Response (dry_run=false):
-{
-  "message": "Crawl pipeline started",
-  "job_count": 480,
-  "companies": ["google", "amazon", "anthropic", ...]
-}
-```
-
-**GET /api/companies** (New)
-```json
-Response:
-{
-  "companies": [
-    {"id": "google", "name": "Google", "job_count": 117},
-    {"id": "amazon", "name": "Amazon", "job_count": 63},
-    ...
-  ]
-}
-```
-
-**POST /api/settings** (New)
-```json
-Request:
-{
-  "user_id": "user123",
-  "companies": ["google", "amazon"],
-  "filters": {
-    "google": {"include": ["software"], "exclude": ["senior staff"]},
-    "amazon": {"include": null, "exclude": ["principal"]}
-  }
-}
-
-Response:
-{
-  "message": "Settings saved",
-  "settings_id": "setting123"
-}
-```
-
-**GET /api/settings/:user_id** (New)
-```json
-Response:
-{
-  "user_id": "user123",
-  "companies": ["google", "amazon"],
-  "filters": {...},
-  "last_updated": "2024-12-15T10:00:00Z"
-}
-```
-
-**GET /api/queue/status** (New - Better UX)
-```json
-Response:
-{
-  "queue_a": {
-    "name": "job-urls-to-crawl",
-    "status": "active",
-    "messages_in_queue": 150
-  },
-  "queue_b": {
-    "name": "job-ids-to-parse",
-    "status": "active",
-    "messages_in_queue": 20
-  }
-}
-```
-
-**WebSocket /ws/crawl-status** (Future - Real-time updates)
-```json
-Message:
-{
-  "event": "crawl_progress",
-  "company": "google",
-  "crawled": 45,
-  "total": 102,
-  "percent": 44.1
-}
-```
-
-### Database Schema (Preliminary)
-
-**users table** (from Phase 1)
-- id (PK)
-- email
-- name
-- google_id
-- created_at
-
-**user_settings table** (New)
-- id (PK)
-- user_id (FK)
-- companies (JSON array)
-- filters (JSON object)
-- enabled (boolean)
-- last_run_at
-- created_at, updated_at
-
-**jobs table** (New)
-- id (PK)
-- job_id (company's job ID)
-- company (enum)
-- title
-- location
-- url
-- s3_key (S3 path to raw HTML)
-- status (enum: pending, crawled, parsed, error)
-- description (text) - from parsing
-- requirements (JSON array) - from parsing
-- salary_range - from parsing
-- job_type - from parsing
-- created_at, updated_at
-
-### Phase 2 Scope
-
-**Included:**
-- ✅ Extractor crawler methods (Phase 2A)
-- ✅ JobCrawlerLambda (crawling service)
-- ✅ SQS Queue A + Queue B setup
-- ✅ S3 bucket for raw HTML
-- ✅ Database schema + tables
-- ✅ SourceURLLambda updates (SQS sending)
-- ✅ Settings API endpoints
-- ✅ Companies API endpoint
-- ✅ Queue status API endpoint
-- ✅ Extractor parser methods (Phase 2B)
-- ✅ JobParserLambda (parsing service)
-
-**Deferred to ADR (Pending Decisions):**
-- Settings storage choice (DynamoDB vs PostgreSQL)
-- Crawling rate limits & delays per company
-- Error handling strategy (retries, DLQ, logging)
+**Pending Design Decisions:**
+- Crawling rate limits per company
 - S3 cleanup policy (retention period)
-- JobCrawlerLambda batching strategy (1 URL vs multiple)
-- WebSocket implementation (infrastructure choice)
-- Database choice (RDS vs Neon vs DynamoDB)
-
-See [ADR: Phase 2 Pending Decisions](../architecture/DECISIONS.md#phase-2-pending-decisions)
+- DLQ configuration for failed messages
 
 ---
 

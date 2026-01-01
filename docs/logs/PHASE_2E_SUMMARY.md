@@ -18,10 +18,9 @@ Phase 2E implements Stage 2 of the ingestion workflow, providing a dry run featu
 - Partial success support (some companies succeed, others fail)
 
 **Explicitly excluded** (deferred to Phase 2F):
-- Job archiving (Stage 3)
-- Full job crawling (Stage 4)
+- Sync & Ingest (Stage 3)
 - Ingestion runs persistence
-- Results display (Stage 5)
+- Results display
 
 ---
 
@@ -158,10 +157,10 @@ Reference: [API_DESIGN.md](../architecture/API_DESIGN.md)
 
 ## Next Steps → Phase 2F
 
-Phase 2F will implement **Stages 3-5**:
-- Stage 3: Job archiving logic (remove outdated jobs)
-- Stage 4: Async job crawling via SQS + Lambda
-- Stage 5: Results display and ingestion history
+Phase 2F will implement **Stage 3: Sync & Ingest**:
+- Sync: Mark expired jobs (URLs no longer on career pages)
+- Ingest: Async job crawling via SQS + Lambda
+- Results display and ingestion history
 - Ingestion runs table for persistence
 - Stale run detection and recovery
 

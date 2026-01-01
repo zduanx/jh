@@ -145,12 +145,51 @@
   margin-top: -16px;
 }
 
-/* Stage Content */
-.stage-content {
+/* Stage Wrapper - contains action bar + content as one card */
+.stage-wrapper {
   background: white;
   border-radius: 12px;
-  padding: 32px;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+  overflow: hidden;
+}
+
+/* Action Bar - top of stage content */
+.ingest-action-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 24px;
+  border-bottom: 1px solid #e2e8f0;
+  min-height: 56px;
+}
+
+.ingest-action-bar > div {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.s1-action-bar-left,
+.s2-action-bar-left {
+  flex: 1;
+  justify-content: flex-start;
+}
+
+.s1-action-bar-center,
+.s2-action-bar-center {
+  flex: 2;
+  justify-content: center;
+}
+
+.s1-action-bar-right,
+.s2-action-bar-right {
+  flex: 1;
+  justify-content: flex-end;
+}
+
+/* Stage Content */
+.stage-content {
+  padding: 32px;
   overflow: hidden; /* Prevent content overflow */
   min-width: 0; /* Allow shrinking in flex/grid contexts */
 }

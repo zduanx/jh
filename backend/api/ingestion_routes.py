@@ -6,6 +6,9 @@ Endpoints:
 - GET  /api/ingestion/settings        Get user's configured company settings
 - POST /api/ingestion/settings        Batch create/update/delete company settings
 - POST /api/ingestion/dry-run         Extract job URLs for enabled companies (preview)
+- GET  /api/ingestion/current-run     Check for active ingestion run (for page refresh)
+- POST /api/ingestion/start           Start ingestion run, returns run_id
+- POST /api/ingestion/abort           Abort an active ingestion run
 
 Interactive API docs:
 - Swagger UI: http://localhost:8000/docs
@@ -33,6 +36,7 @@ from db.company_settings_service import (
 )
 from extractors.registry import list_companies, get_extractor
 from extractors.config import TitleFilters
+from models.ingestion_run import IngestionRun, RunStatus
 
 logger = logging.getLogger(__name__)
 
@@ -385,3 +389,182 @@ async def dry_run(
             results[company_name] = result
 
     return results
+
+
+# =============================================================================
+# Start Ingestion Endpoint
+# =============================================================================
+
+class CurrentRunResponse(BaseModel):
+    """Response for checking current active run."""
+    run_id: Optional[int] = None
+
+
+class StartIngestionResponse(BaseModel):
+    """Response for starting an ingestion run."""
+    run_id: int
+
+
+@router.get("/current-run", response_model=CurrentRunResponse)
+async def get_current_run(
+    current_user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Check for an active ingestion run.
+
+    Returns the most recent run that is not finished or errored.
+    Used on page load to resume active runs after refresh.
+
+    Auth: JWT required
+
+    Returns:
+        CurrentRunResponse with run_id if active run exists,
+        or run_id=null if no active run.
+
+    Example:
+        GET /api/ingestion/current-run
+        Authorization: Bearer <jwt_token>
+
+        Response (active run exists):
+        {
+            "run_id": 123
+        }
+
+        Response (no active run):
+        {
+            "run_id": null
+        }
+    """
+    user_id = current_user["user_id"]
+
+    # Find most recent non-terminal run
+    run = db.query(IngestionRun).filter(
+        IngestionRun.user_id == user_id,
+        IngestionRun.status.notin_(RunStatus.TERMINAL)
+    ).order_by(IngestionRun.created_at.desc()).first()
+
+    if run:
+        return CurrentRunResponse(run_id=run.id)
+    else:
+        return CurrentRunResponse(run_id=None)
+
+
+@router.post("/start", response_model=StartIngestionResponse)
+async def start_ingestion(
+    current_user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Start a new ingestion run.
+
+    Creates an ingestion_runs record with status='pending' and returns the run_id.
+    Frontend uses this run_id to connect to the SSE progress endpoint.
+
+    Auth: JWT required
+
+    Returns:
+        StartIngestionResponse with run_id
+
+    Example:
+        POST /api/ingestion/start
+        Authorization: Bearer <jwt_token>
+
+        Response:
+        {
+            "run_id": 123
+        }
+    """
+    user_id = current_user["user_id"]
+
+    # Verify user has enabled companies before starting
+    settings = get_enabled_settings(db, user_id)
+    if not settings:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No enabled companies configured. Add companies in Stage 1."
+        )
+
+    # Create ingestion run record
+    run = IngestionRun(user_id=user_id, status=RunStatus.PENDING)
+    db.add(run)
+    db.commit()
+    db.refresh(run)
+
+    logger.info(f"Created ingestion run {run.id} for user {user_id}")
+
+    # TODO: Trigger async initialization job (Phase 2F)
+    # For now, just return the run_id
+
+    return StartIngestionResponse(run_id=run.id)
+
+
+# =============================================================================
+# Abort Ingestion Endpoint
+# =============================================================================
+
+class AbortResponse(BaseModel):
+    """Response for aborting an ingestion run."""
+    success: bool
+    message: str
+
+
+@router.post("/abort/{run_id}", response_model=AbortResponse)
+async def abort_ingestion(
+    run_id: int,
+    current_user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Abort an active ingestion run.
+
+    Sets the run status to 'aborted'. Only works for runs that are not
+    already in a terminal state (finished, error, aborted).
+    Security: JWT user_id must match run's user_id.
+
+    Auth: JWT required
+
+    Args:
+        run_id: Path parameter - the run to abort
+
+    Returns:
+        AbortResponse with success status and message
+
+    Example:
+        POST /api/ingestion/abort/123
+        Authorization: Bearer <jwt_token>
+
+        Response:
+        {
+            "success": true,
+            "message": "Run 123 aborted"
+        }
+    """
+    user_id = current_user["user_id"]
+
+    # Find the run (user_id check ensures security)
+    run = db.query(IngestionRun).filter(
+        IngestionRun.id == run_id,
+        IngestionRun.user_id == user_id
+    ).first()
+
+    if not run:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Run {run_id} not found"
+        )
+
+    # Check if run is in a terminal state
+    if run.status in RunStatus.TERMINAL:
+        return AbortResponse(
+            success=False,
+            message=f"Run {run_id} is already {run.status}"
+        )
+
+    # Abort the run
+    run.status = RunStatus.ABORTED
+    db.commit()
+
+    logger.info(f"Aborted ingestion run {run.id} for user {user_id}")
+
+    return AbortResponse(success=True, message=f"Run {run_id} aborted")

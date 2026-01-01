@@ -6,5 +6,6 @@ class Base(DeclarativeBase):
 
 # Import all models here for Alembic autogenerate
 from models.user import User
+from models.ingestion_run import IngestionRun, RunStatus
 
-__all__ = ["Base", "User"]
+__all__ = ["Base", "User", "IngestionRun", "RunStatus"]

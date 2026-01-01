@@ -333,22 +333,7 @@
   font-size: 13px;
 }
 
-/* Footer */
-.s2-footer {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding-top: 24px;
-  margin-top: 24px;
-  border-top: 1px solid #e2e8f0;
-}
-
-.s2-footer-center {
-  display: flex;
-  gap: 12px;
-  align-items: center;
-}
-
+/* Action Bar Button Styles (rendered in IngestPage action bar) */
 .s2-save-btn {
   padding: 12px 24px;
   background: #10b981;

@@ -914,25 +914,10 @@ The following architectural decisions are deferred for future discussion and wil
 
 ---
 
-### PDR-007: WebSocket Infrastructure
+### ~~PDR-007: Real-Time Progress Updates~~ ✅ Resolved
 
-**Question:** How should we implement real-time crawl status updates?
-
-**Options:**
-1. **API Gateway WebSocket**
-   - ✅ AWS-native, serverless
-   - ❌ Complex to set up with Lambda
-
-2. **Polling (GET /api/crawl-status)**
-   - ✅ Simple, no infrastructure change
-   - ❌ Higher latency, more API calls
-
-3. **Server-Sent Events (SSE)**
-   - ✅ Simpler than WebSocket, one-way push
-   - ❌ Requires long-running connection
-
-**Status:** Deferred to Phase 2B
-**Recommendation:** Start with polling, add WebSocket later
+**Status:** Resolved in ADR-016
+**Decision:** SSE with auto-reconnect for all progress updates (Sync and Ingest)
 
 ---
 
@@ -1046,3 +1031,286 @@ results_list = await asyncio.gather(*tasks)
 
 ### Related
 - See [python-fastapi.md](../learning/python-fastapi.md) for GIL and concurrency documentation
+
+---
+
+## ADR-016: Use SSE for Real-Time Progress Updates
+
+**Date:** 2025-12-29
+**Status:** Accepted
+
+### Context
+Need real-time progress updates during Stage 3 (Sync & Ingest) of the ingestion pipeline.
+
+### Decision
+Use **Server-Sent Events (SSE)** as the unified real-time infrastructure for all progress updates.
+
+### Alternatives Considered
+
+| Method | Direction | Complexity | Auto-Reconnect | Infrastructure |
+|--------|-----------|------------|----------------|----------------|
+| **SSE** | Server → Client | Medium | Built-in | None extra |
+| WebSocket | Bi-directional | High | Manual | Connection table in DB |
+| Polling | Client → Server | Low | N/A | None extra |
+
+### Reasoning
+
+**Why SSE (chosen):**
+1. **One-way is sufficient** - Progress updates only flow server→client
+2. **Built-in auto-reconnect** - Browser handles Lambda's 29s API Gateway timeout
+3. **No extra infrastructure** - No connection table needed (unlike WebSocket)
+4. **Native browser support** - `EventSource` API, no library needed
+5. **Industry standard** - Used by Vercel, GitHub, Heroku for similar features
+
+**Why NOT WebSocket:**
+- ❌ Bi-directional not needed (client doesn't send during progress)
+- ❌ Requires connection table in DB to track active connections
+- ❌ Manual reconnect logic required
+- ❌ More complex infrastructure (API Gateway WebSocket + DynamoDB/PostgreSQL)
+- ✅ Would be useful for: chat, multiplayer, collaborative editing
+
+**Why NOT Polling:**
+- ❌ Higher latency (0-3s delay between updates)
+- ❌ More Lambda invocations (cost at scale)
+- ✅ Simpler, but SSE isn't much harder
+
+### AWS Lambda Constraints
+
+| Component | Timeout |
+|-----------|---------|
+| API Gateway | 29-30s (hard limit) |
+| Lambda execution | Up to 15 min |
+
+**Key insight:** API Gateway cuts the *connection* at 30s, but Lambda can keep *running* in background.
+
+### Architecture
+
+```
+┌──────────┐  POST /ingest/start  ┌─────────────┐  Invoke async  ┌────────────────┐
+│ Frontend │─────────────────────▶│ API Lambda  │───────────────▶│ Worker Lambda  │
+└──────────┘                      │ returns id  │                │ (up to 15 min) │
+     │                            └─────────────┘                └───────┬────────┘
+     │                                                                   │
+     │  SSE /ingest/{id}/stream                                          │
+     │  (reconnects every 29s)                                           │
+     │                                                                   │
+     │                            ┌─────────────┐                        │
+     └───────────────────────────▶│  Streamer   │                        │
+                                  │  Lambda     │◀───────────────────────┘
+                                  └──────┬──────┘     writes progress
+                                         │
+                                         ▼
+                                  ┌─────────────┐
+                                  │ PostgreSQL  │
+                                  └─────────────┘
+```
+
+**Flow:**
+1. `POST /ingest/start` → returns `run_id` immediately
+2. Worker Lambda runs async, writes progress to DB
+3. Frontend connects SSE, reads progress from DB
+4. SSE auto-reconnects every 29s (browser handles this)
+5. On reconnect, server resumes from `Last-Event-ID`
+
+### SSE Auto-Reconnect Implementation
+
+```python
+# Server sends event with ID
+yield f"id: {progress['processed']}\n"
+yield f"data: {json.dumps(progress)}\n\n"
+```
+
+```javascript
+// Browser auto-reconnects, sends Last-Event-ID header
+const source = new EventSource(`/api/ingest/${runId}/stream`);
+source.onmessage = (e) => setProgress(JSON.parse(e.data));
+```
+
+### Progress Table Schema
+
+```sql
+CREATE TABLE ingestion_runs (
+    id SERIAL PRIMARY KEY,
+    user_id INTEGER REFERENCES users(id),
+    status VARCHAR(20) DEFAULT 'pending',  -- pending, running, completed, failed
+    total INTEGER DEFAULT 0,
+    processed INTEGER DEFAULT 0,
+    started_at TIMESTAMP,
+    completed_at TIMESTAMP,
+    created_at TIMESTAMP DEFAULT NOW()
+);
+```
+
+### Consequences
+
+**Positive:**
+- ✅ SSE simpler than WebSocket (no connection table)
+- ✅ Works with Lambda (auto-reconnect handles 29s timeout)
+- ✅ Built-in browser support (`EventSource` API)
+- ✅ Free tier compatible (no additional infrastructure)
+- ✅ Industry-standard approach (Vercel, GitHub, Heroku)
+
+**Negative:**
+- ❌ Brief gap (~1-3s) every 29s during reconnect
+- ❌ Need separate worker Lambda for long jobs
+- ❌ Progress state must be stored in DB
+
+**Mitigations:**
+- Reconnect gap is acceptable for progress updates
+- Worker Lambda pattern is standard for async jobs
+- DB storage enables resume if user refreshes page
+
+### Related
+- See [realtime-progress.md](../learning/realtime-progress.md) for detailed comparison
+- Resolves PDR-007
+
+---
+
+## ADR-017: Use SimHash for Raw Content Deduplication
+
+**Date:** 2025-12-29
+**Status:** Accepted
+
+### Context
+During the ingestion pipeline, we need to skip extraction for pages that haven't meaningfully changed. Extraction is expensive (~100-500ms per page), so detecting unchanged content at the raw crawl stage saves significant resources.
+
+**Challenge:** Job pages contain dynamic noise that changes on every request:
+- "Posted 3 days ago" → "Posted 4 days ago"
+- "150 applicants" → "180 applicants"
+- Timestamps, session IDs, CSRF tokens
+
+Traditional MD5/SHA hashing fails because any byte change produces a completely different hash.
+
+### Decision
+Use **SimHash** with a Hamming distance threshold of ≤3 for raw content deduplication.
+
+### Alternatives Considered
+
+| Method | Accuracy | Maintenance | Coverage |
+|--------|----------|-------------|----------|
+| **SimHash** | High (fuzzy) | None | Universal |
+| MD5 + pattern stripping | Medium | High (ongoing) | Limited to known patterns |
+| ETag/Last-Modified | Variable | None | ~30% of sites support |
+| Extract-then-compare | Perfect | None | Too expensive |
+
+### How SimHash Works
+
+SimHash produces a 64-bit fingerprint where **similar content produces similar hashes**:
+
+```
+Traditional Hash:
+  "Hello World" → a1b2c3d4
+  "Hello World!" → 9f8e7d6c  ← completely different
+
+SimHash:
+  "Hello World" → 1010110101...
+  "Hello World!" → 1010110100...  ← only 1-2 bits different
+```
+
+**Algorithm:**
+1. Tokenize text into 3-word shingles
+2. Hash each shingle to 64 bits
+3. Weight each bit position (+1 or -1)
+4. Final hash: bit=1 if sum>0, else bit=0
+
+**Comparison:** Count differing bits (Hamming distance)
+
+### Implementation
+
+```python
+from simhash import Simhash
+from bs4 import BeautifulSoup
+
+SIMHASH_THRESHOLD = 3  # Industry standard
+
+def compute_simhash(html: str) -> int:
+    soup = BeautifulSoup(html, 'lxml')
+    for tag in soup.select('script, style, nav, footer, header'):
+        tag.decompose()
+
+    text = soup.get_text(separator=' ', strip=True).lower()
+    words = text.split()
+
+    if len(words) < 3:
+        return 0
+
+    features = [' '.join(words[i:i+3]) for i in range(len(words) - 2)]
+    return Simhash(features).value
+
+def hamming_distance(h1: int, h2: int) -> int:
+    return bin(h1 ^ h2).count('1')
+
+def is_unchanged(old_hash: int, new_hash: int) -> bool:
+    return hamming_distance(old_hash, new_hash) <= SIMHASH_THRESHOLD
+```
+
+### Threshold Reference (64-bit hash)
+
+| Distance | Similarity | Action |
+|----------|------------|--------|
+| 0-3 | ~95-99% | Skip extraction (unchanged) |
+| 4-7 | ~90-95% | Minor edits, consider skipping |
+| 8-15 | ~75-90% | Moderate changes, extract |
+| 16+ | <75% | Significant changes, extract |
+
+### Schema Update
+
+```sql
+ALTER TABLE ingestion_url_status ADD COLUMN simhash BIGINT;
+```
+
+### Reasoning
+
+**Why SimHash (chosen):**
+1. **No pattern maintenance** - Works on any site without site-specific rules
+2. **Handles unknown noise** - New dynamic content types auto-handled
+3. **Industry proven** - Used by Google, search engines for near-duplicate detection
+4. **Tunable threshold** - Can adjust sensitivity if needed
+5. **Fast** - ~15ms per page (vs ~100-500ms extraction)
+
+**Why NOT MD5 + pattern stripping:**
+- ❌ Impossible to cover all sites' noise patterns
+- ❌ Ongoing maintenance as sites change
+- ❌ False confidence - you miss edge cases
+- ❌ Brittle - site redesigns break patterns
+
+**Why NOT ETag only:**
+- ❌ Only ~30% of job boards support it
+- ✅ Use as optimization when available, but need fallback
+
+### Consequences
+
+**Positive:**
+- ✅ Universal coverage across all job sites
+- ✅ Zero maintenance for noise patterns
+- ✅ Saves ~80% extraction cost on repeat crawls
+- ✅ Simple threshold-based decision (≤3 = unchanged)
+- ✅ 8-byte storage per URL (BIGINT)
+
+**Negative:**
+- ❌ ~15ms CPU per page (vs ~5ms for MD5)
+- ❌ External dependency (`pip install simhash`)
+- ❌ Small risk of false negatives (real changes within 3 bits)
+
+**Mitigations:**
+- 15ms is negligible at 500 URLs scale
+- `simhash` library is stable and well-maintained
+- Threshold of 3 is conservative; can lower to 2 if seeing false negatives
+
+### Pipeline Integration
+
+```
+GET page
+    ↓
+Compute SimHash (~15ms)
+    ↓
+Compare with stored SimHash
+    ↓
+Distance ≤ 3? → Skip extraction, mark unchanged
+    ↓ no
+Save to S3 → Queue for extraction
+```
+
+### Related
+- Used by: Google (web dedup), Common Crawl, Scrapy
+- See also: MinHash (for set similarity), LSH (for efficient lookup)
