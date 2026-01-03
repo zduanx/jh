@@ -1,0 +1,418 @@
+"""
+Ingestion Worker Lambda Handler
+
+This Lambda is invoked asynchronously by the API Lambda (InvocationType='Event').
+It handles the long-running job ingestion process (up to 15 minutes).
+
+Event format:
+{
+    "run_id": 123,
+    "user_id": 456
+}
+
+Workflow:
+1. Update run status: pending → initializing
+2. INITIALIZATION PHASE (sync, ~30s):
+   - Run extractors to get job URLs from each enabled company
+   - UPSERT job records to database (create new, update existing)
+   - Mark expired jobs (jobs not in current extraction results)
+3. Update run status: initializing → ingesting
+4. INGESTION PHASE (async via SQS, ~minutes):
+   - Send job URLs to SQS for async crawling (Phase 2I)
+   - For now: mock 30s wait, mark all jobs 'ready'
+5. Finalize run: write snapshot counts, status → finished
+"""
+
+import logging
+import time
+from datetime import datetime, timezone
+from typing import Optional
+
+from sqlalchemy import text
+from sqlalchemy.orm import Session
+
+from db.session import SessionLocal
+from db.company_settings_service import get_enabled_settings
+from db.jobs_service import upsert_jobs_from_job_data, mark_expired_jobs
+from models.ingestion_run import IngestionRun, RunStatus
+from sourcing.extractor_utils import run_extractors_sync
+from workers.types import (
+    JobData,
+    CompanyResult,
+    InitializationResult,
+    IngestionResult,
+)
+
+logger = logging.getLogger()
+logger.setLevel(logging.INFO)
+
+
+# =============================================================================
+# Database Operations (mockable for testing)
+# =============================================================================
+
+def get_run(db: Session, run_id: int) -> Optional[IngestionRun]:
+    """Fetch ingestion run by ID."""
+    return db.query(IngestionRun).filter(IngestionRun.id == run_id).first()
+
+
+def update_run_status(
+    db: Session,
+    run: IngestionRun,
+    status: str,
+    started_at: Optional[datetime] = None,
+    finished_at: Optional[datetime] = None,
+    error_message: Optional[str] = None,
+    total_jobs: Optional[int] = None,
+    jobs_ready: Optional[int] = None,
+    jobs_skipped: Optional[int] = None,
+    jobs_expired: Optional[int] = None,
+    jobs_failed: Optional[int] = None,
+) -> None:
+    """Update run status and optional fields, then commit."""
+    run.status = status
+    if started_at is not None:
+        run.started_at = started_at
+    if finished_at is not None:
+        run.finished_at = finished_at
+    if error_message is not None:
+        run.error_message = error_message
+    if total_jobs is not None:
+        run.total_jobs = total_jobs
+    if jobs_ready is not None:
+        run.jobs_ready = jobs_ready
+    if jobs_skipped is not None:
+        run.jobs_skipped = jobs_skipped
+    if jobs_expired is not None:
+        run.jobs_expired = jobs_expired
+    if jobs_failed is not None:
+        run.jobs_failed = jobs_failed
+    db.commit()
+
+
+def refresh_run(db: Session, run: IngestionRun) -> None:
+    """Refresh run from DB to see latest changes (e.g., abort)."""
+    db.refresh(run)
+
+
+def get_user_enabled_settings(db: Session, user_id: int) -> list:
+    """Get enabled company settings for user."""
+    return get_enabled_settings(db, user_id)
+
+
+# =============================================================================
+# Worker Logic
+# =============================================================================
+
+def run_initialization_phase(
+    db: Session,
+    run: IngestionRun,
+    settings: list,
+    _run_extractors=run_extractors_sync,
+    _upsert_jobs=upsert_jobs_from_job_data,
+    _mark_expired_jobs=mark_expired_jobs,
+) -> InitializationResult:
+    """
+    Run initialization phase: extract URLs, UPSERT jobs, mark expired.
+
+    Args:
+        db: Database session
+        run: Ingestion run record
+        settings: List of enabled company settings
+        _run_extractors: Extractor function (for testing)
+        _upsert_jobs: UPSERT function (for testing)
+        _mark_expired_jobs: Mark expired function (for testing)
+
+    Returns:
+        InitializationResult with all jobs ready for ingestion phase
+    """
+    logger.info(f"Run {run.id}: Starting initialization phase")
+
+    # Step 1: Run extractors for all enabled companies
+    extractor_results = _run_extractors(settings)
+
+    # Step 2: Convert to typed structures and UPSERT
+    company_results: list[CompanyResult] = []
+
+    for company_name, extractor_result in extractor_results.items():
+        if extractor_result.status != "success":
+            logger.warning(f"Run {run.id}: Extractor failed for {company_name}: {extractor_result.error_message}")
+            company_results.append(CompanyResult(
+                company=company_name,
+                status="error",
+                error_message=extractor_result.error_message,
+            ))
+            continue
+
+        # Convert extractor jobs to typed JobData
+        # Extractor job format: {"id": "abc123", "title": "Engineer", "location": "NYC", "url": "https://..."}
+        # → JobData(identifier=JobIdentifier(company, external_id), url, title, location)
+        jobs = [
+            JobData.from_extractor_job(company_name, job)
+            for job in extractor_result.included_jobs
+        ]
+
+        # UPSERT jobs to database
+        _upsert_jobs(
+            db=db,
+            user_id=run.user_id,
+            run_id=run.id,
+            jobs=jobs,
+        )
+
+        company_results.append(CompanyResult(
+            company=company_name,
+            status="success",
+            jobs=jobs,
+        ))
+
+        logger.info(f"Run {run.id}: UPSERT {len(jobs)} jobs for {company_name}")
+
+    # Step 3: Mark expired jobs (not in current extraction results)
+    # UPSERT already set run_id for current jobs, so mark_expired_jobs
+    # uses run_id check to find jobs not updated in this run
+    jobs_expired = _mark_expired_jobs(
+        db=db,
+        user_id=run.user_id,
+        run_id=run.id,
+    )
+
+    # InitializationResult structure:
+    # {
+    #   user_id: 1,
+    #   run_id: 5,
+    #   companies: [
+    #     CompanyResult(company="google", status="success", jobs=[
+    #       JobData(identifier=JobIdentifier("google", "abc123"), url="https://...", title="Engineer", location="NYC"),
+    #       JobData(identifier=JobIdentifier("google", "def456"), url="https://...", title="Manager", location="SF"),
+    #     ]),
+    #     CompanyResult(company="amazon", status="error", error_message="Request timed out"),
+    #   ],
+    #   jobs_expired: 3,
+    #   total_jobs: 2,  # computed property: sum of successful company job counts
+    # }
+    result = InitializationResult(
+        user_id=run.user_id,
+        run_id=run.id,
+        companies=company_results,
+        jobs_expired=jobs_expired,
+    )
+
+    logger.info(f"Run {run.id}: Initialization complete - {result.total_jobs} jobs, {jobs_expired} expired")
+
+    return result
+
+
+def run_ingestion_phase(
+    db: Session,
+    run: IngestionRun,
+    init_result: InitializationResult,
+) -> IngestionResult:
+    """
+    Run ingestion phase: send jobs to SQS for crawling.
+
+    Args:
+        db: Database session
+        run: Ingestion run record
+        init_result: Result from initialization phase with all jobs
+
+    Returns:
+        IngestionResult with final job counts
+
+    TODO Phase 2I: Implement real ingestion logic:
+      1. Create CrawlMessage for each job using init_result.to_crawl_messages()
+      2. Send messages to SQS crawl queue
+      3. Return immediately (workers update DB async)
+    """
+    # ==========================================================================
+    # TEMPORARY MOCK - Phase 2G
+    # Simulates 30s processing, then marks all jobs as 'ready'
+    # Will be replaced with real SQS publishing in Phase 2I
+    # ==========================================================================
+    logger.info(f"Run {run.id}: Starting ingestion phase (30s mock)")
+    logger.info(f"Run {run.id}: Would send {len(init_result.to_crawl_messages())} messages to SQS")
+    time.sleep(30)
+
+    # Mark all pending jobs for this run as 'ready'
+    from models.job import JobStatus
+    db.execute(
+        text("""
+            UPDATE jobs
+            SET status = :ready_status, updated_at = :now
+            WHERE run_id = :run_id AND status = :pending_status
+        """),
+        {
+            "run_id": run.id,
+            "ready_status": JobStatus.READY,
+            "pending_status": JobStatus.PENDING,
+            "now": datetime.now(timezone.utc),
+        },
+    )
+    db.commit()
+
+    logger.info(f"Run {run.id}: Marked {init_result.total_jobs} jobs as ready (mock)")
+
+    return IngestionResult(
+        jobs_ready=init_result.total_jobs,
+        jobs_skipped=0,
+        jobs_expired=init_result.jobs_expired,
+        jobs_failed=0,
+    )
+
+
+def process_run(
+    db: Session,
+    run_id: int,
+    user_id: int,
+    # Dependency injection for testing
+    _get_run=get_run,
+    _update_run_status=update_run_status,
+    _refresh_run=refresh_run,
+    _get_user_enabled_settings=get_user_enabled_settings,
+    _run_initialization_phase=run_initialization_phase,
+    _run_ingestion_phase=run_ingestion_phase,
+) -> dict:
+    """
+    Main worker logic - process an ingestion run.
+
+    Args:
+        db: Database session
+        run_id: ID of the run to process
+        user_id: ID of the user who owns the run
+        _*: Dependency injection for DB operations (for testing)
+
+    Returns:
+        Status dict with run_id and final status
+    """
+    # Get the run record
+    run = _get_run(db, run_id)
+    if not run:
+        logger.error(f"Run {run_id} not found")
+        return {"error": f"Run {run_id} not found"}
+
+    # Check if run was aborted before we started
+    if run.status == RunStatus.ABORTED:
+        logger.info(f"Run {run_id} was aborted before worker started")
+        return {"run_id": run_id, "status": RunStatus.ABORTED}
+
+    # Update status: pending → initializing
+    _update_run_status(
+        db, run,
+        status=RunStatus.INITIALIZING,
+        started_at=datetime.now(timezone.utc),
+    )
+    logger.info(f"Run {run_id} status: {RunStatus.INITIALIZING}")
+
+    # Get enabled company settings
+    settings = _get_user_enabled_settings(db, user_id)
+    if not settings:
+        _update_run_status(
+            db, run,
+            status=RunStatus.ERROR,
+            error_message="No enabled companies configured",
+            finished_at=datetime.now(timezone.utc),
+        )
+        return {"run_id": run_id, "status": RunStatus.ERROR}
+
+    # =======================================================================
+    # INITIALIZATION PHASE
+    # =======================================================================
+    init_result = _run_initialization_phase(db, run, settings)
+
+    _update_run_status(
+        db, run,
+        status=run.status,
+        total_jobs=init_result.total_jobs,
+        jobs_expired=init_result.jobs_expired,
+    )
+    logger.info(f"Run {run_id}: Initialization complete - {len(settings)} companies, {init_result.total_jobs} jobs, {init_result.jobs_expired} expired")
+
+    # Check for abort before proceeding
+    _refresh_run(db, run)
+    if run.status == RunStatus.ABORTED:
+        logger.info(f"Run {run_id} was aborted during initialization")
+        return {"run_id": run_id, "status": RunStatus.ABORTED}
+
+    # Update status: initializing → ingesting
+    _update_run_status(db, run, status=RunStatus.INGESTING)
+    logger.info(f"Run {run_id} status: {RunStatus.INGESTING}")
+
+    # =======================================================================
+    # INGESTION PHASE
+    # =======================================================================
+    ingestion_result = _run_ingestion_phase(db, run, init_result)
+
+    # Check for abort after ingestion
+    _refresh_run(db, run)
+    if run.status == RunStatus.ABORTED:
+        logger.info(f"Run {run_id} was aborted during ingestion")
+        return {"run_id": run_id, "status": RunStatus.ABORTED}
+
+    # Finalize run with snapshot
+    _update_run_status(
+        db, run,
+        status=RunStatus.FINISHED,
+        finished_at=datetime.now(timezone.utc),
+        jobs_ready=ingestion_result.jobs_ready,
+        jobs_skipped=ingestion_result.jobs_skipped,
+        jobs_expired=ingestion_result.jobs_expired,
+        jobs_failed=ingestion_result.jobs_failed,
+    )
+
+    logger.info(f"Run {run_id} completed: status={RunStatus.FINISHED}, jobs_ready={ingestion_result.jobs_ready}")
+
+    return {
+        "run_id": run_id,
+        "status": RunStatus.FINISHED,
+        **ingestion_result.to_dict(),
+    }
+
+
+# =============================================================================
+# Lambda Handler
+# =============================================================================
+
+def handler(event: dict, context) -> dict:
+    """
+    Lambda handler for async ingestion worker.
+
+    Args:
+        event: {run_id: int, user_id: int}
+        context: Lambda context (unused)
+
+    Returns:
+        Status dict with run_id and final status
+    """
+    run_id = event.get("run_id")
+    user_id = event.get("user_id")
+
+    if not run_id or not user_id:
+        logger.error(f"Missing required fields: run_id={run_id}, user_id={user_id}")
+        return {"error": "Missing run_id or user_id"}
+
+    logger.info(f"Starting ingestion worker for run_id={run_id}, user_id={user_id}")
+
+    db = SessionLocal()
+    try:
+        return process_run(db, run_id, user_id)
+
+    except Exception as e:
+        logger.exception(f"Worker error for run {run_id}: {e}")
+
+        # Try to mark run as error
+        try:
+            run = get_run(db, run_id)
+            if run and run.status not in RunStatus.TERMINAL:
+                update_run_status(
+                    db, run,
+                    status=RunStatus.ERROR,
+                    error_message=str(e)[:500],  # Truncate long errors
+                    finished_at=datetime.now(timezone.utc),
+                )
+        except Exception:
+            logger.exception("Failed to update run status to error")
+
+        return {"run_id": run_id, "status": RunStatus.ERROR, "error": str(e)}
+
+    finally:
+        db.close()

@@ -53,6 +53,10 @@ Parameters:
     NoEcho: true
 
 Resources:
+
+  # ==========================================================================
+  # API Lambda - HTTP endpoints via API Gateway
+  # ==========================================================================
   JobHuntTrackerAPI:
     Type: AWS::Serverless::Function
     Properties:
@@ -60,6 +64,12 @@ Resources:
       CodeUri: .
       Handler: main.handler
       Description: FastAPI backend for Job Hunt Tracker
+      Policies:
+        - LambdaInvokePolicy:
+            FunctionName: !Ref IngestionWorker
+      Environment:
+        Variables:
+          WORKER_FUNCTION_NAME: !Ref IngestionWorker
       Events:
         HttpApiEvent:
           Type: HttpApi
@@ -74,6 +84,23 @@ Resources:
             Method: ANY
             ApiId: !Ref HttpApi
 
+  # ==========================================================================
+  # Worker Lambda - Async invoke for long-running ingestion (15 min timeout)
+  # ==========================================================================
+  IngestionWorker:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: IngestionWorker
+      CodeUri: .
+      Handler: workers.ingestion_worker.handler
+      Description: Async worker for job ingestion (15 min timeout)
+      Timeout: 900
+      MemorySize: 512
+      # No Events - invoked async by API Lambda, not by HTTP
+
+  # ==========================================================================
+  # API Gateway
+  # ==========================================================================
   HttpApi:
     Type: AWS::Serverless::HttpApi
     Properties:
@@ -98,9 +125,17 @@ Outputs:
     Value: !Sub "https://${HttpApi}.execute-api.${AWS::Region}.amazonaws.com/prod"
 
   FunctionName:
-    Description: Lambda function name
+    Description: API Lambda function name
     Value: !Ref JobHuntTrackerAPI
 
   FunctionArn:
-    Description: Lambda function ARN
+    Description: API Lambda function ARN
     Value: !GetAtt JobHuntTrackerAPI.Arn
+
+  WorkerFunctionName:
+    Description: Worker Lambda function name
+    Value: !Ref IngestionWorker
+
+  WorkerFunctionArn:
+    Description: Worker Lambda function ARN
+    Value: !GetAtt IngestionWorker.Arn

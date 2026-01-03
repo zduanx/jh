@@ -22,7 +22,7 @@ CFN_REGION=us-east-1
 CFN_CAPABILITIES=CAPABILITY_IAM
 
 # ============================================================================
-# Lambda Function Configuration
+# Lambda Function Configuration - API (HTTP triggers)
 # ============================================================================
 LAMBDA_FUNCTION_NAME=JobHuntTrackerAPI
 LAMBDA_FUNCTION_DESCRIPTION=FastAPI backend for Job Hunt Tracker
@@ -31,6 +31,15 @@ LAMBDA_TIMEOUT=30
 LAMBDA_MEMORY=512
 LAMBDA_RUNTIME=python3.13
 LAMBDA_CODE_URI=.
+
+# ============================================================================
+# Lambda Function Configuration - Worker (async invoke, no HTTP)
+# ============================================================================
+WORKER_FUNCTION_NAME=IngestionWorker
+WORKER_FUNCTION_DESCRIPTION=Async worker for job ingestion (15 min timeout)
+WORKER_HANDLER=workers.ingestion_worker.handler
+WORKER_TIMEOUT=900
+WORKER_MEMORY=512
 
 # ============================================================================
 # API Gateway Configuration

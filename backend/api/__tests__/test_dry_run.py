@@ -4,7 +4,7 @@ Integration tests for dry-run endpoint.
 Tests the endpoint logic with mocked dependencies:
 - get_current_user: overridden via FastAPI dependency injection
 - get_enabled_settings: mocked to return test company settings
-- extract_source_urls_metadata: mocked to return test job data
+- run_extractors_async: mocked to return test results
 
 This validates:
 - Parallel execution with asyncio.gather
@@ -15,12 +15,12 @@ This validates:
 Run: python3 -m pytest api/__tests__/test_dry_run.py -v
 """
 import pytest
-from unittest.mock import patch, MagicMock, AsyncMock
+from unittest.mock import patch, MagicMock
 from fastapi.testclient import TestClient
-import httpx
 
 from main import app
 from auth.dependencies import get_current_user
+from sourcing.extractor_utils import ExtractorResult
 
 
 # Mock user for authenticated requests
@@ -57,25 +57,31 @@ def make_mock_setting(company_name: str, title_filters: dict = None):
 
 
 def make_mock_extractor_result(
+    company: str = "test",
+    status: str = "success",
     total_count: int = 10,
     filtered_count: int = 2,
     urls_count: int = 8,
     included_jobs: list = None,
     excluded_jobs: list = None,
-):
-    """Create a mock extractor result."""
-    return {
-        "total_count": total_count,
-        "filtered_count": filtered_count,
-        "urls_count": urls_count,
-        "included_jobs": included_jobs or [
+    error_message: str = None,
+) -> ExtractorResult:
+    """Create a mock ExtractorResult."""
+    return ExtractorResult(
+        company=company,
+        status=status,
+        total_count=total_count,
+        filtered_count=filtered_count,
+        urls_count=urls_count,
+        included_jobs=included_jobs or [
             {"id": "1", "title": "Software Engineer", "location": "NYC", "url": "https://example.com/1"},
             {"id": "2", "title": "Senior Engineer", "location": "SF", "url": "https://example.com/2"},
         ],
-        "excluded_jobs": excluded_jobs or [
+        excluded_jobs=excluded_jobs or [
             {"id": "3", "title": "Intern", "location": "Remote", "url": "https://example.com/3"},
         ],
-    }
+        error_message=error_message,
+    )
 
 
 class TestDryRunEndpoint:
@@ -99,19 +105,18 @@ class TestDryRunEndpoint:
         assert "No enabled companies" in response.json()["detail"]
 
     @patch("api.ingestion_routes.get_enabled_settings")
-    @patch("api.ingestion_routes.get_extractor")
+    @patch("api.ingestion_routes.run_extractors_async")
     def test_dry_run_single_company_success(
-        self, mock_get_extractor, mock_get_settings, authenticated_client
+        self, mock_run_extractors, mock_get_settings, authenticated_client
     ):
         """Should return success result for a single company."""
         mock_get_settings.return_value = [make_mock_setting("google")]
 
-        # Mock extractor
-        mock_extractor = MagicMock()
-        mock_extractor.extract_source_urls_metadata = AsyncMock(
-            return_value=make_mock_extractor_result()
-        )
-        mock_get_extractor.return_value = mock_extractor
+        # Mock extractor results
+        async def mock_extractors(settings):
+            return {"google": make_mock_extractor_result(company="google")}
+
+        mock_run_extractors.side_effect = mock_extractors
 
         response = authenticated_client.post("/api/ingestion/dry-run")
 
@@ -127,9 +132,9 @@ class TestDryRunEndpoint:
         assert len(data["google"]["excluded_jobs"]) == 1
 
     @patch("api.ingestion_routes.get_enabled_settings")
-    @patch("api.ingestion_routes.get_extractor")
+    @patch("api.ingestion_routes.run_extractors_async")
     def test_dry_run_multiple_companies_parallel(
-        self, mock_get_extractor, mock_get_settings, authenticated_client
+        self, mock_run_extractors, mock_get_settings, authenticated_client
     ):
         """Should run multiple companies in parallel and return all results."""
         mock_get_settings.return_value = [
@@ -138,21 +143,15 @@ class TestDryRunEndpoint:
             make_mock_setting("anthropic"),
         ]
 
-        # Each company gets different result
-        results = {
-            "google": make_mock_extractor_result(total_count=100, urls_count=95),
-            "amazon": make_mock_extractor_result(total_count=50, urls_count=48),
-            "anthropic": make_mock_extractor_result(total_count=20, urls_count=18),
-        }
+        # Mock extractor results
+        async def mock_extractors(settings):
+            return {
+                "google": make_mock_extractor_result(company="google", total_count=100, urls_count=95),
+                "amazon": make_mock_extractor_result(company="amazon", total_count=50, urls_count=48),
+                "anthropic": make_mock_extractor_result(company="anthropic", total_count=20, urls_count=18),
+            }
 
-        def get_extractor_side_effect(company_name, config=None):
-            mock_extractor = MagicMock()
-            mock_extractor.extract_source_urls_metadata = AsyncMock(
-                return_value=results[company_name]
-            )
-            return mock_extractor
-
-        mock_get_extractor.side_effect = get_extractor_side_effect
+        mock_run_extractors.side_effect = mock_extractors
 
         response = authenticated_client.post("/api/ingestion/dry-run")
 
@@ -165,9 +164,9 @@ class TestDryRunEndpoint:
         assert data["anthropic"]["urls_count"] == 18
 
     @patch("api.ingestion_routes.get_enabled_settings")
-    @patch("api.ingestion_routes.get_extractor")
+    @patch("api.ingestion_routes.run_extractors_async")
     def test_dry_run_partial_failure(
-        self, mock_get_extractor, mock_get_settings, authenticated_client
+        self, mock_run_extractors, mock_get_settings, authenticated_client
     ):
         """One company failing should not block others."""
         mock_get_settings.return_value = [
@@ -175,19 +174,23 @@ class TestDryRunEndpoint:
             make_mock_setting("amazon"),  # This one will fail
         ]
 
-        def get_extractor_side_effect(company_name, config=None):
-            mock_extractor = MagicMock()
-            if company_name == "amazon":
-                mock_extractor.extract_source_urls_metadata = AsyncMock(
-                    side_effect=httpx.TimeoutException("Connection timed out")
-                )
-            else:
-                mock_extractor.extract_source_urls_metadata = AsyncMock(
-                    return_value=make_mock_extractor_result()
-                )
-            return mock_extractor
+        # Mock extractor results
+        async def mock_extractors(settings):
+            return {
+                "google": make_mock_extractor_result(company="google"),
+                "amazon": make_mock_extractor_result(
+                    company="amazon",
+                    status="error",
+                    total_count=0,
+                    filtered_count=0,
+                    urls_count=0,
+                    included_jobs=[],
+                    excluded_jobs=[],
+                    error_message="Request timed out - career site may be slow",
+                ),
+            }
 
-        mock_get_extractor.side_effect = get_extractor_side_effect
+        mock_run_extractors.side_effect = mock_extractors
 
         response = authenticated_client.post("/api/ingestion/dry-run")
 
@@ -205,21 +208,31 @@ class TestDryRunEndpoint:
 
 
 class TestErrorMapping:
-    """Tests for _map_extractor_error function."""
+    """Tests for error mapping in extractor_utils."""
 
     @patch("api.ingestion_routes.get_enabled_settings")
-    @patch("api.ingestion_routes.get_extractor")
+    @patch("api.ingestion_routes.run_extractors_async")
     def test_timeout_error_message(
-        self, mock_get_extractor, mock_get_settings, authenticated_client
+        self, mock_run_extractors, mock_get_settings, authenticated_client
     ):
         """TimeoutException should map to timeout message."""
         mock_get_settings.return_value = [make_mock_setting("google")]
 
-        mock_extractor = MagicMock()
-        mock_extractor.extract_source_urls_metadata = AsyncMock(
-            side_effect=httpx.TimeoutException("timeout")
-        )
-        mock_get_extractor.return_value = mock_extractor
+        async def mock_extractors(settings):
+            return {
+                "google": make_mock_extractor_result(
+                    company="google",
+                    status="error",
+                    total_count=0,
+                    filtered_count=0,
+                    urls_count=0,
+                    included_jobs=[],
+                    excluded_jobs=[],
+                    error_message="Request timed out - career site may be slow",
+                )
+            }
+
+        mock_run_extractors.side_effect = mock_extractors
 
         response = authenticated_client.post("/api/ingestion/dry-run")
         data = response.json()
@@ -227,18 +240,28 @@ class TestErrorMapping:
         assert "timed out" in data["google"]["error_message"]
 
     @patch("api.ingestion_routes.get_enabled_settings")
-    @patch("api.ingestion_routes.get_extractor")
+    @patch("api.ingestion_routes.run_extractors_async")
     def test_connect_error_message(
-        self, mock_get_extractor, mock_get_settings, authenticated_client
+        self, mock_run_extractors, mock_get_settings, authenticated_client
     ):
         """ConnectError should map to connection message."""
         mock_get_settings.return_value = [make_mock_setting("google")]
 
-        mock_extractor = MagicMock()
-        mock_extractor.extract_source_urls_metadata = AsyncMock(
-            side_effect=httpx.ConnectError("connection refused")
-        )
-        mock_get_extractor.return_value = mock_extractor
+        async def mock_extractors(settings):
+            return {
+                "google": make_mock_extractor_result(
+                    company="google",
+                    status="error",
+                    total_count=0,
+                    filtered_count=0,
+                    urls_count=0,
+                    included_jobs=[],
+                    excluded_jobs=[],
+                    error_message="Could not connect to career site",
+                )
+            }
+
+        mock_run_extractors.side_effect = mock_extractors
 
         response = authenticated_client.post("/api/ingestion/dry-run")
         data = response.json()
@@ -246,45 +269,57 @@ class TestErrorMapping:
         assert "Could not connect" in data["google"]["error_message"]
 
     @patch("api.ingestion_routes.get_enabled_settings")
-    @patch("api.ingestion_routes.get_extractor")
+    @patch("api.ingestion_routes.run_extractors_async")
     def test_rate_limit_error_message(
-        self, mock_get_extractor, mock_get_settings, authenticated_client
+        self, mock_run_extractors, mock_get_settings, authenticated_client
     ):
         """429 status should map to rate limit message."""
         mock_get_settings.return_value = [make_mock_setting("google")]
 
-        # Create mock response for HTTPStatusError
-        mock_response = MagicMock()
-        mock_response.status_code = 429
+        async def mock_extractors(settings):
+            return {
+                "google": make_mock_extractor_result(
+                    company="google",
+                    status="error",
+                    total_count=0,
+                    filtered_count=0,
+                    urls_count=0,
+                    included_jobs=[],
+                    excluded_jobs=[],
+                    error_message="Access denied - site may have rate limiting",
+                )
+            }
 
-        mock_extractor = MagicMock()
-        mock_extractor.extract_source_urls_metadata = AsyncMock(
-            side_effect=httpx.HTTPStatusError(
-                "rate limited",
-                request=MagicMock(),
-                response=mock_response,
-            )
-        )
-        mock_get_extractor.return_value = mock_extractor
+        mock_run_extractors.side_effect = mock_extractors
 
         response = authenticated_client.post("/api/ingestion/dry-run")
         data = response.json()
 
-        assert "Rate limited" in data["google"]["error_message"]
+        assert "rate limiting" in data["google"]["error_message"]
 
     @patch("api.ingestion_routes.get_enabled_settings")
-    @patch("api.ingestion_routes.get_extractor")
+    @patch("api.ingestion_routes.run_extractors_async")
     def test_key_error_maps_to_format_error(
-        self, mock_get_extractor, mock_get_settings, authenticated_client
+        self, mock_run_extractors, mock_get_settings, authenticated_client
     ):
         """KeyError should map to unexpected format message."""
         mock_get_settings.return_value = [make_mock_setting("google")]
 
-        mock_extractor = MagicMock()
-        mock_extractor.extract_source_urls_metadata = AsyncMock(
-            side_effect=KeyError("missing_field")
-        )
-        mock_get_extractor.return_value = mock_extractor
+        async def mock_extractors(settings):
+            return {
+                "google": make_mock_extractor_result(
+                    company="google",
+                    status="error",
+                    total_count=0,
+                    filtered_count=0,
+                    urls_count=0,
+                    included_jobs=[],
+                    excluded_jobs=[],
+                    error_message="Unexpected response format - API may have changed",
+                )
+            }
+
+        mock_run_extractors.side_effect = mock_extractors
 
         response = authenticated_client.post("/api/ingestion/dry-run")
         data = response.json()

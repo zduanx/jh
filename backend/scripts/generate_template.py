@@ -102,7 +102,7 @@ def parse_env_local_comments(filepath):
 def generate_template_yaml(sam_config, env_metadata, static_env_vars):
     """Generate template.yaml content."""
 
-    # Extract configuration
+    # Extract API Lambda configuration
     function_name = sam_config.get('LAMBDA_FUNCTION_NAME', 'JobHuntTrackerAPI')
     function_desc = sam_config.get('LAMBDA_FUNCTION_DESCRIPTION', 'FastAPI backend for Job Hunt Tracker')
     handler = sam_config.get('LAMBDA_HANDLER', 'main.handler')
@@ -112,6 +112,13 @@ def generate_template_yaml(sam_config, env_metadata, static_env_vars):
     code_uri = sam_config.get('LAMBDA_CODE_URI', '.')
     api_stage = sam_config.get('API_STAGE_NAME', 'prod')
     cors_origins = sam_config.get('API_CORS_ALLOW_ORIGINS', 'http://localhost:3000,https://zduan-job.vercel.app')
+
+    # Extract Worker Lambda configuration
+    worker_name = sam_config.get('WORKER_FUNCTION_NAME', 'IngestionWorker')
+    worker_desc = sam_config.get('WORKER_FUNCTION_DESCRIPTION', 'Async worker for job ingestion')
+    worker_handler = sam_config.get('WORKER_HANDLER', 'ingestion_worker.handler')
+    worker_timeout = sam_config.get('WORKER_TIMEOUT', '900')
+    worker_memory = sam_config.get('WORKER_MEMORY', '512')
 
     # Split CORS origins for YAML list
     cors_origin_list = [f'"{origin.strip()}"' for origin in cors_origins.split(',')]
@@ -172,6 +179,10 @@ def generate_template_yaml(sam_config, env_metadata, static_env_vars):
     # Add Resources section
     yaml_lines.extend([
         "Resources:",
+        "",
+        "  # ==========================================================================",
+        "  # API Lambda - HTTP endpoints via API Gateway",
+        "  # ==========================================================================",
         f"  {function_name}:",
         "    Type: AWS::Serverless::Function",
         "    Properties:",
@@ -179,6 +190,12 @@ def generate_template_yaml(sam_config, env_metadata, static_env_vars):
         f"      CodeUri: {code_uri}",
         f"      Handler: {handler}",
         f"      Description: {function_desc}",
+        "      Policies:",
+        "        - LambdaInvokePolicy:",
+        f"            FunctionName: !Ref {worker_name}",
+        "      Environment:",
+        "        Variables:",
+        f"          WORKER_FUNCTION_NAME: !Ref {worker_name}",
         "      Events:",
         "        HttpApiEvent:",
         "          Type: HttpApi",
@@ -193,6 +210,23 @@ def generate_template_yaml(sam_config, env_metadata, static_env_vars):
         "            Method: ANY",
         "            ApiId: !Ref HttpApi",
         "",
+        "  # ==========================================================================",
+        "  # Worker Lambda - Async invoke for long-running ingestion (15 min timeout)",
+        "  # ==========================================================================",
+        f"  {worker_name}:",
+        "    Type: AWS::Serverless::Function",
+        "    Properties:",
+        f"      FunctionName: {worker_name}",
+        f"      CodeUri: {code_uri}",
+        f"      Handler: {worker_handler}",
+        f"      Description: {worker_desc}",
+        f"      Timeout: {worker_timeout}",
+        f"      MemorySize: {worker_memory}",
+        "      # No Events - invoked async by API Lambda, not by HTTP",
+        "",
+        "  # ==========================================================================",
+        "  # API Gateway",
+        "  # ==========================================================================",
         "  HttpApi:",
         "    Type: AWS::Serverless::HttpApi",
         "    Properties:",
@@ -222,12 +256,20 @@ def generate_template_yaml(sam_config, env_metadata, static_env_vars):
         '    Value: !Sub "https://${HttpApi}.execute-api.${AWS::Region}.amazonaws.com/' + api_stage + '"',
         "",
         "  FunctionName:",
-        "    Description: Lambda function name",
+        "    Description: API Lambda function name",
         f"    Value: !Ref {function_name}",
         "",
         "  FunctionArn:",
-        "    Description: Lambda function ARN",
+        "    Description: API Lambda function ARN",
         f"    Value: !GetAtt {function_name}.Arn",
+        "",
+        "  WorkerFunctionName:",
+        "    Description: Worker Lambda function name",
+        f"    Value: !Ref {worker_name}",
+        "",
+        "  WorkerFunctionArn:",
+        "    Description: Worker Lambda function ARN",
+        f"    Value: !GetAtt {worker_name}.Arn",
         ""
     ])
 

@@ -9,6 +9,7 @@ Endpoints:
 - GET  /api/ingestion/current-run     Check for active ingestion run (for page refresh)
 - POST /api/ingestion/start           Start ingestion run, returns run_id
 - POST /api/ingestion/abort           Abort an active ingestion run
+- GET  /api/ingestion/progress/{run_id}  SSE endpoint for real-time progress updates
 
 Interactive API docs:
 - Swagger UI: http://localhost:8000/docs
@@ -20,23 +21,26 @@ Running locally:
 """
 
 import asyncio
+import json
 import logging
+import os
 from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, field_validator
 from typing import Optional, Literal, Any
 from datetime import datetime
 from sqlalchemy.orm import Session
-import httpx
-from auth.dependencies import get_current_user
-from db.session import get_db
+import boto3
+from auth.dependencies import get_current_user, get_current_user_from_token
+from db.session import get_db, SessionLocal
 from db.company_settings_service import (
     get_user_settings,
     get_enabled_settings,
     batch_operations,
 )
-from extractors.registry import list_companies, get_extractor
-from extractors.config import TitleFilters
+from extractors.registry import list_companies
 from models.ingestion_run import IngestionRun, RunStatus
+from sourcing.extractor_utils import run_extractors_async
 
 logger = logging.getLogger(__name__)
 
@@ -247,62 +251,6 @@ class CompanyDryRunResult(BaseModel):
     error_message: Optional[str] = None
 
 
-def _map_extractor_error(e: Exception) -> str:
-    """Map exception to user-friendly error message."""
-    if isinstance(e, httpx.TimeoutException):
-        return "Request timed out - career site may be slow"
-    elif isinstance(e, httpx.ConnectError):
-        return "Could not connect to career site"
-    elif isinstance(e, httpx.HTTPStatusError):
-        status_code = e.response.status_code
-        if status_code == 403:
-            return "Access denied - site may be blocking requests"
-        elif status_code == 429:
-            return "Rate limited - try again later"
-        elif status_code >= 500:
-            return "Career site is temporarily unavailable"
-        else:
-            return f"HTTP error: {status_code}"
-    elif isinstance(e, (KeyError, TypeError, ValueError)):
-        return "Unexpected response format - API may have changed"
-    else:
-        # Generic fallback - don't expose internal details
-        return f"Extraction failed: {type(e).__name__}"
-
-
-async def _run_extractor(company_name: str, title_filters: dict) -> dict:
-    """
-    Run extractor for a single company.
-
-    Returns dict with status and results or error.
-    """
-    try:
-        config = TitleFilters.from_dict(title_filters)
-        extractor = get_extractor(company_name, config=config)
-        result = await extractor.extract_source_urls_metadata()
-
-        return {
-            "status": "success",
-            "total_count": result["total_count"],
-            "filtered_count": result["filtered_count"],
-            "urls_count": result["urls_count"],
-            "included_jobs": result["included_jobs"],
-            "excluded_jobs": result["excluded_jobs"],
-            "error_message": None,
-        }
-    except Exception as e:
-        logger.exception(f"Extractor failed for {company_name}: {e}")
-        return {
-            "status": "error",
-            "total_count": 0,
-            "filtered_count": 0,
-            "urls_count": 0,
-            "included_jobs": [],
-            "excluded_jobs": [],
-            "error_message": _map_extractor_error(e),
-        }
-
-
 @router.post("/dry-run", response_model=dict[str, CompanyDryRunResult])
 async def dry_run(
     current_user: dict = Depends(get_current_user),
@@ -360,33 +308,21 @@ async def dry_run(
             detail="No enabled companies configured. Add companies in Stage 1."
         )
 
-    # Run extractors in parallel using asyncio.gather
-    tasks = [
-        _run_extractor(setting.company_name, setting.title_filters)
-        for setting in settings
-    ]
-    company_names = [setting.company_name for setting in settings]
+    # Run extractors in parallel using shared utility
+    extractor_results = await run_extractors_async(settings)
 
-    # Execute all tasks concurrently
-    results_list = await asyncio.gather(*tasks, return_exceptions=True)
-
-    # Build results dict
+    # Convert ExtractorResult dataclasses to dicts for API response
     results: dict[str, Any] = {}
-    for company_name, result in zip(company_names, results_list):
-        if isinstance(result, Exception):
-            # Should not happen since _run_extractor catches exceptions
-            logger.exception(f"Unexpected error for {company_name}: {result}")
-            results[company_name] = {
-                "status": "error",
-                "total_count": 0,
-                "filtered_count": 0,
-                "urls_count": 0,
-                "included_jobs": [],
-                "excluded_jobs": [],
-                "error_message": "Unexpected error occurred",
-            }
-        else:
-            results[company_name] = result
+    for company_name, result in extractor_results.items():
+        results[company_name] = {
+            "status": result.status,
+            "total_count": result.total_count,
+            "filtered_count": result.filtered_count,
+            "urls_count": result.urls_count,
+            "included_jobs": result.included_jobs,
+            "excluded_jobs": result.excluded_jobs,
+            "error_message": result.error_message,
+        }
 
     return results
 
@@ -458,7 +394,8 @@ async def start_ingestion(
     """
     Start a new ingestion run.
 
-    Creates an ingestion_runs record with status='pending' and returns the run_id.
+    Creates an ingestion_runs record with status='pending', triggers the async
+    worker Lambda, and returns the run_id immediately.
     Frontend uses this run_id to connect to the SSE progress endpoint.
 
     Auth: JWT required
@@ -493,8 +430,39 @@ async def start_ingestion(
 
     logger.info(f"Created ingestion run {run.id} for user {user_id}")
 
-    # TODO: Trigger async initialization job (Phase 2F)
-    # For now, just return the run_id
+    # Trigger async worker Lambda
+    worker_function_name = os.environ.get("WORKER_FUNCTION_NAME")
+    if worker_function_name:
+        try:
+            lambda_client = boto3.client("lambda")
+            payload = json.dumps({"run_id": run.id, "user_id": user_id})
+
+            # InvocationType='Event' = async invoke (fire-and-forget)
+            # Returns immediately with 202 Accepted
+            response = lambda_client.invoke(
+                FunctionName=worker_function_name,
+                InvocationType="Event",
+                Payload=payload,
+            )
+
+            logger.info(
+                f"Invoked worker {worker_function_name} for run {run.id}, "
+                f"StatusCode={response.get('StatusCode')}"
+            )
+        except Exception as e:
+            # Log but don't fail - run record exists, can be recovered
+            logger.exception(f"Failed to invoke worker for run {run.id}: {e}")
+            # Mark run as error so it can be retried
+            run.status = RunStatus.ERROR
+            run.error_message = f"Failed to start worker: {str(e)[:200]}"
+            db.commit()
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to start ingestion worker"
+            )
+    else:
+        # Local development - no worker Lambda
+        logger.warning(f"WORKER_FUNCTION_NAME not set, run {run.id} will stay pending")
 
     return StartIngestionResponse(run_id=run.id)
 
@@ -568,3 +536,131 @@ async def abort_ingestion(
     logger.info(f"Aborted ingestion run {run.id} for user {user_id}")
 
     return AbortResponse(success=True, message=f"Run {run_id} aborted")
+
+
+# =============================================================================
+# SSE Progress Endpoint
+# =============================================================================
+
+class ProgressEvent(BaseModel):
+    """SSE progress event data."""
+    run_id: int
+    status: str
+    total_jobs: Optional[int] = None
+    jobs_ready: int = 0
+    jobs_skipped: int = 0
+    jobs_expired: int = 0
+    jobs_failed: int = 0
+    error_message: Optional[str] = None
+
+
+async def _progress_generator(run_id: int, user_id: int):
+    """
+    Generator for SSE progress events.
+
+    Polls DB every 2 seconds and emits current state.
+    Stops when run reaches terminal status.
+    """
+    db = SessionLocal()
+    try:
+        while True:
+            # Fetch current run state
+            run = db.query(IngestionRun).filter(IngestionRun.id == run_id).first()
+
+            if not run:
+                # Run was deleted
+                yield f"data: {json.dumps({'error': 'Run not found'})}\n\n"
+                break
+
+            # Security check: verify user owns this run
+            if run.user_id != user_id:
+                yield f"data: {json.dumps({'error': 'Not authorized'})}\n\n"
+                break
+
+            # Build progress event
+            event = ProgressEvent(
+                run_id=run.id,
+                status=run.status,
+                total_jobs=run.total_jobs,
+                jobs_ready=run.jobs_ready or 0,
+                jobs_skipped=run.jobs_skipped or 0,
+                jobs_expired=run.jobs_expired or 0,
+                jobs_failed=run.jobs_failed or 0,
+                error_message=run.error_message,
+            )
+
+            # Emit event
+            yield f"data: {event.model_dump_json()}\n\n"
+
+            # Stop if terminal status
+            if run.status in RunStatus.TERMINAL:
+                break
+
+            # Wait before next poll
+            await asyncio.sleep(2)
+
+            # Refresh session to see latest DB changes
+            db.expire_all()
+
+    except Exception as e:
+        logger.exception(f"SSE generator error for run {run_id}: {e}")
+        yield f"data: {json.dumps({'error': 'Server error'})}\n\n"
+    finally:
+        db.close()
+
+
+@router.get("/progress/{run_id}")
+async def get_progress(
+    run_id: int,
+    token: str,
+):
+    """
+    SSE endpoint for real-time ingestion progress updates.
+
+    Streams progress events every 2 seconds until the run reaches
+    a terminal state (finished, error, aborted).
+
+    Auth: JWT token must be passed as query parameter (?token=xxx)
+    because EventSource API cannot send Authorization headers.
+
+    Args:
+        run_id: Path parameter - the run to monitor
+        token: Query parameter - JWT token for authentication
+
+    Returns:
+        StreamingResponse with text/event-stream content type
+
+    Example:
+        // Frontend usage
+        const eventSource = new EventSource(
+            `/api/ingestion/progress/123?token=${jwtToken}`
+        );
+
+        eventSource.onmessage = (event) => {
+            const data = JSON.parse(event.data);
+            console.log('Progress:', data);
+            // data = { run_id, status, total_jobs, jobs_ready, ... }
+        };
+
+        eventSource.onerror = () => {
+            eventSource.close();
+        };
+
+    Event format (SSE):
+        data: {"run_id": 123, "status": "ingesting", "total_jobs": 50, "jobs_ready": 10, ...}
+
+        data: {"run_id": 123, "status": "finished", "total_jobs": 50, "jobs_ready": 48, ...}
+    """
+    # Authenticate using query param token
+    current_user = get_current_user_from_token(token)
+    user_id = current_user["user_id"]
+
+    return StreamingResponse(
+        _progress_generator(run_id, user_id),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",  # Disable nginx buffering
+        },
+    )
