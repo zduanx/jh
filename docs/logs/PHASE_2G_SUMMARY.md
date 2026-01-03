@@ -1,30 +1,49 @@
-# Phase 2G: Async Worker Lambda + SSE Progress
+# Phase 2G: Worker Lambda
 
-**Status**: 📋 Planning
-**Date**: TBD
-**Goal**: Async Lambda worker for job initialization + SSE endpoint for real-time progress
+**Status**: 🔧 In Progress
+**Date**: January 1, 2026
+**Goal**: Async Worker Lambda for job initialization and mock ingestion
 
 ---
 
 ## Overview
 
-Phase 2G adds the async processing layer between the `/start` endpoint and real-time progress display. The API Lambda triggers a worker Lambda asynchronously, which handles URL sourcing and job record creation. An SSE endpoint provides real-time progress updates to the frontend.
+Phase 2G adds the async processing layer between the `/start` endpoint and job management. The API Lambda triggers a Worker Lambda asynchronously, which handles URL sourcing and job record creation.
 
 **Key insight**: Lambda async invoke (`InvocationType='Event'`) returns immediately while the worker runs independently for up to 15 minutes. This avoids API Gateway's 29-second timeout.
+
+**Prerequisite**: Phase 2F must be complete (jobs table schema + run lifecycle endpoints).
 
 **Included in this phase**:
 - Worker Lambda (async invoke, 15 min timeout)
 - Job UPSERT from dry-run results
 - Expired job detection
-- SSE `/progress/{run_id}` endpoint
-- Mock ingestion (1 min wait → all jobs ready)
-- Frontend SSE connection
+- Mock ingestion (30s wait → all jobs ready)
 
 **Explicitly excluded** (deferred to Phase 2H):
-- Real job crawling (just mock status updates)
-- SQS queues
-- S3 storage for raw HTML
-- SimHash deduplication
+- SSE `/progress/{run_id}` endpoint
+- Frontend SSE connection
+- Real-time progress display
+
+---
+
+## Key Achievements
+
+### 1. Worker Lambda
+- New Lambda function triggered asynchronously from `/start` endpoint
+- 15-minute timeout (vs 29s API Gateway limit)
+- Processes jobs independently without blocking API response
+- Reference: [AWS Lambda Async Invoke](https://docs.aws.amazon.com/lambda/latest/dg/invocation-async.html)
+
+### 2. Job UPSERT Logic
+- PostgreSQL `ON CONFLICT DO UPDATE` for atomic insert-or-update
+- New jobs: Insert with `status='pending'`
+- Existing jobs: Update `run_id`, reset status to `'pending'`
+- Reference: [PostgreSQL UPSERT](https://www.postgresql.org/docs/current/sql-insert.html#SQL-ON-CONFLICT)
+
+### 3. Expired Job Detection
+- Jobs not in current extraction results marked as `'expired'`
+- Tracks when jobs are removed from company career pages
 
 ---
 
@@ -41,95 +60,95 @@ Worker Lambda (async, up to 15 min)
     ├─> Run extractors, UPSERT jobs
     ├─> Mark expired jobs
     ├─> status = 'ingesting'
-    ├─> Mock wait (1 min) → all jobs 'ready'
+    ├─> Mock wait (30s) → all jobs 'ready'
     └─> status = 'finished', write snapshot
-
-GET /progress/{run_id} (SSE)
-    └─> Poll jobs table every 3s
-    └─> Emit counts until terminal status
 ```
 
 ---
 
-## Key Components
+## Highlights
 
-### 1. Worker Lambda
+### Worker Lifecycle
 
-New Lambda function in SAM template:
-- **Trigger**: Async invoke from API Lambda (no API Gateway event)
-- **Timeout**: 15 minutes (vs 29s for API endpoints)
-- **Permissions**: DB access, no public endpoint
-
-Worker receives `{run_id, user_id}` and:
-1. Updates run status through lifecycle
-2. Runs extractors (reuses dry-run logic)
+Worker receives `{run_id, user_id}` payload and:
+1. Updates run status: `pending` → `initializing`
+2. Runs extractors (reuses dry-run logic from Phase 2E)
 3. UPSERTs job records to DB
 4. Marks jobs not in results as expired
-5. Mocks ingestion by waiting, then marking all ready
-6. Finalizes run with snapshot counts
+5. Updates run status: `initializing` → `ingesting`
+6. Mocks ingestion by waiting 30s, then marking all jobs `'ready'`
+7. Finalizes run with snapshot counts, status → `finished`
 
-### 2. Updated /start Endpoint
+### UPSERT SQL Pattern
 
-Add async invoke after creating run record:
-- Get worker function name from env var
-- Call `lambda.invoke()` with `InvocationType='Event'`
-- Return immediately with run_id
+```sql
+INSERT INTO jobs (user_id, company, external_id, title, url, status, run_id)
+VALUES ($1, $2, $3, $4, $5, 'pending', $6)
+ON CONFLICT (user_id, company, external_id) DO UPDATE SET
+    run_id = EXCLUDED.run_id,
+    status = 'pending',
+    updated_at = NOW();
+```
 
-### 3. SSE Progress Endpoint
+### Expired Job Detection
 
-`GET /progress/{run_id}`:
-- Returns `text/event-stream`
-- Polls job counts every 3 seconds
-- Emits `progress` events with status + counts
-- Emits `complete` event when run reaches terminal status
-- Handles API Gateway's 29s limit via client reconnection
-
-### 4. Job UPSERT Logic
-
-PostgreSQL `ON CONFLICT DO UPDATE`:
-- New jobs: Insert with status='pending'
-- Existing jobs: Update run_id, reset status to 'pending'
-- Jobs not in results: Mark as 'expired'
-
-### 5. Frontend SSE Connection
-
-EventSource in Stage3Progress:
-- Connect to `/progress/{run_id}`
-- Update status badge and counts on each event
-- Handle reconnection on disconnect
-- Navigate to results on completion
+After UPSERT, mark jobs not in current results:
+```sql
+UPDATE jobs SET status = 'expired', updated_at = NOW()
+WHERE user_id = $1 AND run_id != $2 AND status != 'expired';
+```
 
 ---
 
-## Infrastructure Changes
+## Testing & Validation
 
-**SAM template additions**:
-- `IngestionWorkerFunction` - New Lambda (15 min timeout)
-- IAM policy for API Lambda to invoke worker
-- Environment variable for worker function name
+**Manual Testing**:
+- Start ingestion → Verify worker invoked asynchronously
+- Check jobs table → Verify UPSERT creates/updates records
+- Run twice → Verify existing jobs get updated run_id
+- Remove company → Verify jobs marked as expired
 
-**No new AWS resources** (queues, S3 added in Phase 2H)
+**Automated Testing**:
+- Future: Worker unit tests
+- Future: Integration tests for UPSERT logic
 
 ---
 
 ## Next Steps → Phase 2H
 
-Phase 2H replaces mock with real infrastructure:
-- SQS queues for job distribution
-- Crawler Lambda for fetching HTML
-- Extractor Lambda for parsing content
-- S3 storage for raw HTML
-- SimHash deduplication
+Phase 2H adds real-time progress display:
+- SSE `/progress/{run_id}` endpoint
+- Frontend EventSource connection (Stage3Progress)
+- Full state + diff update protocol
+- Reconnection handling
+
+**Target**: Complete end-to-end progress monitoring
+
+---
+
+## File Structure
+
+```
+backend/
+├── workers/
+│   └── ingestion_worker.py      # Worker Lambda handler
+├── api/
+│   └── ingestion_routes.py      # Updated /start with async invoke
+└── template.yaml                # SAM template with IngestionWorkerFunction
+```
+
+**Key Files**:
+- [ingestion_worker.py](../../backend/workers/ingestion_worker.py) - Worker Lambda implementation
+- [ingestion_routes.py](../../backend/api/ingestion_routes.py) - /start endpoint with async invoke
 
 ---
 
 ## References
 
 **External Documentation**:
-- [AWS Lambda Async Invoke](https://docs.aws.amazon.com/lambda/latest/dg/invocation-async.html)
-- [SSE EventSource API](https://developer.mozilla.org/en-US/docs/Web/API/EventSource)
-- [PostgreSQL UPSERT](https://www.postgresql.org/docs/current/sql-insert.html#SQL-ON-CONFLICT)
+- [AWS Lambda Async Invoke](https://docs.aws.amazon.com/lambda/latest/dg/invocation-async.html) - Async invocation pattern
+- [PostgreSQL UPSERT](https://www.postgresql.org/docs/current/sql-insert.html#SQL-ON-CONFLICT) - ON CONFLICT clause
 
 **Internal Documentation**:
-- [PHASE_2F_SUMMARY.md](./PHASE_2F_SUMMARY.md) - Run lifecycle endpoints
-- [PHASE_2H_SUMMARY.md](./PHASE_2H_SUMMARY.md) - Real SQS + Lambda workers
+- [PHASE_2F_SUMMARY.md](./PHASE_2F_SUMMARY.md) - Run lifecycle endpoints + jobs table
+- [PHASE_2H_SUMMARY.md](./PHASE_2H_SUMMARY.md) - SSE + Frontend

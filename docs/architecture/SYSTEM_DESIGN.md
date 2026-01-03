@@ -382,26 +382,64 @@ See [ADR-017: SimHash for Raw Content Deduplication](./DECISIONS.md#adr-017-simh
 Frontend receives progress updates via Server-Sent Events:
 
 ```
-GET /api/ingest/progress/{run_id}
+GET /api/ingestion/progress/{run_id}?token=<jwt>
 Accept: text/event-stream
-
-← event: progress
-← data: {"status":"ingesting","pending":45,"crawled":30,"ready":25,"error":0}
-
-← event: progress
-← data: {"status":"ingesting","pending":20,"crawled":35,"ready":45,"error":0}
-
-← event: complete
-← data: {"status":"finished","total":100,"ready":98,"error":2}
 ```
 
-**Implementation**:
-- SSE endpoint queries DB for current counts
-- Emits events every 2-3 seconds
+**Authentication**: JWT passed as query parameter (EventSource API cannot send headers)
+
+**Event Types**:
+
+| Event | When | Data |
+|-------|------|------|
+| `status` | pending/initializing/terminal | Run status string |
+| `all_jobs` | First poll when ingesting | Full job map by company |
+| `update` | Subsequent polls when ingesting | Only changed jobs (diff) |
+
+**Example Stream**:
+```
+event: status
+data: pending
+
+event: status
+data: initializing
+
+event: all_jobs
+data: {"google": [{"external_id": "123", "title": "Software Engineer", "status": "pending"}, ...], "amazon": [...]}
+
+event: update
+data: {"google": {"123": "crawling"}, "amazon": {"456": "ready"}}
+
+event: update
+data: {"google": {"123": "ready"}}
+
+event: status
+data: finished
+```
+
+**Data Structures**:
+- **Unique key**: `company` + `external_id` (e.g., google + 123)
+- **all_jobs**: `{company: [{external_id, title, status}, ...]}`
+- **update**: `{company: {external_id: status, ...}}` (status changes only)
+
+**Polling Strategy by Phase**:
+
+| Run Status | What SSE Polls | Why |
+|------------|----------------|-----|
+| `pending` | `ingestion_run` only | No jobs exist yet |
+| `initializing` | `ingestion_run` only | Jobs being created |
+| `ingesting` | `jobs` table | Need job-level status |
+| terminal | Nothing | Emit final status, close |
+
+**Implementation Details**:
+- Polls DB every 3 seconds
 - Auto-reconnects every 29s (API Gateway limit)
-- Uses `Last-Event-ID` header for resume
+- On reconnect: always sends `all_jobs` (full state)
+- During session: sends `update` (diff only)
+- Bandwidth: ~25KB on connect, ~0.5KB per update
 
 See [ADR-016: SSE for Real-Time Progress Updates](./DECISIONS.md#adr-016-sse-for-real-time-progress-updates)
+See [ADR-018: SSE Update Strategy](./DECISIONS.md#adr-018-sse-update-strategy---full-state-on-connect-diffs-during-session)
 
 ### Database Schema
 
@@ -528,11 +566,17 @@ Response:
 ```
 Note: Only `run_id` returned. Status/progress comes from SSE endpoint.
 
-**GET /api/ingestion/progress/{run_id}** - SSE stream (Auth: JWT)
+**GET /api/ingestion/progress/{run_id}?token=\<jwt\>** - SSE stream
 ```
 Accept: text/event-stream
+Auth: JWT as query param (EventSource can't send headers)
 
-Response: Server-Sent Events stream (see Real-Time Progress section)
+Response: Server-Sent Events stream
+- event: status (pending/initializing/terminal states)
+- event: all_jobs (full job map on connect/reconnect)
+- event: update (diff of changed jobs during session)
+
+See Real-Time Progress section for details.
 ```
 
 **GET /api/ingestion/status/{run_id}** - One-time status check (Auth: JWT)

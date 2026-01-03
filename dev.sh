@@ -654,10 +654,10 @@ jenvcheck() {
 
     # Backend (Lambda vs .env.local)
     echo -e "${BLUE}Backend (AWS Lambda):${NC}"
-    echo -e "${BLUE}  Comparing .env.local PROD_VALUE → Lambda:${NC}"
 
     if [ -f "$JH_ROOT/backend/.env.local" ]; then
-        # Get Lambda env vars
+        # Check API Lambda
+        echo -e "${BLUE}  API Lambda (JobHuntTrackerAPI):${NC}"
         LAMBDA_VARS=$(aws lambda get-function --function-name JobHuntTrackerAPI --query 'Configuration.Environment.Variables' 2>/dev/null)
 
         if [ $? -eq 0 ]; then
@@ -668,8 +668,34 @@ jenvcheck() {
                 LAMBDA_VAL=$(_normalize_env_value "$LAMBDA_VAL_RAW")
                 _compare_and_display_env "$VAR_NAME" "$LAMBDA_VAL" "$EXPECTED_VAL" "Lambda"
             done
+
+            # Check WORKER_FUNCTION_NAME
+            WORKER_FN=$(echo "$LAMBDA_VARS" | python3 -c "import sys, json; data=json.load(sys.stdin); print(data.get('WORKER_FUNCTION_NAME', ''))")
+            if [ -n "$WORKER_FN" ]; then
+                echo -e "${GREEN}  ✓ WORKER_FUNCTION_NAME=${WORKER_FN}${NC}"
+            else
+                echo -e "${RED}  ✗ WORKER_FUNCTION_NAME (missing - async invoke won't work)${NC}"
+            fi
         else
-            echo -e "${RED}  ✗ Cannot access Lambda function${NC}"
+            echo -e "${RED}  ✗ Cannot access API Lambda${NC}"
+        fi
+
+        # Check Worker Lambda
+        echo ""
+        echo -e "${BLUE}  Worker Lambda (IngestionWorker):${NC}"
+        WORKER_VARS=$(aws lambda get-function --function-name IngestionWorker --query 'Configuration.Environment.Variables' 2>/dev/null)
+
+        if [ $? -eq 0 ]; then
+            echo -e "${GREEN}  ✓ Worker Lambda exists${NC}"
+            # Check DATABASE_URL is set (worker needs DB access)
+            WORKER_DB=$(echo "$WORKER_VARS" | python3 -c "import sys, json; data=json.load(sys.stdin); print(data.get('DATABASE_URL', ''))" 2>/dev/null)
+            if [ -n "$WORKER_DB" ]; then
+                echo -e "${GREEN}    ✓ DATABASE_URL configured${NC}"
+            else
+                echo -e "${RED}    ✗ DATABASE_URL missing${NC}"
+            fi
+        else
+            echo -e "${YELLOW}  ⚠ Worker Lambda not deployed yet${NC}"
         fi
     else
         echo -e "${RED}  ✗ backend/.env.local not found${NC}"
@@ -1186,10 +1212,18 @@ jpushapi() {
         echo -e "${YELLOW}  ⚠ Could not retrieve API URL${NC}"
     fi
 
-    # Verify environment variables
+    # Get Worker Lambda name from stack outputs
+    WORKER_NAME=$(aws cloudformation describe-stacks --stack-name jh-backend-stack --query 'Stacks[0].Outputs[?OutputKey==`WorkerFunctionName`].OutputValue' --output text 2>/dev/null)
+    if [ -n "$WORKER_NAME" ] && [ "$WORKER_NAME" != "None" ]; then
+        echo -e "${GREEN}  ✓ Worker Lambda: ${BLUE}$WORKER_NAME${NC}"
+    else
+        echo -e "${YELLOW}  ⚠ Worker Lambda not found in stack outputs${NC}"
+    fi
+
+    # Verify API Lambda environment variables
+    echo -e "${BLUE}  API Lambda environment:${NC}"
     LAMBDA_VARS=$(aws lambda get-function --function-name JobHuntTrackerAPI --query 'Configuration.Environment.Variables' --output json 2>/dev/null)
     if [ $? -eq 0 ]; then
-        echo -e "${GREEN}  ✓ Environment variables deployed:${NC}"
         for VAR_NAME in "${(@k)BACKEND_CHECK}"; do
             LAMBDA_VAL_RAW=$(echo "$LAMBDA_VARS" | python3 -c "import sys, json; data=json.load(sys.stdin); print(data.get('$VAR_NAME', ''))")
             LAMBDA_VAL=$(_normalize_env_value "$LAMBDA_VAL_RAW")
@@ -1199,6 +1233,14 @@ jpushapi() {
                 echo -e "${RED}    ✗ $VAR_NAME (missing)${NC}"
             fi
         done
+
+        # Check WORKER_FUNCTION_NAME is set (API Lambda needs this to invoke worker)
+        WORKER_FN=$(echo "$LAMBDA_VARS" | python3 -c "import sys, json; data=json.load(sys.stdin); print(data.get('WORKER_FUNCTION_NAME', ''))")
+        if [ -n "$WORKER_FN" ]; then
+            echo -e "${GREEN}    ✓ WORKER_FUNCTION_NAME=${WORKER_FN}${NC}"
+        else
+            echo -e "${RED}    ✗ WORKER_FUNCTION_NAME (missing - async invoke won't work)${NC}"
+        fi
     fi
 
     cd "$JH_ROOT" || return 1

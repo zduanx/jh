@@ -155,11 +155,11 @@ frontend/src/pages/
 
 ## Next Steps → Phase 2G
 
-Phase 2G will add the async worker and SSE:
+Phase 2G adds the async worker:
 - Worker Lambda (async invoke from `/start`)
-- SSE `/progress/{run_id}` endpoint
 - Job UPSERT from dry-run results
-- Mock ingestion simulation (1 min delay → all jobs ready)
+- Expired job detection
+- Mock ingestion simulation (30s delay → all jobs ready)
 
 ---
 
@@ -168,4 +168,5 @@ Phase 2G will add the async worker and SSE:
 **Internal Documentation**:
 - [SYSTEM_DESIGN.md](../architecture/SYSTEM_DESIGN.md) - Pipeline architecture
 - [PHASE_2E_SUMMARY.md](./PHASE_2E_SUMMARY.md) - Dry-run implementation
+- [PHASE_2G_SUMMARY.md](./PHASE_2G_SUMMARY.md) - Worker Lambda
 - [ingestion_routes.py](../../backend/api/ingestion_routes.py) - API endpoints

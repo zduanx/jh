@@ -1,154 +1,217 @@
-# Phase 2H: Real Workers (SQS + Lambda)
+# Phase 2H: SSE Progress + Frontend
 
 **Status**: 📋 Planning
 **Date**: TBD
-**Goal**: Replace mock ingestion with real SQS + Lambda workers for scalable job crawling
+**Goal**: Real-time progress updates via SSE + frontend Stage3Progress component
 
 ---
 
 ## Overview
 
-Phase 2H upgrades the mock ingestion from Phase 2G to production-ready infrastructure. The core flow (SSE progress, results display) remains unchanged - we only replace the mock worker with real SQS queues and Lambda functions.
+Phase 2H adds real-time progress display to the ingestion flow. The backend provides an SSE endpoint that streams job status updates, and the frontend connects via EventSource to display live progress.
 
-**Key insight**: SQS provides reliable message delivery with retries and DLQ. Each job is processed independently, enabling parallel crawling at scale.
+**Key insight**: SSE (Server-Sent Events) provides simple one-way streaming with auto-reconnect. API Gateway's 29s timeout is handled by EventSource's automatic reconnection.
 
-**Prerequisite**: Phase 2G must be complete (async Lambda + SSE working end-to-end).
+**Prerequisite**: Phase 2G must be complete (Worker Lambda + job UPSERT).
 
 **Included in this phase**:
-- SQS queues (crawl queue, extract queue, DLQ)
-- Lambda workers (CrawlerLambda, ExtractorLambda)
-- S3 storage for raw HTML
-- SimHash deduplication (skip unchanged content)
-- Stale run detection and recovery
+- SSE `/progress/{run_id}` endpoint
+- Full state + diff update protocol
+- Frontend SSE connection (Stage3Progress)
+- Reconnection handling
+- Progress display UI
 
-**Explicitly excluded** (deferred to Phase 3):
-- Job search functionality
-- Application tracking
-- User preferences
+**Explicitly excluded** (deferred to Phase 2I):
+- Real job crawling (mock status updates)
+- SQS queues
+- S3 storage for raw HTML
+- SimHash deduplication
+
+---
+
+## Key Achievements
+
+### 1. SSE Progress Endpoint
+- Real-time streaming via `text/event-stream`
+- JWT authentication via query parameter (EventSource can't send headers)
+- User ownership verification (run.user_id must match token's user_id)
+- Reference: [ADR-016](../architecture/DECISIONS.md#adr-016-sse-for-real-time-progress-updates)
+
+### 2. Full State + Diff Protocol
+- On connect/reconnect: emit `all_jobs` event with complete job map
+- During session: emit `update` events with only changed jobs
+- ~90% bandwidth reduction vs always sending full state
+- Reference: [ADR-018](../architecture/DECISIONS.md#adr-018-sse-update-strategy---full-state-on-connect-diffs-during-session)
+
+### 3. Frontend EventSource Connection
+- React `useEffect` hook manages EventSource lifecycle
+- Handles `status`, `all_jobs`, `update` events
+- Auto-reconnect on API Gateway 29s timeout
+- Auto-navigate to results on completion
 
 ---
 
 ## Architecture
 
 ```
-Worker Lambda (from 2G)
-    ├─> UPSERT jobs (same as before)
-    ├─> Publish each job to SQS Crawl Queue  ← NEW
-    └─> status = 'ingesting'
+GET /progress/{run_id} (SSE, polls every 3s)
+    ├─> pending/initializing: poll ingestion_run → emit status
+    ├─> ingesting: poll jobs → emit all_jobs (first) / update (diffs)
+    └─> finished/error/aborted: emit status, close stream
 
-SQS Crawl Queue
-    └─> CrawlerLambda (per job)
-        ├─> Fetch HTML
-        ├─> Compute SimHash
-        ├─> If unchanged → status='skipped'
-        ├─> If changed → Save to S3, queue for extraction
-        └─> Check if run complete
-
-SQS Extract Queue
-    └─> ExtractorLambda (per job)
-        ├─> Download HTML from S3
-        ├─> Parse job details
-        ├─> Update DB → status='ready'
-        └─> Check if run complete
+Frontend (Stage3Progress)
+    ├─> Connect EventSource on mount
+    ├─> Handle status/all_jobs/update events
+    ├─> Rebuild state on reconnect
+    └─> Navigate to results on completion
 ```
 
 ---
 
-## Key Components
+## API Endpoints
 
-### 1. CrawlerLambda
-
-Triggered by SQS Crawl Queue (batch size 1):
-- Fetches job page HTML
-- Computes SimHash fingerprint
-- Compares with previous SimHash
-- If unchanged: marks job as 'skipped'
-- If changed: saves HTML to S3, queues for extraction
-
-### 2. ExtractorLambda
-
-Triggered by SQS Extract Queue (batch size 1):
-- Downloads HTML from S3
-- Extracts structured data (title, location, description)
-- Updates job record with extracted data
-- Marks job as 'ready'
-
-### 3. SimHash Deduplication
-
-Fuzzy hashing to detect content changes:
-- 64-bit fingerprint stored in jobs.simhash
-- Hamming distance threshold for "unchanged"
-- Handles dynamic page noise (timestamps, view counts)
-- Saves ~80% extraction cost on repeat crawls
-
-Reference: [ADR-017](../architecture/DECISIONS.md)
-
-### 4. Stale Run Detection
-
-EventBridge scheduled rule (every 5 minutes):
-- Finds runs stuck in 'ingesting' for >15 minutes
-- If all jobs processed: finalize run
-- If jobs stuck: mark run as error
-
-### 5. Run Completion
-
-Each worker checks after processing:
-- Count pending jobs for this run
-- If zero pending: finalize run (write snapshot)
-- Race-safe via SQL WHERE clause
+**Route**: `GET /api/ingestion/progress/{run_id}?token=<jwt>`
+- Purpose: Stream real-time job status updates
+- Authentication: JWT as query parameter (EventSource limitation)
+- Response: `text/event-stream` with SSE events
 
 ---
 
-## Infrastructure
+## Highlights
 
-**SQS Queues**:
-| Queue | Purpose | Visibility | DLQ |
-|-------|---------|------------|-----|
-| `jh-crawl-queue` | Jobs to crawl | 6 min | Yes |
-| `jh-extract-queue` | Jobs to extract | 6 min | Yes |
+### Polling Strategy by Phase
 
-**Lambda Functions**:
-| Function | Trigger | Timeout | Memory |
-|----------|---------|---------|--------|
-| CrawlerLambda | SQS | 5 min | 512 MB |
-| ExtractorLambda | SQS | 5 min | 512 MB |
-| StaleRunDetector | EventBridge | 30 sec | 256 MB |
+| Run Status | Data Polled | Events Emitted |
+|------------|-------------|----------------|
+| pending | `ingestion_run` | `status: pending` |
+| initializing | `ingestion_run` | `status: initializing` |
+| ingesting | `jobs` table | `all_jobs` (first), then `update` diffs |
+| finished/error/aborted | - | `status: <terminal>`, close stream |
 
-**S3 Bucket**:
-- Path: `raw/{run_id}/{job_id}.html`
-- Lifecycle: Delete after 7 days
+### Event Format
+
+Uses SSE native `event:` field (not JSON type):
+```
+event: status
+data: pending
+
+event: status
+data: initializing
+
+event: all_jobs
+data: {"google": [{"external_id": "123", "title": "Software Engineer", "status": "pending"}, ...]}
+
+event: update
+data: {"google": {"123": "crawling"}, "amazon": {"456": "ready"}}
+
+event: status
+data: finished
+```
+
+### Data Structures
+
+- **Unique key**: `company` + `external_id`
+- **all_jobs**: `{company: [{external_id, title, status}, ...]}`
+- **update**: `{company: {external_id: status, ...}}` (status changes only)
+
+### Frontend EventSource Connection
+
+```javascript
+useEffect(() => {
+    const es = new EventSource(`/api/ingestion/progress/${runId}?token=${token}`);
+
+    es.addEventListener('status', (e) => {
+        setStatus(e.data);
+        if (['finished', 'error', 'aborted'].includes(e.data)) {
+            es.close();
+        }
+    });
+
+    es.addEventListener('all_jobs', (e) => {
+        setJobs(JSON.parse(e.data));
+    });
+
+    es.addEventListener('update', (e) => {
+        const updates = JSON.parse(e.data);
+        setJobs(prev => applyUpdates(prev, updates));
+    });
+
+    return () => es.close();
+}, [runId, token]);
+```
+
+### Bandwidth Analysis
+
+```
+Per minute (ingesting phase):
+- Full state: 25KB on connect
+- Updates: ~0.5KB × 20 = 10KB
+- Total: ~35KB first minute, ~10KB subsequent
+
+Per 29s reconnect cycle:
+- Reconnect overhead: 25KB
+- Updates: ~0.5KB × 10 = 5KB
+- Total: ~30KB per cycle
+```
 
 ---
 
-## Changes from Phase 2G
+## Testing & Validation
 
-| Aspect | Phase 2G (Mock) | Phase 2H (Real) |
-|--------|-----------------|-----------------|
-| Job processing | Wait 1 min, mark all ready | Real crawl + extract |
-| Parallelism | Sequential | SQS-driven parallel |
-| Dedup | None | SimHash comparison |
-| Storage | None | S3 for HTML |
-| Failure handling | None | DLQ, stale detection |
+**Manual Testing**:
+- Start ingestion → Verify SSE connection opens
+- Watch progress → Verify job statuses update in real-time
+- Wait 29s → Verify auto-reconnect works
+- Abort run → Verify stream closes with correct status
+- Page refresh during run → Verify reconnects and rebuilds state
+
+**Automated Testing**:
+- Future: SSE endpoint integration tests
+- Future: Frontend component tests
 
 ---
 
-## Next Steps → Phase 3
+## Next Steps → Phase 2I
 
-Phase 3 focuses on **Search & Track**:
-- Job search with filters
-- Application status tracking
-- Notes and reminders
-- Job recommendations
+Phase 2I replaces mock with real infrastructure:
+- SQS queues for job distribution
+- Crawler Lambda for fetching HTML
+- Extractor Lambda for parsing content
+- S3 storage for raw HTML
+- SimHash deduplication
+
+**Target**: Production-ready job crawling pipeline
+
+---
+
+## File Structure
+
+```
+backend/
+├── api/
+│   └── ingestion_routes.py      # SSE /progress endpoint
+└── auth/
+    └── dependencies.py          # get_current_user_from_token helper
+
+frontend/src/pages/ingest/
+├── Stage3Progress.js            # SSE connection + progress display
+└── Stage3Progress.css           # s3-* prefixed styles
+```
+
+**Key Files**:
+- [ingestion_routes.py](../../backend/api/ingestion_routes.py) - SSE endpoint implementation
+- [Stage3Progress.js](../../frontend/src/pages/ingest/Stage3Progress.js) - Frontend EventSource
 
 ---
 
 ## References
 
 **External Documentation**:
-- [Amazon SQS](https://docs.aws.amazon.com/sqs/) - Message queue service
-- [AWS Lambda + SQS](https://docs.aws.amazon.com/lambda/latest/dg/with-sqs.html) - Event source mapping
-- [SimHash Paper](https://www.cs.princeton.edu/courses/archive/spring04/cos598B/bib/ChsijffeRS.pdf)
+- [SSE EventSource API](https://developer.mozilla.org/en-US/docs/Web/API/EventSource) - Browser API reference
+- [Server-Sent Events Spec](https://html.spec.whatwg.org/multipage/server-sent-events.html) - HTML spec
 
 **Internal Documentation**:
-- [PHASE_2G_SUMMARY.md](./PHASE_2G_SUMMARY.md) - Async Lambda + SSE
-- [DECISIONS.md](../architecture/DECISIONS.md) - ADR-016 (SSE), ADR-017 (SimHash)
+- [PHASE_2G_SUMMARY.md](./PHASE_2G_SUMMARY.md) - Worker Lambda
+- [PHASE_2I_SUMMARY.md](./PHASE_2I_SUMMARY.md) - Real SQS + Lambda workers
+- [ADR-016](../architecture/DECISIONS.md#adr-016-sse-for-real-time-progress-updates) - SSE Architecture
+- [ADR-018](../architecture/DECISIONS.md#adr-018-sse-update-strategy---full-state-on-connect-diffs-during-session) - SSE Update Strategy

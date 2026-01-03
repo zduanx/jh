@@ -1314,3 +1314,166 @@ Save to S3 → Queue for extraction
 ### Related
 - Used by: Google (web dedup), Common Crawl, Scrapy
 - See also: MinHash (for set similarity), LSH (for efficient lookup)
+
+---
+
+## ADR-018: SSE Update Strategy - Full State on Connect, Diffs During Session
+
+**Date:** 2025-01-01
+**Status:** Accepted
+
+### Context
+The SSE progress endpoint needs to stream job-level status updates during ingestion. With ~500 jobs per run, we need to decide how to handle:
+1. Initial data load when client connects
+2. Ongoing updates during the session
+3. Reconnection after API Gateway's 29s timeout
+
+### Decision
+Use **full state on connect, diffs during session**:
+- On every connect/reconnect: emit `all_jobs` event with complete job status map
+- During session: emit `update` events with only changed jobs
+- On terminal status: emit `status` event and close
+
+### Alternatives Considered
+
+| Strategy | Bandwidth | Complexity | Reconnect Handling |
+|----------|-----------|------------|-------------------|
+| **Full + Diffs** (chosen) | ~30KB connect + ~0.5KB/update | Medium | Simple (always send all_jobs) |
+| Full state every poll | ~25KB × 10/min = 250KB/min | Low | N/A (always full) |
+| Diffs only + client state sync | Minimal | High | Complex (version tracking) |
+| Client sends last state on reconnect | Minimal | High | URL length limits (2KB) |
+
+### Event Format
+
+Uses SSE native `event:` field (not JSON type). Data structures are consistent nested objects.
+
+**Unique key**: `company` + `external_id`
+
+```
+// Run status (pending/initializing/terminal)
+event: status
+data: pending
+
+// Full job state on connect/reconnect (when status = ingesting)
+event: all_jobs
+data: {
+  "google": [
+    {"external_id": "123", "title": "Software Engineer", "status": "pending"},
+    {"external_id": "456", "title": "ML Engineer", "status": "ready"}
+  ],
+  "amazon": [...]
+}
+
+// Status changes only (grouped by company, multiple jobs per update)
+event: update
+data: {"google": {"123": "crawling", "456": "ready"}, "amazon": {"789": "error"}}
+
+// Terminal
+event: status
+data: finished
+```
+
+**Data structures**:
+- `all_jobs`: `{company: [{external_id, title, status}, ...]}`
+- `update`: `{company: {external_id: status, ...}}`
+
+### Reasoning
+
+**Why full state on connect:**
+1. **Simple reconnect logic** - No version tracking, no client state sync
+2. **25KB is small** - Single fetch, comparable to loading a small image
+3. **Infrequent** - Only on initial connect + every 29s reconnect
+4. **Robust** - Client always has correct state after any disconnect
+
+**Why diffs during session:**
+1. **Efficient** - ~500 bytes vs 25KB per update
+2. **10 updates/min** - Saves ~240KB/min bandwidth
+3. **SSE maintains local state** - Simple dict comparison in generator
+4. **Frontend just applies patches** - No complex merge logic
+
+**Why NOT client-sends-state on reconnect:**
+- URL length limit (~2KB) exceeded with 500 jobs
+- Would need POST for reconnect (breaks EventSource simplicity)
+- Added complexity for minimal bandwidth savings
+
+**Why NOT version-based diffs:**
+- Server needs to track versions per run
+- Client needs to track and send last version
+- Complex edge cases (missed versions, gaps)
+- Overkill for 29s reconnect interval
+
+### Bandwidth Analysis
+
+```
+Per minute (ingesting phase):
+- Full state: 25KB on connect
+- Updates: ~0.5KB × 20 = 10KB
+- Total: ~35KB first minute, ~10KB subsequent
+
+Per 29s reconnect cycle:
+- Reconnect overhead: 25KB
+- Updates: ~0.5KB × 10 = 5KB
+- Total: ~30KB per cycle
+
+Comparison with "always full state":
+- Always full: 25KB × 20/min = 500KB/min
+- Our approach: ~35KB first min, ~10KB after
+- Savings: ~90% bandwidth reduction
+```
+
+### Implementation
+
+**SSE Generator (simplified):**
+```python
+async def _progress_generator(run_id: int, user_id: int):
+    previous_statuses = {}  # Track for diff computation
+    sent_all_jobs = False
+
+    while True:
+        run = db.query(IngestionRun).filter_by(id=run_id).first()
+
+        if run.status in ["pending", "initializing"]:
+            yield sse_event("status", run.status)
+
+        elif run.status == "ingesting":
+            current_statuses = get_job_statuses(run_id)  # {company:id: status}
+
+            if not sent_all_jobs:
+                yield sse_event("all_jobs", group_by_company(current_statuses))
+                sent_all_jobs = True
+                previous_statuses = current_statuses
+            else:
+                diff = compute_diff(previous_statuses, current_statuses)
+                if diff:
+                    yield sse_event("update", diff)
+                previous_statuses = current_statuses
+
+        elif run.status in RunStatus.TERMINAL:
+            yield sse_event("status", run.status)
+            break
+
+        await asyncio.sleep(3)
+```
+
+### Consequences
+
+**Positive:**
+- ✅ Simple reconnect (always works, no state sync)
+- ✅ Efficient bandwidth (~90% reduction vs always-full)
+- ✅ Frontend logic is straightforward (replace on all_jobs, patch on update)
+- ✅ No version tracking infrastructure
+- ✅ Works with EventSource auto-reconnect
+
+**Negative:**
+- ❌ 25KB overhead on each reconnect (acceptable)
+- ❌ SSE generator maintains state (memory per connection)
+- ❌ Slight complexity in diff computation
+
+**Mitigations:**
+- 25KB is small (typical image is larger)
+- State is just a dict, cleared when connection closes
+- Diff is simple dict comparison
+
+### Related
+- See ADR-016 for SSE architecture decision
+- Resolves SSE update strategy for Phase 2G
