@@ -248,10 +248,11 @@ def run_ingestion_phase(
       1. Create CrawlMessage for each job using init_result.to_crawl_messages()
       2. Send messages to SQS crawl queue
       3. Return immediately (workers update DB async)
+      4. Remove finalization - SQS workers will update status when done
     """
     # ==========================================================================
     # TEMPORARY MOCK - Phase 2G
-    # Simulates 30s processing, then marks all jobs as 'ready'
+    # Simulates 30s processing, then marks all jobs as 'ready' and finalizes run
     # Will be replaced with real SQS publishing in Phase 2I
     # ==========================================================================
     log_info(run.id, "Starting ingestion phase (30s mock)")
@@ -277,12 +278,27 @@ def run_ingestion_phase(
 
     log_info(run.id, f"Marked {init_result.total_jobs} jobs as ready (mock)")
 
-    return IngestionResult(
+    result = IngestionResult(
         jobs_ready=init_result.total_jobs,
         jobs_skipped=0,
         jobs_expired=init_result.jobs_expired,
         jobs_failed=0,
     )
+
+    # Finalize run with snapshot (mock only - Phase 2I will move this to SQS workers)
+    update_run_status(
+        db, run,
+        status=RunStatus.FINISHED,
+        finished_at=datetime.now(timezone.utc),
+        jobs_ready=result.jobs_ready,
+        jobs_skipped=result.jobs_skipped,
+        jobs_expired=result.jobs_expired,
+        jobs_failed=result.jobs_failed,
+    )
+
+    log_info(run.id, f"Completed: status={RunStatus.FINISHED}, jobs_ready={result.jobs_ready}")
+
+    return result
 
 
 def process_run(
@@ -364,31 +380,15 @@ def process_run(
 
     # =======================================================================
     # INGESTION PHASE
+    # Runs the mock ingestion which also finalizes the run
+    # Phase 2I: This will just publish to SQS and return immediately
     # =======================================================================
     ingestion_result = _run_ingestion_phase(db, run, init_result)
 
-    # Check for abort after ingestion
-    _refresh_run(db, run)
-    if run.status == RunStatus.ABORTED:
-        log_info(run_id, "Run was aborted during ingestion")
-        return {"run_id": run_id, "status": RunStatus.ABORTED}
-
-    # Finalize run with snapshot
-    _update_run_status(
-        db, run,
-        status=RunStatus.FINISHED,
-        finished_at=datetime.now(timezone.utc),
-        jobs_ready=ingestion_result.jobs_ready,
-        jobs_skipped=ingestion_result.jobs_skipped,
-        jobs_expired=ingestion_result.jobs_expired,
-        jobs_failed=ingestion_result.jobs_failed,
-    )
-
-    log_info(run_id, f"Completed: status={RunStatus.FINISHED}, jobs_ready={ingestion_result.jobs_ready}")
-
+    # Return result (run status already updated by ingestion phase)
     return {
         "run_id": run_id,
-        "status": RunStatus.FINISHED,
+        "status": run.status,
         **ingestion_result.to_dict(),
     }
 

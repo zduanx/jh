@@ -8,6 +8,7 @@ const STAGES = [
   { id: 1, name: 'Configure', description: 'Select companies & filters' },
   { id: 2, name: 'Preview', description: 'Review extracted URLs' },
   { id: 3, name: 'Ingest', description: 'Sync & process jobs' },
+  { id: 4, name: 'Summary', description: 'Review results' },
 ];
 
 function IngestPage() {
@@ -145,6 +146,17 @@ function IngestPage() {
     setCurrentStage(1);
   };
 
+  // Handle terminal status from Stage 3 - transition to Stage 4
+  const handleTerminal = (finalStatus) => {
+    setCurrentStage(4);
+  };
+
+  // Handle starting a new run from Stage 4
+  const handleNewRun = () => {
+    setActiveRunId(null);
+    setCurrentStage(1);
+  };
+
   // Render action bar based on current stage
   const renderActionBar = () => {
     switch (currentStage) {
@@ -173,7 +185,8 @@ function IngestPage() {
     <div className="stepper">
       {STAGES.map((stage, index) => {
         const isActive = stage.id === currentStage;
-        const isCompleted = stage.id < currentStage;
+        // Stage 4 should also show as completed when we're on it (terminal state)
+        const isCompleted = stage.id < currentStage || (currentStage === 4 && stage.id === 4);
         const isLocked = stage.id > currentStage;
 
         return (
@@ -251,6 +264,16 @@ function IngestPage() {
           <Stage3Progress
             runId={activeRunId}
             onAbort={handleAbort}
+            onTerminal={handleTerminal}
+          />
+        );
+      case 4:
+        return (
+          <Stage3Progress
+            runId={activeRunId}
+            onAbort={handleAbort}
+            onNewRun={handleNewRun}
+            isCompleted={true}
           />
         );
       default:

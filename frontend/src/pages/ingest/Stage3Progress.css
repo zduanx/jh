@@ -253,3 +253,138 @@
   font-size: 12px !important;
   color: #94a3b8 !important;
 }
+
+/* Summary Banner (Stage 4) */
+.s3-summary-banner {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 20px 24px;
+  border-radius: 12px;
+  margin-bottom: 24px;
+}
+
+.s3-summary-icon {
+  font-size: 32px;
+  width: 48px;
+  height: 48px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.s3-summary-content {
+  flex: 1;
+}
+
+.s3-summary-title {
+  margin: 0 0 4px 0;
+  font-size: 18px;
+  font-weight: 600;
+}
+
+.s3-summary-stats {
+  display: flex;
+  gap: 16px;
+  font-size: 14px;
+}
+
+.s3-summary-stats span {
+  opacity: 0.8;
+}
+
+.s3-new-run-btn {
+  padding: 10px 20px;
+  border-radius: 6px;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s;
+  border: none;
+}
+
+/* Success state */
+.s3-summary-success {
+  background: linear-gradient(135deg, #dcfce7 0%, #bbf7d0 100%);
+  border: 1px solid #86efac;
+}
+
+.s3-summary-success .s3-summary-icon {
+  background: #22c55e;
+  color: white;
+}
+
+.s3-summary-success .s3-summary-title {
+  color: #15803d;
+}
+
+.s3-summary-success .s3-summary-stats {
+  color: #166534;
+}
+
+.s3-summary-success .s3-new-run-btn {
+  background: #22c55e;
+  color: white;
+}
+
+.s3-summary-success .s3-new-run-btn:hover {
+  background: #16a34a;
+}
+
+/* Error state */
+.s3-summary-error {
+  background: linear-gradient(135deg, #fef2f2 0%, #fecaca 100%);
+  border: 1px solid #fca5a5;
+}
+
+.s3-summary-error .s3-summary-icon {
+  background: #ef4444;
+  color: white;
+}
+
+.s3-summary-error .s3-summary-title {
+  color: #dc2626;
+}
+
+.s3-summary-error .s3-summary-stats {
+  color: #991b1b;
+}
+
+.s3-summary-error .s3-new-run-btn {
+  background: #ef4444;
+  color: white;
+}
+
+.s3-summary-error .s3-new-run-btn:hover {
+  background: #dc2626;
+}
+
+/* Aborted state */
+.s3-summary-aborted {
+  background: linear-gradient(135deg, #f8fafc 0%, #e2e8f0 100%);
+  border: 1px solid #cbd5e1;
+}
+
+.s3-summary-aborted .s3-summary-icon {
+  background: #64748b;
+  color: white;
+}
+
+.s3-summary-aborted .s3-summary-title {
+  color: #475569;
+}
+
+.s3-summary-aborted .s3-summary-stats {
+  color: #64748b;
+}
+
+.s3-summary-aborted .s3-new-run-btn {
+  background: #64748b;
+  color: white;
+}
+
+.s3-summary-aborted .s3-new-run-btn:hover {
+  background: #475569;
+}

@@ -9,7 +9,7 @@ import './Stage3Progress.css';
  * - Status section: Current run status with SSE updates
  * - Log Viewer: Real-time CloudWatch logs (polling every 3s)
  */
-function Stage3Progress({ runId, onAbort, onComplete }) {
+function Stage3Progress({ runId, onAbort, onTerminal, onNewRun, isCompleted = false }) {
   const [aborting, setAborting] = useState(false);
   const [abortError, setAbortError] = useState(null);
 
@@ -58,12 +58,10 @@ function Stage3Progress({ runId, onAbort, onComplete }) {
         }
         setProgress(data);
 
-        // If terminal status, close connection
+        // If terminal status, close connection and notify parent
         if (['finished', 'error', 'aborted'].includes(data.status)) {
           eventSource.close();
-          if (data.status === 'finished') {
-            onComplete && onComplete(data);
-          }
+          onTerminal && onTerminal(data.status);
         }
       } catch (err) {
         console.error('Failed to parse SSE data:', err);
@@ -78,7 +76,7 @@ function Stage3Progress({ runId, onAbort, onComplete }) {
     return () => {
       eventSource.close();
     };
-  }, [runId, apiUrl, onComplete]);
+  }, [runId, apiUrl, onTerminal]);
 
   // Fetch logs from CloudWatch
   const fetchLogs = useCallback(async () => {
@@ -219,16 +217,52 @@ function Stage3Progress({ runId, onAbort, onComplete }) {
 
   const isTerminal = ['finished', 'error', 'aborted'].includes(progress.status);
 
+  // Get summary icon and message based on status
+  const getSummaryContent = () => {
+    switch (progress.status) {
+      case 'finished':
+        return { icon: '✓', title: 'Ingestion Complete', className: 's3-summary-success' };
+      case 'error':
+        return { icon: '✗', title: 'Ingestion Failed', className: 's3-summary-error' };
+      case 'aborted':
+        return { icon: '⊘', title: 'Ingestion Aborted', className: 's3-summary-aborted' };
+      default:
+        return null;
+    }
+  };
+
+  const summaryContent = isCompleted ? getSummaryContent() : null;
+
   return (
     <div className="stage-content">
+      {/* Summary Banner - only shown in Stage 4 (isCompleted) */}
+      {isCompleted && summaryContent && (
+        <div className={`s3-summary-banner ${summaryContent.className}`}>
+          <div className="s3-summary-icon">{summaryContent.icon}</div>
+          <div className="s3-summary-content">
+            <h2 className="s3-summary-title">{summaryContent.title}</h2>
+            <div className="s3-summary-stats">
+              {progress.jobs_ready > 0 && <span>{progress.jobs_ready} jobs ready</span>}
+              {progress.jobs_expired > 0 && <span>{progress.jobs_expired} expired</span>}
+              {progress.jobs_failed > 0 && <span>{progress.jobs_failed} failed</span>}
+            </div>
+          </div>
+          {onNewRun && (
+            <button className="s3-new-run-btn" onClick={onNewRun}>
+              Start New Run
+            </button>
+          )}
+        </div>
+      )}
+
       {/* Header with Run ID and Abort */}
       <div className="s3-header">
         <div className="s3-run-info">
           <span className="s3-run-label">Run ID:</span>
           <span className="s3-run-id">{runId}</span>
-          {sseConnected && <span className="s3-connected-badge">Live</span>}
+          {sseConnected && !isCompleted && <span className="s3-connected-badge">Live</span>}
         </div>
-        {!isTerminal && (
+        {!isTerminal && !isCompleted && (
           <button
             className="s3-abort-btn"
             onClick={handleAbort}
