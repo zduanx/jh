@@ -10,6 +10,7 @@ Endpoints:
 - POST /api/ingestion/start           Start ingestion run, returns run_id
 - POST /api/ingestion/abort           Abort an active ingestion run
 - GET  /api/ingestion/progress/{run_id}  SSE endpoint for real-time progress updates
+- GET  /api/ingestion/logs/{run_id}   CloudWatch logs for a run (polling)
 
 Interactive API docs:
 - Swagger UI: http://localhost:8000/docs
@@ -435,7 +436,16 @@ async def start_ingestion(
     if worker_function_name:
         try:
             lambda_client = boto3.client("lambda")
-            payload = json.dumps({"run_id": run.id, "user_id": user_id})
+
+            # Check if we're running locally (not in Lambda)
+            # If local, pass use_test_db=true so worker uses TEST_DATABASE_URL
+            is_local = os.environ.get("AWS_LAMBDA_FUNCTION_NAME") is None
+            payload_data = {
+                "run_id": run.id,
+                "user_id": user_id,
+                "use_test_db": is_local,  # True for local dev, False for Lambda
+            }
+            payload = json.dumps(payload_data)
 
             # InvocationType='Event' = async invoke (fire-and-forget)
             # Returns immediately with 202 Accepted
@@ -447,7 +457,7 @@ async def start_ingestion(
 
             logger.info(
                 f"Invoked worker {worker_function_name} for run {run.id}, "
-                f"StatusCode={response.get('StatusCode')}"
+                f"StatusCode={response.get('StatusCode')}, use_test_db={is_local}"
             )
         except Exception as e:
             # Log but don't fail - run record exists, can be recovered
@@ -461,7 +471,7 @@ async def start_ingestion(
                 detail="Failed to start ingestion worker"
             )
     else:
-        # Local development - no worker Lambda
+        # Local development - no worker Lambda configured
         logger.warning(f"WORKER_FUNCTION_NAME not set, run {run.id} will stay pending")
 
     return StartIngestionResponse(run_id=run.id)
@@ -664,3 +674,129 @@ async def get_progress(
             "X-Accel-Buffering": "no",  # Disable nginx buffering
         },
     )
+
+
+# =============================================================================
+# CloudWatch Logs Streaming Endpoint
+# =============================================================================
+
+class LogEntry(BaseModel):
+    """Single log entry from CloudWatch."""
+    timestamp: int
+    message: str
+    ingestion_time: Optional[int] = None
+
+
+class LogsResponse(BaseModel):
+    """Response containing log entries and pagination token."""
+    logs: list[LogEntry]
+    next_token: Optional[str] = None
+
+
+@router.get("/logs/{run_id}", response_model=LogsResponse)
+async def get_worker_logs(
+    run_id: int,
+    token: str,
+    start_time: Optional[int] = None,
+    next_token: Optional[str] = None,
+    limit: int = 100,
+):
+    """
+    Get CloudWatch logs for a specific ingestion run.
+
+    Fetches logs from the IngestionWorker Lambda, filtered by
+    the log prefix [IngestionWorker:run_id=X].
+
+    Uses FilterLogEvents API (free tier: 1M requests/month).
+
+    Auth: JWT token must be passed as query parameter (?token=xxx)
+    because EventSource API cannot send Authorization headers.
+
+    Args:
+        run_id: Path parameter - the run to get logs for
+        token: Query parameter - JWT token for authentication
+        start_time: Optional - Unix timestamp (ms) to start from
+        next_token: Optional - Pagination token from previous response
+        limit: Optional - Max number of log entries (default 100, max 1000)
+
+    Returns:
+        LogsResponse with log entries and optional pagination token
+
+    Example:
+        // Initial fetch
+        GET /api/ingestion/logs/123?token=xxx
+
+        // Pagination
+        GET /api/ingestion/logs/123?token=xxx&next_token=abc123
+
+        // Polling for new logs (pass last timestamp + 1)
+        GET /api/ingestion/logs/123?token=xxx&start_time=1704067200001
+    """
+    # Authenticate using query param token
+    current_user = get_current_user_from_token(token)
+    user_id = current_user["user_id"]
+
+    # Verify user owns this run
+    db = SessionLocal()
+    try:
+        run = db.query(IngestionRun).filter(
+            IngestionRun.id == run_id,
+            IngestionRun.user_id == user_id
+        ).first()
+
+        if not run:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Run {run_id} not found"
+            )
+    finally:
+        db.close()
+
+    # Build filter pattern for this run
+    filter_pattern = f'"[IngestionWorker:run_id={run_id}]"'
+
+    # Query CloudWatch Logs
+    try:
+        logs_client = boto3.client("logs")
+
+        # Build request params
+        params = {
+            "logGroupName": "/aws/lambda/IngestionWorker",
+            "filterPattern": filter_pattern,
+            "limit": min(limit, 1000),  # CloudWatch max is 10000, we cap at 1000
+        }
+
+        if start_time:
+            params["startTime"] = start_time
+
+        if next_token:
+            params["nextToken"] = next_token
+
+        response = logs_client.filter_log_events(**params)
+
+        # Convert to response format
+        logs = [
+            LogEntry(
+                timestamp=event["timestamp"],
+                message=event["message"],
+                ingestion_time=event.get("ingestionTime"),
+            )
+            for event in response.get("events", [])
+        ]
+
+        return LogsResponse(
+            logs=logs,
+            next_token=response.get("nextToken"),
+        )
+
+    except logs_client.exceptions.ResourceNotFoundException:
+        # Log group doesn't exist yet (no Lambda invocations)
+        logger.warning(f"Log group /aws/lambda/IngestionWorker not found")
+        return LogsResponse(logs=[], next_token=None)
+
+    except Exception as e:
+        logger.exception(f"Failed to fetch CloudWatch logs for run {run_id}: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to fetch logs"
+        )

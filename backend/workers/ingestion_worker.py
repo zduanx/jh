@@ -7,7 +7,8 @@ It handles the long-running job ingestion process (up to 15 minutes).
 Event format:
 {
     "run_id": 123,
-    "user_id": 456
+    "user_id": 456,
+    "use_test_db": false  // Optional: when true, uses TEST_DATABASE_URL (for local dev)
 }
 
 Workflow:
@@ -21,6 +22,10 @@ Workflow:
    - Send job URLs to SQS for async crawling (Phase 2I)
    - For now: mock 30s wait, mark all jobs 'ready'
 5. Finalize run: write snapshot counts, status → finished
+
+Log Format:
+All logs use prefix [IngestionWorker:run_id=X] for CloudWatch filtering.
+Frontend can stream logs by filtering on this pattern.
 """
 
 import logging
@@ -31,7 +36,7 @@ from typing import Optional
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-from db.session import SessionLocal
+from db.session import SessionLocal, get_test_session_local
 from db.company_settings_service import get_enabled_settings
 from db.jobs_service import upsert_jobs_from_job_data, mark_expired_jobs
 from models.ingestion_run import IngestionRun, RunStatus
@@ -45,6 +50,25 @@ from workers.types import (
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
+
+
+# =============================================================================
+# Logging Helpers - All logs use [IngestionWorker:run_id=X] prefix
+# =============================================================================
+
+def log_info(run_id: int, message: str) -> None:
+    """Log info with standard prefix for CloudWatch filtering."""
+    logger.info(f"[IngestionWorker:run_id={run_id}] {message}")
+
+
+def log_warning(run_id: int, message: str) -> None:
+    """Log warning with standard prefix for CloudWatch filtering."""
+    logger.warning(f"[IngestionWorker:run_id={run_id}] {message}")
+
+
+def log_error(run_id: int, message: str) -> None:
+    """Log error with standard prefix for CloudWatch filtering."""
+    logger.error(f"[IngestionWorker:run_id={run_id}] {message}")
 
 
 # =============================================================================
@@ -126,9 +150,10 @@ def run_initialization_phase(
     Returns:
         InitializationResult with all jobs ready for ingestion phase
     """
-    logger.info(f"Run {run.id}: Starting initialization phase")
+    log_info(run.id, "Starting initialization phase")
 
     # Step 1: Run extractors for all enabled companies
+    log_info(run.id, f"Running extractors for {len(settings)} companies")
     extractor_results = _run_extractors(settings)
 
     # Step 2: Convert to typed structures and UPSERT
@@ -136,7 +161,7 @@ def run_initialization_phase(
 
     for company_name, extractor_result in extractor_results.items():
         if extractor_result.status != "success":
-            logger.warning(f"Run {run.id}: Extractor failed for {company_name}: {extractor_result.error_message}")
+            log_warning(run.id, f"Extractor failed for {company_name}: {extractor_result.error_message}")
             company_results.append(CompanyResult(
                 company=company_name,
                 status="error",
@@ -166,7 +191,7 @@ def run_initialization_phase(
             jobs=jobs,
         ))
 
-        logger.info(f"Run {run.id}: UPSERT {len(jobs)} jobs for {company_name}")
+        log_info(run.id, f"UPSERT {len(jobs)} jobs for {company_name}")
 
     # Step 3: Mark expired jobs (not in current extraction results)
     # UPSERT already set run_id for current jobs, so mark_expired_jobs
@@ -198,7 +223,7 @@ def run_initialization_phase(
         jobs_expired=jobs_expired,
     )
 
-    logger.info(f"Run {run.id}: Initialization complete - {result.total_jobs} jobs, {jobs_expired} expired")
+    log_info(run.id, f"Initialization complete - {result.total_jobs} jobs, {jobs_expired} expired")
 
     return result
 
@@ -229,8 +254,8 @@ def run_ingestion_phase(
     # Simulates 30s processing, then marks all jobs as 'ready'
     # Will be replaced with real SQS publishing in Phase 2I
     # ==========================================================================
-    logger.info(f"Run {run.id}: Starting ingestion phase (30s mock)")
-    logger.info(f"Run {run.id}: Would send {len(init_result.to_crawl_messages())} messages to SQS")
+    log_info(run.id, "Starting ingestion phase (30s mock)")
+    log_info(run.id, f"Would send {len(init_result.to_crawl_messages())} messages to SQS")
     time.sleep(30)
 
     # Mark all pending jobs for this run as 'ready'
@@ -250,7 +275,7 @@ def run_ingestion_phase(
     )
     db.commit()
 
-    logger.info(f"Run {run.id}: Marked {init_result.total_jobs} jobs as ready (mock)")
+    log_info(run.id, f"Marked {init_result.total_jobs} jobs as ready (mock)")
 
     return IngestionResult(
         jobs_ready=init_result.total_jobs,
@@ -287,12 +312,12 @@ def process_run(
     # Get the run record
     run = _get_run(db, run_id)
     if not run:
-        logger.error(f"Run {run_id} not found")
+        log_error(run_id, "Run not found")
         return {"error": f"Run {run_id} not found"}
 
     # Check if run was aborted before we started
     if run.status == RunStatus.ABORTED:
-        logger.info(f"Run {run_id} was aborted before worker started")
+        log_info(run_id, "Run was aborted before worker started")
         return {"run_id": run_id, "status": RunStatus.ABORTED}
 
     # Update status: pending → initializing
@@ -301,11 +326,12 @@ def process_run(
         status=RunStatus.INITIALIZING,
         started_at=datetime.now(timezone.utc),
     )
-    logger.info(f"Run {run_id} status: {RunStatus.INITIALIZING}")
+    log_info(run_id, f"Status: {RunStatus.INITIALIZING}")
 
     # Get enabled company settings
     settings = _get_user_enabled_settings(db, user_id)
     if not settings:
+        log_error(run_id, "No enabled companies configured")
         _update_run_status(
             db, run,
             status=RunStatus.ERROR,
@@ -325,17 +351,16 @@ def process_run(
         total_jobs=init_result.total_jobs,
         jobs_expired=init_result.jobs_expired,
     )
-    logger.info(f"Run {run_id}: Initialization complete - {len(settings)} companies, {init_result.total_jobs} jobs, {init_result.jobs_expired} expired")
 
     # Check for abort before proceeding
     _refresh_run(db, run)
     if run.status == RunStatus.ABORTED:
-        logger.info(f"Run {run_id} was aborted during initialization")
+        log_info(run_id, "Run was aborted during initialization")
         return {"run_id": run_id, "status": RunStatus.ABORTED}
 
     # Update status: initializing → ingesting
     _update_run_status(db, run, status=RunStatus.INGESTING)
-    logger.info(f"Run {run_id} status: {RunStatus.INGESTING}")
+    log_info(run_id, f"Status: {RunStatus.INGESTING}")
 
     # =======================================================================
     # INGESTION PHASE
@@ -345,7 +370,7 @@ def process_run(
     # Check for abort after ingestion
     _refresh_run(db, run)
     if run.status == RunStatus.ABORTED:
-        logger.info(f"Run {run_id} was aborted during ingestion")
+        log_info(run_id, "Run was aborted during ingestion")
         return {"run_id": run_id, "status": RunStatus.ABORTED}
 
     # Finalize run with snapshot
@@ -359,7 +384,7 @@ def process_run(
         jobs_failed=ingestion_result.jobs_failed,
     )
 
-    logger.info(f"Run {run_id} completed: status={RunStatus.FINISHED}, jobs_ready={ingestion_result.jobs_ready}")
+    log_info(run_id, f"Completed: status={RunStatus.FINISHED}, jobs_ready={ingestion_result.jobs_ready}")
 
     return {
         "run_id": run_id,
@@ -377,7 +402,11 @@ def handler(event: dict, context) -> dict:
     Lambda handler for async ingestion worker.
 
     Args:
-        event: {run_id: int, user_id: int}
+        event: {
+            run_id: int,
+            user_id: int,
+            use_test_db: bool  // Optional: when true, uses TEST_DATABASE_URL
+        }
         context: Lambda context (unused)
 
     Returns:
@@ -385,18 +414,30 @@ def handler(event: dict, context) -> dict:
     """
     run_id = event.get("run_id")
     user_id = event.get("user_id")
+    use_test_db = event.get("use_test_db", False)
 
     if not run_id or not user_id:
         logger.error(f"Missing required fields: run_id={run_id}, user_id={user_id}")
         return {"error": "Missing run_id or user_id"}
 
-    logger.info(f"Starting ingestion worker for run_id={run_id}, user_id={user_id}")
+    # Choose database based on use_test_db flag
+    # When local dev invokes AWS worker, it passes use_test_db=true
+    # so the worker uses TEST_DATABASE_URL instead of prod DATABASE_URL
+    if use_test_db:
+        log_info(run_id, "Using TEST database (use_test_db=true)")
+        TestSessionLocal = get_test_session_local()
+        db = TestSessionLocal()
+    else:
+        log_info(run_id, "Using PROD database")
+        db = SessionLocal()
 
-    db = SessionLocal()
+    log_info(run_id, f"Starting worker for user_id={user_id}")
+
     try:
         return process_run(db, run_id, user_id)
 
     except Exception as e:
+        log_error(run_id, f"Worker error: {e}")
         logger.exception(f"Worker error for run {run_id}: {e}")
 
         # Try to mark run as error
