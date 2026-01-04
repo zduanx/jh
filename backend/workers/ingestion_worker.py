@@ -251,38 +251,91 @@ def run_ingestion_phase(
       4. Remove finalization - SQS workers will update status when done
     """
     # ==========================================================================
-    # TEMPORARY MOCK - Phase 2G
-    # Simulates 30s processing, then marks all jobs as 'ready' and finalizes run
+    # TEMPORARY MOCK - Phase 2G/2H
+    # Simulates batched processing to test SSE reconnection and diff updates
+    # Processes jobs in 10 batches with 6s delay between each (~60s total)
+    # Each job randomly assigned: ready (70%), skipped (20%), error (10%)
     # Will be replaced with real SQS publishing in Phase 2I
     # ==========================================================================
-    log_info(run.id, "Starting ingestion phase (30s mock)")
+    import random
+    from models.job import Job, JobStatus
+
+    log_info(run.id, "Starting ingestion phase (batched mock for SSE testing)")
     log_info(run.id, f"Would send {len(init_result.to_crawl_messages())} messages to SQS")
-    time.sleep(30)
 
-    # Mark all pending jobs for this run as 'ready'
-    from models.job import JobStatus
-    db.execute(
-        text("""
-            UPDATE jobs
-            SET status = :ready_status, updated_at = :now
-            WHERE run_id = :run_id AND status = :pending_status
-        """),
-        {
-            "run_id": run.id,
-            "ready_status": JobStatus.READY,
-            "pending_status": JobStatus.PENDING,
-            "now": datetime.now(timezone.utc),
-        },
-    )
-    db.commit()
+    # Get all pending job IDs for this run
+    pending_jobs = db.query(Job.id).filter(
+        Job.run_id == run.id,
+        Job.status == JobStatus.PENDING
+    ).all()
+    job_ids = [j.id for j in pending_jobs]
 
-    log_info(run.id, f"Marked {init_result.total_jobs} jobs as ready (mock)")
+    # Track counts for final result
+    jobs_ready = 0
+    jobs_skipped = 0
+    jobs_failed = 0
+
+    if job_ids:
+        # Split into 10 batches (or fewer if less than 10 jobs)
+        num_batches = min(10, len(job_ids))
+        batch_size = len(job_ids) // num_batches
+        remainder = len(job_ids) % num_batches
+
+        batches = []
+        start = 0
+        for i in range(num_batches):
+            # Distribute remainder across first batches
+            extra = 1 if i < remainder else 0
+            end = start + batch_size + extra
+            batches.append(job_ids[start:end])
+            start = end
+
+        log_info(run.id, f"Processing {len(job_ids)} jobs in {len(batches)} batches (6s delay each)")
+
+        for i, batch in enumerate(batches):
+            # Wait 6s between batches (skip first batch)
+            if i > 0:
+                time.sleep(6)
+
+            # Randomly assign each job a status: ready (70%), skipped (20%), error (10%)
+            for job_id in batch:
+                rand = random.random()
+                if rand < 0.7:
+                    status = JobStatus.READY
+                    jobs_ready += 1
+                elif rand < 0.9:
+                    status = JobStatus.SKIPPED
+                    jobs_skipped += 1
+                else:
+                    status = JobStatus.ERROR
+                    jobs_failed += 1
+
+                db.execute(
+                    text("""
+                        UPDATE jobs
+                        SET status = :status, updated_at = :now
+                        WHERE id = :job_id
+                    """),
+                    {
+                        "job_id": job_id,
+                        "status": status,
+                        "now": datetime.now(timezone.utc),
+                    },
+                )
+
+            db.commit()
+
+            log_info(run.id, f"Batch {i+1}/{len(batches)}: processed {len(batch)} jobs")
+    else:
+        log_info(run.id, "No pending jobs to process")
+
+    log_info(run.id, f"Processed {len(job_ids)} jobs: {jobs_ready} ready, {jobs_skipped} skipped, {jobs_failed} error")
 
     result = IngestionResult(
-        jobs_ready=init_result.total_jobs,
-        jobs_skipped=0,
+        jobs_ready=jobs_ready,
+        jobs_skipped=jobs_skipped,
         jobs_expired=init_result.jobs_expired,
-        jobs_failed=0,
+        jobs_failed=jobs_failed,
     )
 
     # Finalize run with snapshot (mock only - Phase 2I will move this to SQS workers)

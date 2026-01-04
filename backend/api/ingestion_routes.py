@@ -41,6 +41,7 @@ from db.company_settings_service import (
 )
 from extractors.registry import list_companies
 from models.ingestion_run import IngestionRun, RunStatus
+from models.job import Job
 from sourcing.extractor_utils import run_extractors_async
 
 logger = logging.getLogger(__name__)
@@ -552,69 +553,135 @@ async def abort_ingestion(
 # SSE Progress Endpoint
 # =============================================================================
 
-class ProgressEvent(BaseModel):
-    """SSE progress event data."""
-    run_id: int
-    status: str
-    total_jobs: Optional[int] = None
-    jobs_ready: int = 0
-    jobs_skipped: int = 0
-    jobs_expired: int = 0
-    jobs_failed: int = 0
-    error_message: Optional[str] = None
+
+def _build_jobs_by_company(jobs: list[Job]) -> dict[str, list[dict]]:
+    """
+    Build job map grouped by company.
+
+    Returns: {company: [{external_id, title, status}, ...]}
+    """
+    result: dict[str, list[dict]] = {}
+    for job in jobs:
+        if job.company not in result:
+            result[job.company] = []
+        result[job.company].append({
+            "external_id": job.external_id,
+            "title": job.title,
+            "status": job.status,
+        })
+    return result
+
+
+def _compute_job_diffs(
+    prev_state: dict[str, dict[str, str]],
+    curr_jobs: list[Job]
+) -> tuple[dict[str, dict[str, str]], dict[str, dict[str, str]]]:
+    """
+    Compute diff between previous state and current jobs.
+
+    Args:
+        prev_state: {company: {external_id: status, ...}}
+        curr_jobs: Current job list from DB
+
+    Returns:
+        (new_state, diff) where diff only contains changed statuses
+    """
+    # Build current state map
+    curr_state: dict[str, dict[str, str]] = {}
+    for job in curr_jobs:
+        if job.company not in curr_state:
+            curr_state[job.company] = {}
+        curr_state[job.company][job.external_id] = job.status
+
+    # Compute diff
+    diff: dict[str, dict[str, str]] = {}
+    for company, jobs_map in curr_state.items():
+        prev_company = prev_state.get(company, {})
+        for ext_id, status in jobs_map.items():
+            if prev_company.get(ext_id) != status:
+                if company not in diff:
+                    diff[company] = {}
+                diff[company][ext_id] = status
+
+    return curr_state, diff
 
 
 async def _progress_generator(run_id: int, user_id: int):
     """
     Generator for SSE progress events.
 
-    Polls DB every 2 seconds and emits current state.
-    Stops when run reaches terminal status.
+    Event types:
+    - status: Run status string (pending, initializing, finished, error, aborted)
+    - all_jobs: Full job map on first poll during ingesting phase
+    - update: Diff of changed job statuses during ingesting phase
+
+    Polls DB every 3 seconds. Stops when run reaches terminal status.
     """
     db = SessionLocal()
+    # Track previous job state for computing diffs
+    prev_job_state: dict[str, dict[str, str]] = {}
+    sent_all_jobs = False
+
     try:
         while True:
             # Fetch current run state
             run = db.query(IngestionRun).filter(IngestionRun.id == run_id).first()
 
             if not run:
-                # Run was deleted
-                yield f"data: {json.dumps({'error': 'Run not found'})}\n\n"
+                yield f"event: error\ndata: Run not found\n\n"
                 break
 
             # Security check: verify user owns this run
             if run.user_id != user_id:
-                yield f"data: {json.dumps({'error': 'Not authorized'})}\n\n"
+                yield f"event: error\ndata: Not authorized\n\n"
                 break
 
-            # Build progress event
-            event = ProgressEvent(
-                run_id=run.id,
-                status=run.status,
-                total_jobs=run.total_jobs,
-                jobs_ready=run.jobs_ready or 0,
-                jobs_skipped=run.jobs_skipped or 0,
-                jobs_expired=run.jobs_expired or 0,
-                jobs_failed=run.jobs_failed or 0,
-                error_message=run.error_message,
-            )
+            # Handle based on run status
+            if run.status in [RunStatus.PENDING, RunStatus.INITIALIZING]:
+                # No jobs yet, just emit status
+                yield f"event: status\ndata: {run.status}\n\n"
 
-            # Emit event
-            yield f"data: {event.model_dump_json()}\n\n"
+            elif run.status == RunStatus.INGESTING:
+                # Poll jobs table for real-time updates
+                jobs = db.query(Job).filter(Job.run_id == run_id).all()
 
-            # Stop if terminal status
-            if run.status in RunStatus.TERMINAL:
+                if not sent_all_jobs:
+                    # First poll: emit full job map
+                    jobs_by_company = _build_jobs_by_company(jobs)
+                    yield f"event: all_jobs\ndata: {json.dumps(jobs_by_company)}\n\n"
+
+                    # Initialize prev_state for diff tracking
+                    for job in jobs:
+                        if job.company not in prev_job_state:
+                            prev_job_state[job.company] = {}
+                        prev_job_state[job.company][job.external_id] = job.status
+
+                    sent_all_jobs = True
+                else:
+                    # Subsequent polls: emit only diffs
+                    prev_job_state, diff = _compute_job_diffs(prev_job_state, jobs)
+                    if diff:
+                        yield f"event: update\ndata: {json.dumps(diff)}\n\n"
+
+            elif run.status in RunStatus.TERMINAL:
+                # Terminal status - emit final job state, then status, then close
+                jobs = db.query(Job).filter(Job.run_id == run_id).all()
+                if jobs:
+                    # Always send final all_jobs so frontend has complete state
+                    jobs_by_company = _build_jobs_by_company(jobs)
+                    yield f"event: all_jobs\ndata: {json.dumps(jobs_by_company)}\n\n"
+                yield f"event: status\ndata: {run.status}\n\n"
                 break
 
             # Wait before next poll
-            await asyncio.sleep(2)
+            await asyncio.sleep(3)
 
             # Refresh session to see latest DB changes
             db.expire_all()
 
     except Exception as e:
         logger.exception(f"SSE generator error for run {run_id}: {e}")
-        yield f"data: {json.dumps({'error': 'Server error'})}\n\n"
+        yield f"event: error\ndata: Server error\n\n"
     finally:
         db.close()
 
@@ -640,26 +707,52 @@ async def get_progress(
     Returns:
         StreamingResponse with text/event-stream content type
 
+    Event Types:
+        - status: Run status (pending, initializing, finished, error, aborted)
+        - all_jobs: Full job map on first poll during ingesting phase
+        - update: Diff of changed job statuses during ingesting phase
+        - error: Error message (run not found, not authorized, server error)
+
     Example:
         // Frontend usage
-        const eventSource = new EventSource(
-            `/api/ingestion/progress/123?token=${jwtToken}`
-        );
+        const es = new EventSource(`/api/ingestion/progress/123?token=${jwt}`);
 
-        eventSource.onmessage = (event) => {
-            const data = JSON.parse(event.data);
-            console.log('Progress:', data);
-            // data = { run_id, status, total_jobs, jobs_ready, ... }
-        };
+        es.addEventListener('status', (e) => {
+            console.log('Status:', e.data);  // "pending", "initializing", "finished"
+            if (['finished', 'error', 'aborted'].includes(e.data)) {
+                es.close();
+            }
+        });
 
-        eventSource.onerror = () => {
-            eventSource.close();
-        };
+        es.addEventListener('all_jobs', (e) => {
+            const jobs = JSON.parse(e.data);
+            // jobs = {google: [{external_id, title, status}, ...], amazon: [...]}
+            setJobs(jobs);
+        });
+
+        es.addEventListener('update', (e) => {
+            const diff = JSON.parse(e.data);
+            // diff = {google: {external_id: "ready"}, amazon: {ext_id: "error"}}
+            applyDiff(diff);
+        });
+
+        es.addEventListener('error', (e) => {
+            console.error('SSE error:', e.data);
+            es.close();
+        });
 
     Event format (SSE):
-        data: {"run_id": 123, "status": "ingesting", "total_jobs": 50, "jobs_ready": 10, ...}
+        event: status
+        data: pending
 
-        data: {"run_id": 123, "status": "finished", "total_jobs": 50, "jobs_ready": 48, ...}
+        event: all_jobs
+        data: {"google": [{"external_id": "123", "title": "Engineer", "status": "pending"}]}
+
+        event: update
+        data: {"google": {"123": "ready"}}
+
+        event: status
+        data: finished
     """
     # Authenticate using query param token
     current_user = get_current_user_from_token(token)
