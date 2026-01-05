@@ -616,14 +616,19 @@ async def _progress_generator(run_id: int, user_id: int):
     - update: Diff of changed job statuses during ingesting phase
 
     Polls DB every 3 seconds. Stops when run reaches terminal status.
+    Uses db.expire_all() before each poll to see committed changes from other sessions.
     """
-    db = SessionLocal()
     # Track previous job state for computing diffs
     prev_job_state: dict[str, dict[str, str]] = {}
     sent_all_jobs = False
 
+    db = SessionLocal()
     try:
         while True:
+            # Expire all cached objects so next query fetches fresh data
+            # This is the standard SQLAlchemy pattern for long-running sessions
+            db.expire_all()
+
             # Fetch current run state
             run = db.query(IngestionRun).filter(IngestionRun.id == run_id).first()
 
@@ -644,10 +649,12 @@ async def _progress_generator(run_id: int, user_id: int):
             elif run.status == RunStatus.INGESTING:
                 # Poll jobs table for real-time updates
                 jobs = db.query(Job).filter(Job.run_id == run_id).all()
+                logger.info(f"SSE poll run {run_id}: {len(jobs)} jobs, sent_all_jobs={sent_all_jobs}")
 
                 if not sent_all_jobs:
                     # First poll: emit full job map
                     jobs_by_company = _build_jobs_by_company(jobs)
+                    logger.info(f"SSE emitting all_jobs for run {run_id}")
                     yield f"event: all_jobs\ndata: {json.dumps(jobs_by_company)}\n\n"
 
                     # Initialize prev_state for diff tracking
@@ -661,6 +668,7 @@ async def _progress_generator(run_id: int, user_id: int):
                     # Subsequent polls: emit only diffs
                     prev_job_state, diff = _compute_job_diffs(prev_job_state, jobs)
                     if diff:
+                        logger.info(f"SSE emitting update for run {run_id}: {len(diff)} companies")
                         yield f"event: update\ndata: {json.dumps(diff)}\n\n"
 
             elif run.status in RunStatus.TERMINAL:
@@ -675,10 +683,6 @@ async def _progress_generator(run_id: int, user_id: int):
 
             # Wait before next poll
             await asyncio.sleep(3)
-
-            # Refresh session to see latest DB changes
-            db.expire_all()
-
     except Exception as e:
         logger.exception(f"SSE generator error for run {run_id}: {e}")
         yield f"event: error\ndata: Server error\n\n"
