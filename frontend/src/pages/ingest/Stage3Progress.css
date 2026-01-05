@@ -174,6 +174,28 @@
   font-weight: 500;
 }
 
+.s3-status-detail {
+  font-size: 13px;
+  font-weight: 500;
+  padding: 2px 8px;
+  border-radius: 4px;
+}
+
+.s3-status-ready {
+  background: #dcfce7;
+  color: #15803d;
+}
+
+.s3-status-skipped {
+  background: #fef3c7;
+  color: #b45309;
+}
+
+.s3-status-error-count {
+  background: #fef2f2;
+  color: #dc2626;
+}
+
 .s3-status-expired {
   font-size: 13px;
   color: #94a3b8;
@@ -387,4 +409,159 @@
 
 .s3-summary-aborted .s3-new-run-btn:hover {
   background: #475569;
+}
+
+/* Jobs by Company Grid */
+.s3-jobs-summary {
+  font-size: 13px;
+  font-weight: 400;
+  color: #64748b;
+}
+
+.s3-companies-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 16px;
+  padding: 16px;
+}
+
+.s3-company-card {
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  padding: 12px 16px;
+}
+
+.s3-company-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.s3-company-name {
+  font-size: 14px;
+  font-weight: 600;
+  color: #1e293b;
+  text-transform: capitalize;
+}
+
+.s3-company-count {
+  font-size: 13px;
+  font-weight: 500;
+  color: #64748b;
+}
+
+.s3-company-progress-bar {
+  height: 4px;
+  background: #e2e8f0;
+  border-radius: 2px;
+  margin-bottom: 12px;
+  overflow: hidden;
+}
+
+.s3-company-progress-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #22c55e 0%, #16a34a 100%);
+  border-radius: 2px;
+  transition: width 0.3s ease;
+}
+
+.s3-company-jobs {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.s3-job-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 6px 10px;
+  border-radius: 4px;
+  font-size: 12px;
+}
+
+.s3-job-title {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  margin-right: 8px;
+}
+
+.s3-job-status {
+  font-size: 11px;
+  font-weight: 500;
+  text-transform: uppercase;
+  flex-shrink: 0;
+}
+
+/* Job status colors */
+/* ready = green */
+.s3-job-ready {
+  background: #dcfce7;
+  color: #166534;
+}
+
+.s3-job-ready .s3-job-status {
+  color: #15803d;
+}
+
+/* skipped = yellow */
+.s3-job-skipped {
+  background: #fef3c7;
+  color: #92400e;
+}
+
+.s3-job-skipped .s3-job-status {
+  color: #b45309;
+}
+
+/* error = red */
+.s3-job-error {
+  background: #fef2f2;
+  color: #991b1b;
+}
+
+.s3-job-error .s3-job-status {
+  color: #dc2626;
+}
+
+/* other statuses = grey */
+.s3-job-pending {
+  background: #f1f5f9;
+  color: #475569;
+}
+
+.s3-job-pending .s3-job-status {
+  color: #64748b;
+}
+
+.s3-job-expired {
+  background: #f1f5f9;
+  color: #475569;
+}
+
+.s3-job-expired .s3-job-status {
+  color: #64748b;
+}
+
+.s3-job-more-btn {
+  font-size: 12px;
+  color: #3b82f6;
+  text-align: center;
+  padding: 6px 4px;
+  width: 100%;
+  background: none;
+  border: 1px dashed #cbd5e1;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.s3-job-more-btn:hover {
+  background: #f1f5f9;
+  border-color: #3b82f6;
+  color: #2563eb;
 }
