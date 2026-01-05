@@ -617,7 +617,12 @@ async def _progress_generator(run_id: int, user_id: int):
 
     Polls DB every 3 seconds. Stops when run reaches terminal status.
     Uses db.expire_all() before each poll to see committed changes from other sessions.
+
+    TEMP: Forces close after 30s to test reconnection locally (simulates API Gateway timeout).
     """
+    import time
+    start_time = time.time()
+
     # Track previous job state for computing diffs
     prev_job_state: dict[str, dict[str, str]] = {}
     sent_all_jobs = False
@@ -625,6 +630,11 @@ async def _progress_generator(run_id: int, user_id: int):
     db = SessionLocal()
     try:
         while True:
+            # TEMP: Force close after 30s to simulate AWS API Gateway timeout
+            # API Gateway terminates connections abruptly - no chance to send data
+            if time.time() - start_time > 30:
+                logger.info(f"SSE forcing close after 30s for run {run_id} (simulating API Gateway timeout)")
+                raise Exception("Simulated API Gateway 29s timeout")
             # Expire all cached objects so next query fetches fresh data
             # This is the standard SQLAlchemy pattern for long-running sessions
             db.expire_all()
@@ -850,7 +860,9 @@ async def get_worker_logs(
         db.close()
 
     # Build filter pattern for this run
-    filter_pattern = f'"[IngestionWorker:run_id={run_id}]"'
+    # Quote the full prefix to match exactly - this ensures we only get IngestionWorker logs
+    # and not logs from other systems (SQS workers, etc.) that might also have run_id
+    filter_pattern = f'"[IngestionWorker" "run_id={run_id}]"'
 
     # Query CloudWatch Logs
     try:
@@ -863,8 +875,13 @@ async def get_worker_logs(
             "limit": min(limit, 1000),  # CloudWatch max is 10000, we cap at 1000
         }
 
+        # Always set a startTime - without it, CloudWatch scans all streams which is slow
+        # Default to last 24 hours if not specified
         if start_time:
             params["startTime"] = start_time
+        else:
+            import time
+            params["startTime"] = int((time.time() - 86400) * 1000)  # 24 hours ago in ms
 
         if next_token:
             params["nextToken"] = next_token
