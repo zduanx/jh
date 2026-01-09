@@ -1,7 +1,7 @@
 # Phase 2H: SSE Progress + Frontend
 
-**Status**: 📋 Planning
-**Date**: TBD
+**Status**: ✅ Completed
+**Date**: January 4, 2026
 **Goal**: Real-time progress updates via SSE + frontend Stage3Progress component
 
 ---
@@ -15,17 +15,15 @@ Phase 2H adds real-time progress display to the ingestion flow. The backend prov
 **Prerequisite**: Phase 2G must be complete (Worker Lambda + job UPSERT).
 
 **Included in this phase**:
-- SSE `/progress/{run_id}` endpoint
-- Full state + diff update protocol
-- Frontend SSE connection (Stage3Progress)
-- Reconnection handling
-- Progress display UI
+- SSE `/progress/{run_id}` endpoint with full state + diff protocol
+- Frontend EventSource connection with reconnection handling
+- Progress display UI (done/total counts, status badges, company cards)
+- SQLAlchemy `db.expire_all()` fix for stale reads in long-running SSE
+- Final log fetch after terminal status (ensures no logs are missed)
 
-**Explicitly excluded** (deferred to Phase 2I):
-- Real job crawling (mock status updates)
-- SQS queues
-- S3 storage for raw HTML
-- SimHash deduplication
+**Explicitly excluded** (deferred to Phase 2I/2J):
+- Extractor flow improvements (raw info crawling, extraction logic) → Phase 2I
+- Real job crawling (SQS, Lambda workers, S3 storage) → Phase 2J
 
 ---
 
@@ -49,6 +47,16 @@ Phase 2H adds real-time progress display to the ingestion flow. The backend prov
 - Auto-reconnect on API Gateway 29s timeout
 - Auto-navigate to results on completion
 
+### 4. SQLAlchemy Stale Read Fix
+- Long-running SSE connections cache SQLAlchemy objects
+- Added `db.expire_all()` before each poll to refresh cached data
+- Ensures job status updates are visible without session restart
+
+### 5. Final Log Fetch
+- CloudWatch logs may arrive after terminal status
+- Added 1-second delayed final fetch after reaching terminal state
+- Uses `useRef` to track completion and prevent duplicate fetches
+
 ---
 
 ## Architecture
@@ -57,13 +65,13 @@ Phase 2H adds real-time progress display to the ingestion flow. The backend prov
 GET /progress/{run_id} (SSE, polls every 3s)
     ├─> pending/initializing: poll ingestion_run → emit status
     ├─> ingesting: poll jobs → emit all_jobs (first) / update (diffs)
-    └─> finished/error/aborted: emit status, close stream
+    └─> finished/error/aborted: emit final all_jobs → emit status → close stream
 
 Frontend (Stage3Progress)
     ├─> Connect EventSource on mount
     ├─> Handle status/all_jobs/update events
-    ├─> Rebuild state on reconnect
-    └─> Navigate to results on completion
+    ├─> Rebuild state on reconnect (all_jobs replaces state)
+    └─> Navigate to Stage 4 (Summary) on terminal status
 ```
 
 ---
@@ -86,7 +94,7 @@ Frontend (Stage3Progress)
 | pending | `ingestion_run` | `status: pending` |
 | initializing | `ingestion_run` | `status: initializing` |
 | ingesting | `jobs` table | `all_jobs` (first), then `update` diffs |
-| finished/error/aborted | - | `status: <terminal>`, close stream |
+| finished/error/aborted | `jobs` table (final) | `all_jobs` (final state) → `status: <terminal>` → close stream |
 
 ### Event Format
 
@@ -156,6 +164,19 @@ Per 29s reconnect cycle:
 
 ---
 
+## Metrics
+
+| Metric | Value |
+|--------|-------|
+| SSE poll interval | 3 seconds |
+| API Gateway timeout | 29 seconds |
+| Reconnect behavior | Automatic (EventSource native) |
+| Full state size (100 jobs) | ~25KB |
+| Diff update size | ~0.5KB |
+| Final log fetch delay | 1 second |
+
+---
+
 ## Testing & Validation
 
 **Manual Testing**:
@@ -173,14 +194,13 @@ Per 29s reconnect cycle:
 
 ## Next Steps → Phase 2I
 
-Phase 2I replaces mock with real infrastructure:
-- SQS queues for job distribution
-- Crawler Lambda for fetching HTML
-- Extractor Lambda for parsing content
-- S3 storage for raw HTML
-- SimHash deduplication
+Phase 2I improves the extractor flow:
+- Raw info crawling (browser simulation to fetch job page content)
+- Raw info extraction (parse requirements, description from raw HTML)
+- Claude-generated extraction prompts for custom logic per company
+- Reusable prompt templates for extractor class generation
 
-**Target**: Production-ready job crawling pipeline
+**Target**: Enhanced extractor classes with full job detail extraction
 
 ---
 
@@ -211,7 +231,8 @@ frontend/src/pages/ingest/
 - [Server-Sent Events Spec](https://html.spec.whatwg.org/multipage/server-sent-events.html) - HTML spec
 
 **Internal Documentation**:
-- [PHASE_2G_SUMMARY.md](./PHASE_2G_SUMMARY.md) - Worker Lambda
-- [PHASE_2I_SUMMARY.md](./PHASE_2I_SUMMARY.md) - Real SQS + Lambda workers
+- [PHASE_2G_SUMMARY.md](./PHASE_2G_SUMMARY.md) - Worker Lambda, CloudWatch logs endpoint, Stage 4 Summary UI
+- [PHASE_2I_SUMMARY.md](./PHASE_2I_SUMMARY.md) - Extractor Flow improvements
+- [PHASE_2J_SUMMARY.md](./PHASE_2J_SUMMARY.md) - Real SQS + Lambda workers
 - [ADR-016](../architecture/DECISIONS.md#adr-016-sse-for-real-time-progress-updates) - SSE Architecture
 - [ADR-018](../architecture/DECISIONS.md#adr-018-sse-update-strategy---full-state-on-connect-diffs-during-session) - SSE Update Strategy

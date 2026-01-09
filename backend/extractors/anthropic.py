@@ -49,7 +49,7 @@ class AnthropicExtractor(BaseJobExtractor[TitleFilters]):
     """
     COMPANY_NAME = Company.ANTHROPIC
 
-    API_URL = "https://www.anthropic.com/jobs"
+    API_URL = "https://www.anthropic.com/careers/jobs"
     URL_PREFIX_JOB = "https://boards.greenhouse.io/anthropic/jobs"  # Not used, URLs come from API
 
     def __init__(self, config):
@@ -296,3 +296,76 @@ class AnthropicExtractor(BaseJobExtractor[TitleFilters]):
         except Exception as e:
             print(f"Error extracting Anthropic jobs: {e}")
             return []
+
+    def extract_raw_info(self, raw_content: str) -> dict:
+        """
+        Extract structured job details from Anthropic/Greenhouse job page HTML.
+
+        Greenhouse job pages have sections with <h2> headers like:
+        - About the role / About Anthropic
+        - Responsibilities
+        - You may be a good fit if you have
+        - Strong candidates may also have
+
+        Args:
+            raw_content: Raw HTML string from crawl_raw_info()
+
+        Returns:
+            {'description': str, 'requirements': str}
+
+        Raises:
+            ValueError: If content cannot be parsed
+        """
+        if not raw_content:
+            raise ValueError("No content to extract from")
+
+        def strip_html(html: str) -> str:
+            """Strip HTML tags and normalize whitespace"""
+            text = re.sub(r'<br\s*/?>', '\n', html)
+            text = re.sub(r'<li[^>]*>', '\n- ', text)  # Convert list items
+            text = re.sub(r'<[^>]+>', ' ', text)
+            text = re.sub(r'&amp;', '&', text)
+            text = re.sub(r'&nbsp;', ' ', text)
+            text = re.sub(r'[ \t]+', ' ', text)
+            text = re.sub(r'\n +', '\n', text)
+            text = re.sub(r'\n{3,}', '\n\n', text)
+            text = re.sub(r'\n\n- ', '\n- ', text)  # No blank lines between list items
+            return text.strip()
+
+        def extract_section(pattern: str) -> str:
+            """Extract content between h2 header matching pattern and next h2"""
+            match = re.search(
+                rf'<h2[^>]*>({pattern})[^<]*</h2>(.*?)(?=<h2|$)',
+                raw_content,
+                re.DOTALL | re.IGNORECASE
+            )
+            if match:
+                return strip_html(match.group(2))
+            return ''
+
+        # Build description from role info and responsibilities
+        description_parts = []
+
+        about_role = extract_section('About the role')
+        if about_role:
+            description_parts.append(about_role)
+
+        responsibilities = extract_section('Responsibilities')
+        if responsibilities:
+            description_parts.append(f"Responsibilities:\n{responsibilities}")
+
+        # Build requirements from qualifications sections
+        requirements_parts = []
+
+        good_fit = extract_section('You may be a good fit')
+        if good_fit:
+            requirements_parts.append(f"Required:\n{good_fit}")
+
+        strong_candidates = extract_section('Strong candidates')
+        if strong_candidates:
+            requirements_parts.append(f"Preferred:\n{strong_candidates}")
+
+        return {
+            'description': '\n\n'.join(description_parts),
+            'requirements': '\n\n'.join(requirements_parts),
+        }

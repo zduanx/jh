@@ -204,3 +204,96 @@ class TikTokExtractor(BaseJobExtractor[TitleFilters]):
             standardized_jobs.append(standardized_job)
 
         return standardized_jobs
+
+    def extract_raw_info(self, raw_content: str) -> dict:
+        """
+        Extract structured job details from TikTok job page HTML.
+
+        TikTok uses Next.js React Server Components (RSC) format.
+        Job content is embedded in self.__next_f.push() calls with
+        text blocks marked by T<hex_length>,<content> format.
+
+        Structure:
+        - First T block: Team intro + Responsibilities (plain text)
+        - Qualifications: Inline in RSC JSON ("Minimum Qualifications...")
+        - Additional blocks: Salary info, About TikTok (HTML)
+
+        Args:
+            raw_content: Raw HTML string from crawl_raw_info()
+
+        Returns:
+            {'description': str, 'requirements': str}
+
+        Raises:
+            ValueError: If content cannot be parsed
+        """
+        import re
+        import html
+
+        if not raw_content:
+            raise ValueError("No content to extract from")
+
+        def strip_html(text: str) -> str:
+            """Strip HTML tags and normalize whitespace"""
+            text = re.sub(r'<br\s*/?>', '\n', text)
+            text = re.sub(r'<li[^>]*>', '\n- ', text)
+            text = re.sub(r'</li>', '', text)
+            text = re.sub(r'<p[^>]*>', '\n', text)
+            text = re.sub(r'</p>', '\n', text)
+            text = re.sub(r'<[^>]+>', ' ', text)
+            text = html.unescape(text)
+            text = re.sub(r'[ \t]+', ' ', text)
+            text = re.sub(r'\n +', '\n', text)
+            text = re.sub(r'\n{3,}', '\n\n', text)
+            text = re.sub(r'\n\n- ', '\n- ', text)  # No blank lines between list items
+            return text.strip()
+
+        # Combine all RSC push content
+        pieces = re.findall(r'self\.__next_f\.push\(\[1,"(.*?)"\]\)', raw_content, re.DOTALL)
+        if not pieces:
+            raise ValueError("Could not find Next.js RSC data")
+
+        full = ''.join(pieces)
+        # Unescape JSON string escapes (double-escaped in RSC format)
+        full = full.replace('\\\\n', '\n').replace('\\n', '\n')
+        full = full.replace('\\"', '"')
+        # Handle JSON unicode escapes like \u0026 -> &
+        full = re.sub(r'\\u([0-9a-fA-F]{4})', lambda m: chr(int(m.group(1), 16)), full)
+        full = html.unescape(full)
+
+        # Extract description - first text block (Team Intro + Responsibilities)
+        # Format: 30:T5f5,<content>
+        desc_match = re.search(r'\d+:T[a-f0-9]+,(.*?)(?=\d+:T[a-f0-9]+,|\d+:\[|$)', full, re.DOTALL)
+        if not desc_match:
+            raise ValueError("Could not find description text block")
+
+        description = desc_match.group(1).strip()
+
+        # Extract qualifications - inline in RSC JSON
+        # Look for "Minimum Qualifications" followed by bullet points
+        qual_match = re.search(
+            r'(Minimum Qualifications:?.*?Preferred Qualifications:?.*?)(?:"|\\}|\])',
+            full,
+            re.DOTALL | re.IGNORECASE
+        )
+
+        requirements = ''
+        if qual_match:
+            requirements = qual_match.group(1)
+            # Clean up escape sequences
+            requirements = requirements.replace('\\n', '\n').replace('\\', '')
+            # Normalize bullet points (• to -)
+            requirements = requirements.replace('•', '-')
+            requirements = strip_html(requirements)
+
+        # Clean up description
+        description = strip_html(description)
+
+        # Format with section headers if not already present
+        if requirements and not requirements.startswith('Minimum'):
+            requirements = f"Minimum Qualifications:\n{requirements}"
+
+        return {
+            'description': description,
+            'requirements': requirements,
+        }

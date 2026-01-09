@@ -177,3 +177,78 @@ class GoogleExtractor(BaseJobExtractor[TitleFilters]):
             page += 1
 
         return all_jobs
+
+    def extract_raw_info(self, raw_content: str) -> dict:
+        """
+        Extract structured job details from Google Careers job page HTML.
+
+        Google job pages have h3 sections:
+        - About the job (paragraph text)
+        - Responsibilities (ul list)
+        - Minimum qualifications: (ul list)
+        - Preferred qualifications: (ul list)
+
+        Args:
+            raw_content: Raw HTML string from crawl_raw_info()
+
+        Returns:
+            {'description': str, 'requirements': str}
+
+        Raises:
+            ValueError: If content cannot be parsed
+        """
+        if not raw_content:
+            raise ValueError("No content to extract from")
+
+        def strip_html(html: str) -> str:
+            """Strip HTML tags and normalize whitespace"""
+            text = re.sub(r'<br\s*/?>', '\n', html)
+            text = re.sub(r'<li[^>]*>', '\n- ', text)  # Convert list items
+            text = re.sub(r'</li>', '', text)
+            text = re.sub(r'<[^>]+>', ' ', text)
+            text = re.sub(r'&amp;', '&', text)
+            text = re.sub(r'&nbsp;', ' ', text)
+            text = re.sub(r'&#39;', "'", text)
+            text = re.sub(r'&quot;', '"', text)
+            text = re.sub(r'[ \t]+', ' ', text)
+            text = re.sub(r'\n +', '\n', text)
+            text = re.sub(r'\\n', '\n', text)  # Escaped newlines
+            text = re.sub(r'\n{3,}', '\n\n', text)
+            text = re.sub(r'\n\n- ', '\n- ', text)  # No blank lines between list items
+            return text.strip()
+
+        def extract_section(header_pattern: str) -> str:
+            """Extract content after h3 header until next h3 or section end"""
+            # Pattern: <h3>Header</h3> followed by content until next <h3> or </div>
+            pattern = rf'<h3[^>]*>{header_pattern}[^<]*</h3>(.*?)(?=<h3|</div><div class="|$)'
+            match = re.search(pattern, raw_content, re.DOTALL | re.IGNORECASE)
+            if match:
+                return strip_html(match.group(1))
+            return ''
+
+        # Build description from About the job and Responsibilities
+        description_parts = []
+
+        about_job = extract_section('About the job')
+        if about_job:
+            description_parts.append(about_job)
+
+        responsibilities = extract_section('Responsibilities')
+        if responsibilities:
+            description_parts.append(f"Responsibilities:{responsibilities}")
+
+        # Build requirements from qualifications sections
+        requirements_parts = []
+
+        min_qual = extract_section('Minimum qualifications')
+        if min_qual:
+            requirements_parts.append(f"Minimum Qualifications:{min_qual}")
+
+        pref_qual = extract_section('Preferred qualifications')
+        if pref_qual:
+            requirements_parts.append(f"Preferred Qualifications:{pref_qual}")
+
+        return {
+            'description': '\n\n'.join(description_parts),
+            'requirements': '\n\n'.join(requirements_parts),
+        }

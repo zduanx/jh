@@ -114,6 +114,8 @@ class NetflixExtractor(BaseJobExtractor[TitleFilters]):
 
             # Process first batch
             for position in positions:
+                # Add 'url' from canonicalPositionUrl for base class URL building
+                position['url'] = position.get('canonicalPositionUrl', '')
                 standardized_job = {
                     'id': position.get('id'),
                     'title': position.get('name', ''),
@@ -141,6 +143,8 @@ class NetflixExtractor(BaseJobExtractor[TitleFilters]):
 
                 # Process batch
                 for position in positions:
+                    # Add 'url' from canonicalPositionUrl for base class URL building
+                    position['url'] = position.get('canonicalPositionUrl', '')
                     standardized_job = {
                         'id': position.get('id'),
                         'title': position.get('name', ''),
@@ -156,4 +160,161 @@ class NetflixExtractor(BaseJobExtractor[TitleFilters]):
         except Exception as e:
             print(f"Error fetching Netflix jobs: {e}")
             return []
+
+    async def crawl_raw_info(self, job_url: str) -> str:
+        """
+        Fetch raw content from Netflix job page.
+
+        Netflix URLs (jobs.netflix.com/jobs/ID) need to be converted to
+        explore.jobs.netflix.net/careers/job/ID for actual content.
+
+        Args:
+            job_url: Full URL to the job posting page
+
+        Returns:
+            Raw HTML string
+
+        Raises:
+            Exception: On HTTP errors or connection failures
+        """
+        import re
+
+        # Convert jobs.netflix.com URL to explore.jobs.netflix.net
+        job_id_match = re.search(r'/jobs/(\d+)', job_url)
+        if job_id_match:
+            job_id = job_id_match.group(1)
+            actual_url = f"https://explore.jobs.netflix.net/careers/job/{job_id}"
+        else:
+            actual_url = job_url
+
+        response = await self.make_request(
+            actual_url,
+            timeout=15.0
+        )
+        return response.text
+
+    def extract_raw_info(self, raw_content: str) -> dict:
+        """
+        Extract structured job details from Netflix job page HTML.
+
+        Netflix embeds job data in JSON-LD (schema.org JobPosting) within a script tag.
+        The description field contains HTML with optional section headers:
+        - <h2> tags for major sections (Job Summary, About the Team)
+        - <strong> tags for subsections (qualifications, nice to have)
+
+        Args:
+            raw_content: Raw HTML string from crawl_raw_info()
+
+        Returns:
+            {'description': str, 'requirements': str}
+
+        Raises:
+            ValueError: If content cannot be parsed
+        """
+        import re
+        import html
+
+        if not raw_content:
+            raise ValueError("No content to extract from")
+
+        def strip_html(text: str) -> str:
+            """Strip HTML tags and normalize whitespace"""
+            text = re.sub(r'<br\s*/?>', '\n', text)
+            # Handle list items: <li><p>content</p></li> -> \n- content
+            text = re.sub(r'<li[^>]*>\s*<p[^>]*>', '\n- ', text)  # li+p combo
+            text = re.sub(r'</p>\s*</li>', '', text)  # Close li+p combo
+            text = re.sub(r'<li[^>]*>', '\n- ', text)  # Standalone li
+            text = re.sub(r'</li>', '', text)
+            text = re.sub(r'<p[^>]*>', '\n', text)
+            text = re.sub(r'</p>', '\n', text)
+            text = re.sub(r'<[^>]+>', ' ', text)
+            text = html.unescape(text)  # Decode &#39; etc.
+            text = re.sub(r'[ \t]+', ' ', text)
+            text = re.sub(r'\n +', '\n', text)
+            text = re.sub(r'\n{3,}', '\n\n', text)
+            text = re.sub(r'\n\n- ', '\n- ', text)  # No blank lines between list items
+            return text.strip()
+
+        # Extract description from JSON-LD JobPosting
+        desc_match = re.search(r'"description":\s*"(.*?)"(?=,\s*")', raw_content, re.DOTALL)
+        if not desc_match:
+            raise ValueError("Could not find job description in JSON-LD")
+
+        desc_html = html.unescape(desc_match.group(1))
+
+        # Try to split into description and requirements sections
+        description_parts = []
+        requirements_parts = []
+
+        # Look for qualifications section markers
+        qual_patterns = [
+            r'<(?:strong|b)[^>]*>\s*(?:We are looking for individuals with the following )?qualifications?:?\s*</(?:strong|b)>',
+            r'<h2[^>]*>\s*(?:Required )?Qualifications?:?\s*</h2>',
+            r'<(?:strong|b)[^>]*>\s*Requirements?:?\s*</(?:strong|b)>',
+        ]
+
+        nice_to_have_patterns = [
+            r'<(?:strong|b)[^>]*>\s*Nice to have:?\s*</(?:strong|b)>',
+            r'<(?:strong|b)[^>]*>\s*Preferred:?\s*</(?:strong|b)>',
+            r'<h2[^>]*>\s*Nice to have:?\s*</h2>',
+        ]
+
+        # Patterns that mark end of requirements (back to description content)
+        end_req_patterns = [
+            r'<(?:strong|b)[^>]*>\s*What (?:will you|you will) learn',
+            r'<(?:strong|b)[^>]*>\s*The (?:Summer )?Internship',
+            r'<(?:strong|b)[^>]*>\s*About (?:the|this)',
+        ]
+
+        # Find the start of qualifications section
+        qual_start = None
+        for pattern in qual_patterns:
+            match = re.search(pattern, desc_html, re.IGNORECASE)
+            if match:
+                qual_start = match.start()
+                break
+
+        if qual_start:
+            # Split at qualifications
+            desc_part = desc_html[:qual_start]
+            req_part = desc_html[qual_start:]
+
+            description_parts.append(strip_html(desc_part))
+
+            # Find end of requirements section (if there's more description after)
+            req_end = len(req_part)
+            for pattern in end_req_patterns:
+                match = re.search(pattern, req_part, re.IGNORECASE)
+                if match:
+                    req_end = match.start()
+                    # Add remaining content back to description
+                    remaining = req_part[match.start():]
+                    description_parts.append(strip_html(remaining))
+                    break
+
+            req_part = req_part[:req_end]
+
+            # Check for "nice to have" within requirements
+            nice_start = None
+            for pattern in nice_to_have_patterns:
+                match = re.search(pattern, req_part, re.IGNORECASE)
+                if match:
+                    nice_start = match.start()
+                    break
+
+            if nice_start:
+                required_part = req_part[:nice_start]
+                preferred_part = req_part[nice_start:]
+                requirements_parts.append(f"Required:\n{strip_html(required_part)}")
+                requirements_parts.append(f"Preferred:\n{strip_html(preferred_part)}")
+            else:
+                requirements_parts.append(strip_html(req_part))
+        else:
+            # No clear requirements section - put everything in description
+            description_parts.append(strip_html(desc_html))
+
+        return {
+            'description': '\n\n'.join(description_parts),
+            'requirements': '\n\n'.join(requirements_parts),
+        }
 

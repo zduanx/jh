@@ -1,11 +1,12 @@
 """
-Base extractor class for job URL extraction
+Base extractor class for job extraction pipeline
 
 This module provides the abstract base class that all company-specific
-extractors must implement. Each extractor focuses on a single responsibility:
-extracting job URLs from company career pages.
+extractors must implement. The pipeline has three stages:
 
-Future phases (crawling, parsing) will be added as separate modules.
+1. Source URL extraction: Fetch job listings from career page APIs
+2. Raw info crawling: Fetch full job page content (generic, in base class)
+3. Raw info extraction: Parse description/requirements (company-specific, abstract)
 """
 
 from abc import ABC, abstractmethod
@@ -33,22 +34,14 @@ class BaseJobExtractor(ABC, Generic[ConfigType]):
     2. URL_PREFIX_JOB: The URL prefix for constructing individual job URLs
     3. COMPANY_NAME: Company enum value (e.g., Company.GOOGLE)
     4. _fetch_all_jobs(): Method to fetch and extract job objects
+    5. extract_raw_info(): Method to parse description/requirements from raw content
 
     Title filtering configuration is always passed externally via __init__(config=...)
 
-    Job object structure (returned by _fetch_all_jobs):
-    {
-        'id': str,              # Job ID for URL construction
-        'title': str,           # Job title for filtering
-        'response_data': Any    # Raw response data (preserves all info for future phases)
-    }
-
-    Company-specific filters (employment type, location, etc.) should be hardcoded
-    in the implementation methods (e.g., _build_params()).
-
-    Future phases:
-    - Phase 2: Crawling (fetch raw HTML/JSON from URLs)
-    - Phase 3: Parsing (extract structured data from raw content)
+    Pipeline stages:
+    - Stage 1: extract_source_urls_metadata() → job list with URLs
+    - Stage 2: crawl_raw_info(url) → raw HTML/JSON content (generic, in base class)
+    - Stage 3: extract_raw_info(raw_content) → {description, requirements} (abstract)
     """
 
     # Abstract class variables - must be defined by each concrete extractor
@@ -199,6 +192,53 @@ class BaseJobExtractor(ABC, Generic[ConfigType]):
             'included_jobs': included_metadata,
             'excluded_jobs': excluded_metadata
         }
+
+    async def crawl_raw_info(self, job_url: str) -> str:
+        """
+        Fetch raw content from a job page URL (Stage 2 of pipeline).
+
+        This is a generic implementation that works for most companies.
+        Override in concrete extractors if company needs special handling
+        (e.g., different headers, API endpoints, or JavaScript parsing).
+
+        Args:
+            job_url: Full URL to the job posting page
+
+        Returns:
+            Raw content as string (HTML or JSON text)
+
+        Raises:
+            Exception: On HTTP errors or connection failures
+        """
+        response = await self.make_request(
+            job_url,
+            timeout=15.0  # Longer timeout for full page
+        )
+        return response.text
+
+    @abstractmethod
+    def extract_raw_info(self, raw_content: str) -> Dict[str, str]:
+        """
+        Extract structured job details from raw content (Stage 3 of pipeline).
+
+        Each company must implement this method with company-specific parsing logic.
+
+        Args:
+            raw_content: Raw HTML/JSON string from crawl_raw_info()
+
+        Returns:
+            {
+                'description': str,      # Job description text
+                'requirements': str,     # Job requirements/qualifications
+            }
+
+        Raises:
+            ValueError: If content cannot be parsed
+
+        Note:
+            Fields match Job model schema (description, requirements as Text columns).
+        """
+        pass
 
     def _apply_title_filters(self, jobs: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """

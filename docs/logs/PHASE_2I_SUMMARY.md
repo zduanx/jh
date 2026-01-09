@@ -1,165 +1,134 @@
-# Phase 2I: Real Workers (SQS + Lambda)
+# Phase 2I: Extractor Flow Improvements
 
-**Status**: 📋 Planning
-**Date**: TBD
-**Goal**: Replace mock ingestion with real SQS + Lambda workers for scalable job crawling
+**Status**: ✅ Completed
+**Date**: January 8, 2026
+**Goal**: Enhance extractors with raw info crawling and content extraction for job details
 
 ---
 
 ## Overview
 
-Phase 2I upgrades the mock ingestion from Phase 2H to production-ready infrastructure. The core flow (SSE progress, results display) remains unchanged - we only replace the mock worker with real SQS queues and Lambda functions.
+Phase 2I extends the extractor architecture to support full job detail extraction. Previously, extractors only extracted source info (job ID, title, URL from career page APIs). This phase adds two new capabilities:
 
-**Key insight**: SQS provides reliable message delivery with retries and DLQ. Each job is processed independently, enabling parallel crawling at scale.
+1. **Raw Info Crawling**: Fetch full job page content via HTTP requests
+2. **Raw Info Extraction**: Parse job requirements and description from raw HTML/JSON
 
-**Prerequisite**: Phase 2H must be complete (SSE + frontend working end-to-end).
+Each company's job page has unique structure. We created reusable Claude prompts that generate company-specific extraction code, documented in EXTRACTOR_PROMPT.md.
 
 **Included in this phase**:
-- SQS queues (crawl queue, extract queue, DLQ)
-- Lambda workers (CrawlerLambda, ExtractorLambda)
-- S3 storage for raw HTML
-- SimHash deduplication (skip unchanged content)
-- Stale run detection and recovery
+- Raw info crawling (`crawl_raw_info()` method in base class)
+- Raw info extraction (`extract_raw_info()` method for all 6 companies)
+- Claude prompt template for extractor generation
+- Test script for manual verification
+- Netflix URL sourcing fix (use canonicalPositionUrl)
 
-**Explicitly excluded** (deferred to Phase 3):
-- Job search functionality
-- Application tracking
-- User preferences
+**Explicitly excluded** (deferred to Phase 2J):
+- SQS queues for job distribution
+- Lambda workers (Crawler, Extractor)
+- S3 storage for raw HTML
+- SimHash deduplication
 
 ---
 
 ## Key Achievements
 
-### 1. SQS-Driven Job Processing
-- Crawl queue for HTML fetching
-- Extract queue for content parsing
-- Dead letter queue for failed messages
-- Parallel processing at scale
+### 1. Three-Stage Extraction Pipeline
+- Stage 1: `_fetch_all_jobs()` → Job list with IDs/URLs (existing)
+- Stage 2: `crawl_raw_info()` → Fetch full page content
+- Stage 3: `extract_raw_info()` → Parse requirements, description
 
-### 2. CrawlerLambda
-- Fetches job page HTML
-- Computes SimHash fingerprint
-- Skips unchanged content (deduplication)
-- Saves changed HTML to S3
+### 2. Company-Specific Extractors
+- **Google**: JSON-LD schema.org JobPosting in script tag
+- **Amazon**: JSON embedded in `<script type="application/json">` tag
+- **Anthropic**: HTML with `<h3>` section headers (Responsibilities, Requirements)
+- **Netflix**: JSON-LD JobPosting with HTML description containing `<strong>` markers
+- **Roblox**: HTML between content-intro div with `<strong>You Will/Have</strong>` sections
+- **TikTok**: Next.js RSC format with `self.__next_f.push()` data blocks
 
-### 3. ExtractorLambda
-- Downloads HTML from S3
-- Extracts structured data (title, location, description)
-- Updates job record with extracted data
-- Marks job as 'ready'
+### 3. Claude Prompt Template
+- Created EXTRACTOR_PROMPT.md with step-by-step implementation guide
+- Documents HTML structure patterns for each company
+- Includes test script for manual verification
 
-### 4. SimHash Deduplication
-- 64-bit fingerprint for fuzzy content comparison
-- Hamming distance threshold for "unchanged"
-- Saves ~80% extraction cost on repeat crawls
-- Reference: [ADR-017](../architecture/DECISIONS.md#adr-017-simhash-for-raw-content-deduplication)
-
-### 5. Stale Run Detection
-- EventBridge scheduled rule (every 5 minutes)
-- Detects runs stuck in 'ingesting' for >15 minutes
-- Auto-finalize or error based on job states
-
----
-
-## Architecture
-
-```
-Worker Lambda (from 2G)
-    ├─> UPSERT jobs (same as before)
-    ├─> Publish each job to SQS Crawl Queue  ← NEW
-    └─> status = 'ingesting'
-
-SQS Crawl Queue
-    └─> CrawlerLambda (per job)
-        ├─> Fetch HTML
-        ├─> Compute SimHash
-        ├─> If unchanged → status='skipped'
-        ├─> If changed → Save to S3, queue for extraction
-        └─> Check if run complete
-
-SQS Extract Queue
-    └─> ExtractorLambda (per job)
-        ├─> Download HTML from S3
-        ├─> Parse job details
-        ├─> Update DB → status='ready'
-        └─> Check if run complete
-```
+### 4. URL Sourcing Fixes
+- Netflix: Fixed URL mismatch (jobs.netflix.com vs explore.jobs.netflix.net)
+- Added `url` field from `canonicalPositionUrl` in response_data
 
 ---
 
 ## Highlights
 
-### Run Completion Logic
+### Content Structure Patterns
 
-Each worker checks after processing:
-- Count pending jobs for this run
-- If zero pending: finalize run (write snapshot)
-- Race-safe via SQL WHERE clause
+| Company | Data Source | Key Markers |
+|---------|-------------|-------------|
+| Google | JSON-LD | `"@type": "JobPosting"` |
+| Amazon | Script JSON | `<script type="application/json">` |
+| Anthropic | HTML | `<h3>Responsibilities</h3>`, `<h3>Requirements</h3>` |
+| Netflix | JSON-LD + HTML | `"description":` with `<strong>qualifications</strong>` |
+| Roblox | HTML | `<strong>You Will:</strong>`, `<strong>You Have:</strong>` |
+| TikTok | Next.js RSC | `self.__next_f.push([1,"..."])` with `T<hex>,<text>` blocks |
 
-### SimHash Algorithm
+### strip_html() Helper Function
+Each extractor uses a local `strip_html()` function that:
+- Converts `<br>`, `<p>`, `<li>` to newlines/bullets
+- Strips remaining HTML tags
+- Decodes HTML entities (`&amp;`, `&#x27;`, etc.)
+- Normalizes whitespace and removes extra blank lines
 
-Fuzzy hashing to detect content changes:
-- 64-bit fingerprint stored in `jobs.simhash`
-- Hamming distance threshold for "unchanged"
-- Handles dynamic page noise (timestamps, view counts)
-
-### Changes from Phase 2H
-
-| Aspect | Phase 2H (Mock) | Phase 2I (Real) |
-|--------|-----------------|-----------------|
-| Job processing | Wait 30s, mark all ready | Real crawl + extract |
-| Parallelism | Sequential | SQS-driven parallel |
-| Dedup | None | SimHash comparison |
-| Storage | None | S3 for HTML |
-| Failure handling | None | DLQ, stale detection |
-
----
-
-## Infrastructure
-
-**SQS Queues**:
-| Queue | Purpose | Visibility | DLQ |
-|-------|---------|------------|-----|
-| `jh-crawl-queue` | Jobs to crawl | 6 min | Yes |
-| `jh-extract-queue` | Jobs to extract | 6 min | Yes |
-
-**Lambda Functions**:
-| Function | Trigger | Timeout | Memory |
-|----------|---------|---------|--------|
-| CrawlerLambda | SQS | 5 min | 512 MB |
-| ExtractorLambda | SQS | 5 min | 512 MB |
-| StaleRunDetector | EventBridge | 30 sec | 256 MB |
-
-**S3 Bucket**:
-- Path: `raw/{run_id}/{job_id}.html`
-- Lifecycle: Delete after 7 days
+### TikTok RSC Format
+TikTok uses React Server Components with double-escaped JSON:
+```
+self.__next_f.push([1,"30:T5f5,Team Intro\\nThe team..."])
+```
+- `T5f5` = hex length prefix
+- `\\n` = double-escaped newlines
+- `\u0026` = JSON unicode escapes
 
 ---
 
 ## Testing & Validation
 
 **Manual Testing**:
-- Start ingestion → Verify jobs published to SQS
-- Watch crawler → Verify HTML fetched and saved to S3
-- Watch extractor → Verify data extracted and job marked ready
-- Repeat ingestion → Verify SimHash skips unchanged jobs
-- Kill worker mid-run → Verify stale detection triggers
+```bash
+cd backend
 
-**Automated Testing**:
-- Future: Lambda unit tests with mocked SQS/S3
-- Future: Integration tests with LocalStack
+# Get sample URLs
+python3 extractors/test_extractor_raw.py urls google
+
+# Test extraction
+python3 extractors/test_extractor_raw.py extract google "<url>"
+```
+
+**Output Files** (gitignored):
+- `extractors/.temp/{company}_raw.html` - Raw HTML for debugging
+- `extractors/.temp/{company}_extracted.txt` - Extracted description + requirements
+
+**Validation Results**:
+- All 6 companies successfully extract description and requirements
+- List items formatted with `-` bullets, no extra blank lines
+- Unicode entities properly decoded
 
 ---
 
-## Next Steps → Phase 3
+## Metrics
 
-Phase 3 focuses on **Search & Track**:
-- Job search with filters
-- Application status tracking
-- Notes and reminders
-- Job recommendations
+| Metric | Value |
+|--------|-------|
+| Companies implemented | 6 (Google, Amazon, Anthropic, Netflix, Roblox, TikTok) |
+| New base class methods | 2 (`crawl_raw_info`, `extract_raw_info`) |
+| Extraction fields | 2 (description, requirements) |
+| Test script commands | 3 (urls, crawl, extract) |
 
-**Target**: Complete job management workflow
+---
+
+## Next Steps → Phase 2J
+
+Phase 2J implements the production infrastructure:
+- SQS queues for job distribution
+- CrawlerLambda and ExtractorLambda workers
+- S3 storage for raw HTML
+- SimHash deduplication
 
 ---
 
@@ -167,29 +136,30 @@ Phase 3 focuses on **Search & Track**:
 
 ```
 backend/
-├── workers/
-│   ├── ingestion_worker.py      # Updated to publish to SQS
-│   ├── crawler_worker.py        # CrawlerLambda handler
-│   └── extractor_worker.py      # ExtractorLambda handler
-├── stale_detector.py            # StaleRunDetector handler
-└── template.yaml                # SAM template with SQS + Lambda resources
+├── extractors/
+│   ├── base_extractor.py      # crawl_raw_info() base method
+│   ├── google.py              # extract_raw_info() implemented
+│   ├── amazon.py              # extract_raw_info() implemented
+│   ├── anthropic.py           # extract_raw_info() implemented
+│   ├── netflix.py             # extract_raw_info() + URL fix
+│   ├── roblox.py              # extract_raw_info() implemented
+│   ├── tiktok.py              # extract_raw_info() implemented
+│   ├── test_extractor_raw.py  # Manual test script
+│   ├── EXTRACTOR_PROMPT.md    # Claude prompt template
+│   └── .temp/                 # Test output (gitignored)
+│       ├── {company}_raw.html
+│       └── {company}_extracted.txt
 ```
 
 **Key Files**:
-- [ingestion_worker.py](../../backend/workers/ingestion_worker.py) - Job sourcing + SQS publish
-- [crawler_worker.py](../../backend/workers/crawler_worker.py) - HTML fetching + SimHash
-- [extractor_worker.py](../../backend/workers/extractor_worker.py) - Content extraction
-- [template.yaml](../../backend/template.yaml) - AWS infrastructure
+- [base_extractor.py](../../backend/extractors/base_extractor.py) - Base class with crawl method
+- [EXTRACTOR_PROMPT.md](../../backend/extractors/EXTRACTOR_PROMPT.md) - Implementation guide
+- [test_extractor_raw.py](../../backend/extractors/test_extractor_raw.py) - Test script
 
 ---
 
 ## References
 
 **External Documentation**:
-- [Amazon SQS](https://docs.aws.amazon.com/sqs/) - Message queue service
-- [AWS Lambda + SQS](https://docs.aws.amazon.com/lambda/latest/dg/with-sqs.html) - Event source mapping
-- [SimHash Paper](https://www.cs.princeton.edu/courses/archive/spring04/cos598B/bib/ChsijffeRS.pdf) - Original algorithm
-
-**Internal Documentation**:
-- [PHASE_2H_SUMMARY.md](./PHASE_2H_SUMMARY.md) - SSE + Frontend
-- [ADR-017](../architecture/DECISIONS.md#adr-017-simhash-for-raw-content-deduplication) - SimHash decision
+- [httpx Documentation](https://www.python-httpx.org/) - Async HTTP client
+- [JSON-LD Schema.org](https://schema.org/JobPosting) - JobPosting schema

@@ -162,3 +162,64 @@ class AmazonExtractor(BaseJobExtractor[TitleFilters]):
             offset += len(jobs)
 
         return all_jobs
+
+    def extract_raw_info(self, raw_content: str) -> dict:
+        """
+        Extract structured job details from Amazon job page HTML.
+
+        Amazon job pages have sections like:
+        <div class="section"><h2>Description</h2>...</div>
+        <div class="section"><h2>Basic Qualifications</h2>...</div>
+        <div class="section"><h2>Preferred Qualifications</h2>...</div>
+
+        Args:
+            raw_content: Raw HTML string from crawl_raw_info()
+
+        Returns:
+            {'description': str, 'requirements': str}
+
+        Raises:
+            ValueError: If content cannot be parsed
+        """
+        import re
+
+        if not raw_content:
+            raise ValueError("No content to extract from")
+
+        def strip_html(html: str) -> str:
+            """Strip HTML tags and normalize whitespace"""
+            text = re.sub(r'<br\s*/?>', '\n', html)  # Convert <br> to newline
+            text = re.sub(r'<[^>]+>', ' ', text)  # Strip other tags
+            text = re.sub(r'&amp;', '&', text)  # Decode &amp;
+            text = re.sub(r'&lt;', '<', text)
+            text = re.sub(r'&gt;', '>', text)
+            text = re.sub(r'[ \t]+', ' ', text)  # Collapse spaces
+            text = re.sub(r'\n +', '\n', text)  # Remove leading spaces after newline
+            text = re.sub(r'\n{3,}', '\n\n', text)  # Collapse multiple newlines
+            return text.strip()
+
+        # Extract sections by <h2> headers
+        sections = re.findall(
+            r'<div class="section"><h2>(.*?)</h2>(.*?)</div>',
+            raw_content,
+            re.DOTALL
+        )
+
+        description = ''
+        requirements_parts = []
+
+        for title, content in sections:
+            title_lower = title.lower().strip()
+            text = strip_html(content)
+
+            if 'description' in title_lower:
+                description = text
+            elif 'basic qualifications' in title_lower:
+                requirements_parts.insert(0, f"Basic Qualifications:\n{text}")
+            elif 'preferred qualifications' in title_lower:
+                requirements_parts.append(f"Preferred Qualifications:\n{text}")
+
+        return {
+            'description': description,
+            'requirements': '\n\n'.join(requirements_parts),
+        }
