@@ -359,8 +359,8 @@
 
 /* Cards View */
 .s3-log-cards {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
+  display: flex;
+  flex-direction: column;
   gap: 12px;
   padding: 12px;
   background: #0a0f1a;

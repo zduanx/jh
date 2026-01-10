@@ -761,6 +761,10 @@ jhelp() {
     echo "  jpushvercel        - Deploy frontend to Vercel (git CI/CD)"
     echo "  jenvcheck          - Verify environment variables (local vs deployed)"
     echo ""
+    echo -e "${GREEN}Debugging:${NC}"
+    echo "  js3get <s3_url>    - Download S3 object to stdout (raw/google/...)"
+    echo "  js3url <s3_url>    - Generate presigned URL for S3 object"
+    echo ""
     echo -e "${GREEN}Utilities:${NC}"
     echo "  jready             - Check all prerequisites"
     echo "  jstatus            - Check what's running"
@@ -770,6 +774,71 @@ jhelp() {
     echo "  jbe-bg && jfe-bg   # Start both in background"
     echo "  jstatus            # Check status"
     echo "  jkillall           # Stop everything"
+}
+
+# ==============================================================================
+# S3 DEBUGGING COMMANDS
+# ==============================================================================
+
+# Download S3 object to stdout
+# Usage: js3get s3://bucket/key or js3get raw/google/jobs_123.html
+js3get() {
+    if [ -z "$1" ]; then
+        echo -e "${RED}Usage: js3get <s3_url_or_key>${NC}"
+        echo -e "${YELLOW}Examples:${NC}"
+        echo -e "  js3get s3://jh-raw-content-123456789/raw/google/jobs_123.html"
+        echo -e "  js3get raw/google/jobs_123.html  # Uses default bucket"
+        return 1
+    fi
+
+    local S3_PATH="$1"
+
+    # If not a full s3:// URL, prepend the default bucket
+    if [[ ! "$S3_PATH" =~ ^s3:// ]]; then
+        # Get bucket name from AWS (assumes single jh-raw-content bucket)
+        local BUCKET=$(aws s3 ls | grep "jh-raw-content" | awk '{print $3}')
+        if [ -z "$BUCKET" ]; then
+            echo -e "${RED}✗ Could not find jh-raw-content bucket${NC}"
+            return 1
+        fi
+        S3_PATH="s3://$BUCKET/$S3_PATH"
+    fi
+
+    echo -e "${BLUE}Fetching: $S3_PATH${NC}" >&2
+    aws s3 cp "$S3_PATH" -
+}
+
+# Generate presigned URL for S3 object (valid 1 hour)
+# Usage: js3url s3://bucket/key or js3url raw/google/jobs_123.html
+js3url() {
+    if [ -z "$1" ]; then
+        echo -e "${RED}Usage: js3url <s3_url_or_key>${NC}"
+        echo -e "${YELLOW}Examples:${NC}"
+        echo -e "  js3url s3://jh-raw-content-123456789/raw/google/jobs_123.html"
+        echo -e "  js3url raw/google/jobs_123.html  # Uses default bucket"
+        return 1
+    fi
+
+    local S3_PATH="$1"
+
+    # If not a full s3:// URL, prepend the default bucket
+    if [[ ! "$S3_PATH" =~ ^s3:// ]]; then
+        # Get bucket name from AWS (assumes single jh-raw-content bucket)
+        local BUCKET=$(aws s3 ls | grep "jh-raw-content" | awk '{print $3}')
+        if [ -z "$BUCKET" ]; then
+            echo -e "${RED}✗ Could not find jh-raw-content bucket${NC}"
+            return 1
+        fi
+        S3_PATH="s3://$BUCKET/$S3_PATH"
+    fi
+
+    # Parse bucket and key from s3:// URL
+    local BUCKET_KEY="${S3_PATH#s3://}"
+    local BUCKET="${BUCKET_KEY%%/*}"
+    local KEY="${BUCKET_KEY#*/}"
+
+    echo -e "${BLUE}Generating presigned URL for: $S3_PATH${NC}" >&2
+    aws s3 presign "s3://$BUCKET/$KEY" --expires-in 3600
 }
 
 # ==============================================================================

@@ -799,132 +799,6 @@ WHERE description_tsvector @@ to_tsquery('graphql')  -- Full-text
 
 ---
 
-## Phase 2 Pending Decisions
-
-The following architectural decisions are deferred for future discussion and will be resolved during Phase 2 implementation.
-
-### ~~PDR-001: Database Choice~~ ✅ Resolved
-
-**Status:** Resolved in ADR-011, ADR-012
-**Decision:** PostgreSQL hosted on Neon
-
----
-
-### ~~PDR-002: Settings Storage Strategy~~ ✅ Resolved
-
-**Status:** Resolved (see ADR-011, ADR-013)
-**Decision:** Dedicated tables with SQLAlchemy ORM for user settings and job applications
-
----
-
-### PDR-003: Crawling Rate Limits
-
-**Question:** How should we implement rate limiting to avoid getting blocked by company career pages?
-
-**Considerations:**
-- Different companies may have different tolerance
-- Need delay between requests to same company
-- Batch size per Lambda invocation affects rate
-
-**Options:**
-1. **Fixed delay per company (e.g., 2 seconds)**
-   - ✅ Simple to implement
-   - ❌ May be too slow or too fast for some companies
-
-2. **Configurable delay in extractor class**
-   - ✅ Flexible per company
-   - ❌ Need to test and tune for each company
-
-3. **Use SQS delay/visibility timeout**
-   - ✅ Native AWS feature
-   - ❌ Less control
-
-**Status:** To be decided
-**Target:** Before JobCrawlerLambda load testing
-
----
-
-### PDR-004: Error Handling Strategy
-
-**Question:** How should we handle crawling/parsing failures?
-
-**Considerations:**
-- Network failures (timeout, connection error)
-- HTTP errors (404, 403, 500)
-- Parsing errors (unexpected HTML structure)
-- Rate limiting (429 Too Many Requests)
-
-**Options:**
-1. **SQS Dead Letter Queue (DLQ)**
-   - ✅ AWS-native, automatic retry
-   - ✅ Failed messages go to DLQ for inspection
-   - ❌ Fixed retry count
-
-2. **Custom retry logic with exponential backoff**
-   - ✅ Flexible retry strategy
-   - ❌ More code to write
-
-3. **Hybrid: SQS retry + custom handling**
-   - ✅ Best of both worlds
-   - ❌ More complex
-
-**Status:** To be decided
-**Target:** Before JobCrawlerLambda implementation
-
----
-
-### PDR-005: S3 Cleanup Policy
-
-**Question:** How long should we keep raw HTML files in S3?
-
-**Options:**
-1. **Keep forever**
-   - ✅ Can re-parse anytime, debugging
-   - ❌ S3 storage costs grow over time
-
-2. **Delete after successful parsing**
-   - ✅ Minimal storage cost
-   - ❌ Cannot re-parse or debug later
-
-3. **S3 Lifecycle Policy (30/60/90 days)**
-   - ✅ Balance cost and utility
-   - ❌ Need to choose retention period
-
-**Status:** To be decided
-**Recommendation:** Start with 30-day retention
-
----
-
-### PDR-006: JobCrawlerLambda Batching Strategy
-
-**Question:** Should JobCrawlerLambda process one URL or multiple URLs per invocation?
-
-**Options:**
-1. **1 URL per Lambda invocation**
-   - ✅ Simple, auto-scales, easy to retry
-   - ❌ More Lambda invocations (but within free tier)
-
-2. **Batch 10-50 URLs per invocation**
-   - ✅ Fewer cold starts, more efficient
-   - ❌ Harder to handle partial failures
-   - ❌ Risk of timeout (15-minute Lambda limit)
-
-**Status:** To be decided
-**Recommendation:** Start with 1 URL, optimize later if needed
-
----
-
-### ~~PDR-007: Real-Time Progress Updates~~ ✅ Resolved
-
-**Status:** Resolved in ADR-016
-**Decision:** SSE with auto-reconnect for all progress updates (Sync and Ingest)
-
----
-
-**Review Process:** These decisions will be reviewed and resolved as we implement each component of Phase 2.
-
----
-
 ## ADR-015: Use httpx with asyncio for HTTP Requests
 
 **Date:** 2024-12-22
@@ -1477,3 +1351,205 @@ async def _progress_generator(run_id: int, user_id: int):
 ### Related
 - See ADR-016 for SSE architecture decision
 - Resolves SSE update strategy for Phase 2G
+
+---
+
+## ADR-019: Configurable CloudWatch Log Groups for Multi-Worker Logging
+
+**Date:** 2025-01-08
+**Status:** Accepted
+
+### Context
+Phase 2J introduces multiple Lambda workers (Crawler, Extractor) in addition to the existing Ingestion worker. Each Lambda automatically gets its own CloudWatch log group. The existing `/ingestion/{run_id}/logs` endpoint hardcodes a single log group, but we need to query logs from multiple workers.
+
+### Decision
+Make log groups **frontend-configurable** via query parameter, with backend mapping short names to full log group paths.
+
+### Alternatives Considered
+
+| Approach | Flexibility | Frontend Complexity | Backend Complexity |
+|----------|-------------|---------------------|-------------------|
+| **Query param with backend mapping** (chosen) | High | Low | Low |
+| Hardcode all groups in backend | Low | None | Low (but coupled) |
+| Frontend sends full log group paths | High | High (knows AWS internals) | None |
+| Separate endpoint per worker | Low | High (multiple polls) | High |
+
+### API Design
+
+```
+GET /ingestion/{run_id}/logs?groups=ingestion,crawler,extractor
+```
+
+**Backend mapping:**
+```python
+LOG_GROUP_MAP = {
+    "ingestion": "/aws/lambda/jh-IngestionWorkerFunction",
+    "crawler": "/aws/lambda/jh-CrawlerWorkerFunction",
+    "extractor": "/aws/lambda/jh-ExtractorWorkerFunction",
+}
+```
+
+**Behavior:**
+- No `groups` param → query all groups (default)
+- `groups=ingestion` → just ingestion logs
+- `groups=crawler,extractor` → both crawler and extractor
+
+### Reasoning
+
+**Why configurable groups:**
+1. **Frontend controls scope** - Can show all logs or filter to specific worker
+2. **Backend stays generic** - Adding new worker = add to map, no API change
+3. **Single request** - Frontend makes one poll, backend merges results
+4. **Debugging flexibility** - Easy to isolate logs from specific worker
+
+**Why backend mapping (not raw paths):**
+1. **Security** - Frontend can't query arbitrary log groups
+2. **Abstraction** - Frontend doesn't need to know AWS naming conventions
+3. **Consistency** - Short names are stable even if log group paths change
+
+**Why NOT hardcode all groups:**
+- ❌ Every new worker requires backend code change
+- ❌ Can't filter to specific worker type
+- ✅ Simpler initially, but doesn't scale
+
+**Why NOT separate endpoints:**
+- ❌ Multiple polling loops in frontend
+- ❌ Complex to merge/sort logs client-side
+- ❌ More API Gateway invocations
+
+### Implementation
+
+**Backend (query multiple groups, merge results):**
+```python
+@router.get("/{run_id}/logs")
+async def get_logs(run_id: int, groups: str = None):
+    # Default to all groups if not specified
+    group_keys = groups.split(",") if groups else LOG_GROUP_MAP.keys()
+
+    all_logs = []
+    for key in group_keys:
+        if key in LOG_GROUP_MAP:
+            logs = query_cloudwatch(LOG_GROUP_MAP[key], run_id)
+            for log in logs:
+                log["source"] = key  # Tag source for frontend
+            all_logs.extend(logs)
+
+    # Sort by timestamp across all sources
+    all_logs.sort(key=lambda x: x["timestamp"])
+    return {"logs": all_logs}
+```
+
+**Response format:**
+```json
+{
+  "logs": [
+    {"timestamp": 1704700000, "message": "Starting crawl", "source": "crawler"},
+    {"timestamp": 1704700001, "message": "Extracting job 123", "source": "extractor"},
+    {"timestamp": 1704700002, "message": "Saving to DB", "source": "ingestion"}
+  ]
+}
+```
+
+### Consequences
+
+**Positive:**
+- ✅ Single API call returns merged, sorted logs from all workers
+- ✅ Frontend can filter by source if needed (color-coding, tabs)
+- ✅ Adding new workers only requires updating LOG_GROUP_MAP
+- ✅ Secure (can't query arbitrary log groups)
+- ✅ Clean abstraction (frontend uses short names)
+
+**Negative:**
+- ❌ Backend makes N CloudWatch API calls (one per group)
+- ❌ Slight latency increase for multi-group queries
+
+**Mitigations:**
+- CloudWatch queries are fast (~50-100ms each)
+- Can parallelize queries with asyncio.gather if needed
+- 3 groups × 100ms = 300ms (acceptable)
+
+### Related
+- See ADR-016 for SSE progress updates
+- Extends existing `/ingestion/{run_id}/logs` endpoint
+
+---
+
+## ADR-020: SQS FIFO with MessageGroupId for Crawler Rate Limiting
+
+**Date:** 2025-01-09
+**Status:** Accepted
+
+### Context
+Phase 2J Crawler Lambda needs to space requests per company (e.g., 2s between Google requests) to avoid detection. With multiple concurrent workers, we need distributed rate limiting.
+
+### Decision
+Use **SQS FIFO queue with MessageGroupId per company** + **sleep before message deletion**.
+
+### Alternatives Considered
+
+| Approach | Coordination | Complexity | Rate Limiting |
+|----------|--------------|------------|---------------|
+| **FIFO + MessageGroupId + sleep** (chosen) | None | Low | Exact |
+| Standard SQS + DelaySeconds | None | Low | Approximate (max 900s, bursts if slow) |
+| Standard SQS + DynamoDB lock | DynamoDB | High | Exact (but lock contention) |
+| Multiple queues (one per company) | None | Medium | Exact (but 6 queues to manage) |
+
+### How It Works
+
+```
+FIFO Queue Behavior:
+- MessageGroupId = company name ("google", "amazon", etc.)
+- Only ONE message per group in-flight at a time
+- Other messages in same group blocked until current deleted
+
+Rate Limiting Timeline (google group):
+T=0s   Lambda receives msg1, crawls
+T=1s   Crawl complete
+T=2s   sleep(1) done, Lambda returns → msg1 deleted
+T=2s   msg2 becomes available → 2+ second gap enforced
+```
+
+### Why FIFO + MessageGroupId
+
+1. **Zero contention** - 6 companies = max 6 Lambdas active, no lock competition
+2. **Exactly-once** - 5-min deduplication via `MessageDeduplicationId`
+3. **No external state** - No DynamoDB/Redis, rate limiting in queue semantics
+4. **Built-in retry** - Failed messages reappear after VisibilityTimeout
+
+### Key Configuration
+
+| Setting | Value | Reason |
+|---------|-------|--------|
+| Lambda Timeout | 60s | Enough for HTTP + S3 save |
+| VisibilityTimeout | 120s | > Lambda timeout + buffer |
+| Sleep before return | 1s | Rate limit gap |
+| BatchSize | 1 | One message at a time |
+| Internal retry | 3 attempts, 1s backoff | Before marking job ERROR |
+| Circuit breaker | 5 failures per company | Skip remaining jobs for that company |
+
+### Failure Handling
+
+| Scenario | Behavior |
+|----------|----------|
+| Crawl fails (3 internal retries) | Increment `run_metadata[{company}_failures]`, mark job ERROR |
+| S3/SimHash error | Same as crawl fail |
+| Circuit breaker (5 failures) | Skip remaining jobs for company, mark as ERROR |
+| Run aborted | Check run.status before processing, skip if ABORTED |
+| Lambda timeout/crash | Message reappears after VisibilityTimeout (SQS retry) |
+
+### Consequences
+
+**Positive:**
+- No external coordination, exact rate limiting per company
+- Scales naturally (more companies = more parallel workers)
+- Circuit breaker prevents wasting time on broken company APIs
+
+**Negative:**
+- FIFO 300 msg/s limit (fine for ~3 msg/s crawling)
+- No DLQ means failed messages eventually succeed or hit circuit breaker
+
+### Related
+- [ADR-017](./DECISIONS.md#adr-017-use-simhash-for-raw-content-deduplication): SimHash deduplication
+- [ADR-019](./DECISIONS.md#adr-019-configurable-cloudwatch-log-groups-for-multi-worker-logging): CloudWatch log groups
+- Phase 2J: Crawler infrastructure
+- Phase 2K: Extractor infrastructure (separate queue)

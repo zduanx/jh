@@ -65,6 +65,7 @@ def upsert_jobs(
     ])
 
     # ON CONFLICT: update existing records
+    # Clear error_message when re-queueing jobs for a new run
     stmt = stmt.on_conflict_do_update(
         constraint="uq_user_company_job",
         set_={
@@ -73,6 +74,7 @@ def upsert_jobs(
             "title": stmt.excluded.title,
             "location": stmt.excluded.location,
             "status": JobStatus.PENDING,
+            "error_message": None,
             "updated_at": datetime.now(timezone.utc),
         },
     )
@@ -130,6 +132,7 @@ def upsert_jobs_from_job_data(
     ])
 
     # ON CONFLICT: update existing records
+    # Clear error_message when re-queueing jobs for a new run
     stmt = stmt.on_conflict_do_update(
         constraint="uq_user_company_job",
         set_={
@@ -138,6 +141,7 @@ def upsert_jobs_from_job_data(
             "title": stmt.excluded.title,
             "location": stmt.excluded.location,
             "status": JobStatus.PENDING,
+            "error_message": None,
             "updated_at": datetime.now(timezone.utc),
         },
     )

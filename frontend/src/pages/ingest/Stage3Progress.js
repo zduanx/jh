@@ -42,7 +42,33 @@ function Stage3Progress({ runId, onAbort, onTerminal, onNewRun, isCompleted = fa
   const lastTimestampRef = useRef(null);
   const pollingRef = useRef(null);
 
+  // Track if user is at bottom of log containers (for smart auto-scroll)
+  const isAtBottomRef = useRef({ merged: true, ingestion: true, crawler: true });
+
   const apiUrl = process.env.REACT_APP_API_URL;
+
+  // Check if a scroll container is at the bottom (within 20px threshold)
+  const isScrolledToBottom = (element) => {
+    if (!element) return true;
+    const threshold = 20;
+    return element.scrollHeight - element.scrollTop - element.clientHeight < threshold;
+  };
+
+  // Handle scroll events to track user position
+  const handleLogScroll = useCallback((containerType) => (e) => {
+    isAtBottomRef.current[containerType] = isScrolledToBottom(e.target);
+  }, []);
+
+  // Smart auto-scroll: only scroll if user was already at bottom
+  const autoScrollIfAtBottom = useCallback((containerRef, containerType) => {
+    if (containerRef.current && isAtBottomRef.current[containerType]) {
+      setTimeout(() => {
+        if (containerRef.current) {
+          containerRef.current.scrollTop = containerRef.current.scrollHeight;
+        }
+      }, 50);
+    }
+  }, []);
 
   // Apply diff updates to jobs state
   const applyJobDiffs = useCallback((diff) => {
@@ -189,12 +215,10 @@ function Stage3Progress({ runId, onAbort, onTerminal, onNewRun, isCompleted = fa
         const lastLog = data.logs[data.logs.length - 1];
         lastTimestampRef.current = lastLog.timestamp;
 
-        // Auto-scroll to bottom
-        if (logContainerRef.current) {
-          setTimeout(() => {
-            logContainerRef.current.scrollTop = logContainerRef.current.scrollHeight;
-          }, 50);
-        }
+        // Smart auto-scroll: only scroll if user was already at bottom
+        autoScrollIfAtBottom(logContainerRef, 'merged');
+        autoScrollIfAtBottom(ingestionLogRef, 'ingestion');
+        autoScrollIfAtBottom(crawlerLogRef, 'crawler');
       }
 
       setLogsError(null);
@@ -203,7 +227,7 @@ function Stage3Progress({ runId, onAbort, onTerminal, onNewRun, isCompleted = fa
     } finally {
       setLogsLoading(false);
     }
-  }, [runId, apiUrl]);
+  }, [runId, apiUrl, autoScrollIfAtBottom]);
 
   // Track if we've done a final fetch after terminal status
   const finalFetchDoneRef = useRef(false);
@@ -548,7 +572,7 @@ function Stage3Progress({ runId, onAbort, onTerminal, onNewRun, isCompleted = fa
 
         {/* Merged View - all logs sorted by timestamp */}
         {logViewMode === 'merged' && (
-          <div className="s3-log-container" ref={logContainerRef}>
+          <div className="s3-log-container" ref={logContainerRef} onScroll={handleLogScroll('merged')}>
             {logs.length === 0 && !logsLoading && (
               <div className="s3-log-empty">Waiting for logs...</div>
             )}
@@ -590,7 +614,7 @@ function Stage3Progress({ runId, onAbort, onTerminal, onNewRun, isCompleted = fa
                 </span>
               </button>
             </div>
-            <div className="s3-log-container" ref={logContainerRef}>
+            <div className="s3-log-container" ref={logContainerRef} onScroll={handleLogScroll('merged')}>
               {logs.filter(l => (l.source || 'ingestion') === activeLogTab).length === 0 && !logsLoading && (
                 <div className="s3-log-empty">No {activeLogTab} logs yet...</div>
               )}
@@ -618,7 +642,7 @@ function Stage3Progress({ runId, onAbort, onTerminal, onNewRun, isCompleted = fa
                   {logs.filter(l => (l.source || 'ingestion') === 'ingestion').length}
                 </span>
               </div>
-              <div className="s3-log-container s3-log-card-content" ref={ingestionLogRef}>
+              <div className="s3-log-container s3-log-card-content" ref={ingestionLogRef} onScroll={handleLogScroll('ingestion')}>
                 {logs.filter(l => (l.source || 'ingestion') === 'ingestion').length === 0 && !logsLoading && (
                   <div className="s3-log-empty">Waiting...</div>
                 )}
@@ -640,7 +664,7 @@ function Stage3Progress({ runId, onAbort, onTerminal, onNewRun, isCompleted = fa
                   {logs.filter(l => l.source === 'crawler').length}
                 </span>
               </div>
-              <div className="s3-log-container s3-log-card-content" ref={crawlerLogRef}>
+              <div className="s3-log-container s3-log-card-content" ref={crawlerLogRef} onScroll={handleLogScroll('crawler')}>
                 {logs.filter(l => l.source === 'crawler').length === 0 && !logsLoading && (
                   <div className="s3-log-empty">Waiting...</div>
                 )}

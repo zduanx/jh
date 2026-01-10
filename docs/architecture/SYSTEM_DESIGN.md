@@ -258,6 +258,7 @@ See [Environment Setup Guide](../deployment/ENVIRONMENT_SETUP.md) for complete d
 
 ### Architecture Overview
 
+**Phase 2J - Crawler Queue (Current)**
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
 │                         User Interface (React)                      │
@@ -271,62 +272,86 @@ See [Environment Setup Guide](../deployment/ENVIRONMENT_SETUP.md) for complete d
 │                      API Gateway + Lambda                           │
 │                                                                     │
 │  POST /api/ingest/preview  → Dry-run, return job counts           │
-│  POST /api/ingest/start    → Create run, async initialize         │
+│  POST /api/ingest/start    → Create run, async invoke worker      │
 │  GET  /api/ingest/progress → SSE stream for real-time updates     │
 └────────────────┬────────────────────────────────────────────────────┘
                  │
                  │ Async (Lambda invoke)
                  ↓
 ┌─────────────────────────────────────────────────────────────────────┐
-│                    Initializer Lambda (Async)                       │
-│  1. Fetch job URLs from all company APIs                           │
-│  2. Create job records in DB (status: pending)                     │
-│  3. Send messages to SQS1 (crawl queue)                            │
-│  4. Update run status: initializing → ingesting                    │
+│                     IngestionWorker Lambda                          │
+│  1. Status: INITIALIZING                                           │
+│  2. For each enabled company:                                      │
+│     - Run extractor → get job URLs                                 │
+│     - UPSERT to DB (all non-expired → PENDING)                     │
+│  3. Mark expired jobs                                              │
+│  4. Status: INGESTING                                              │
+│  5. Query all PENDING jobs                                         │
+│  6. SendMessageBatch to CrawlerQueue.fifo:                         │
+│     - MessageGroupId: company                                      │
+│     - MessageDeduplicationId: {run_id}-{company}-{external_id}     │
+│  7. Return immediately (workers process async)                     │
 └────────────────┬────────────────────────────────────────────────────┘
                  │
                  ↓
 ┌─────────────────────────────────────────────────────────────────────┐
-│                         SQS1 (Crawl Queue)                          │
-│  Message: {job_id (DB), run_id, company, url}                      │
+│                  CrawlerQueue.fifo (SQS FIFO)                       │
+│  MessageGroupId = company → only 1 msg/company in-flight           │
+│  Message: {run_id, user_id, company, external_id, url}             │
 └────────────────┬────────────────────────────────────────────────────┘
-                 │ Triggers (batch size: 1)
+                 │ Triggers (BatchSize: 1)
                  ↓
 ┌─────────────────────────────────────────────────────────────────────┐
-│                    CrawlerLambda (Worker 1)                         │
-│  1. Fetch raw HTML from job URL                                    │
-│  2. Compute SimHash of content                                     │
-│  3. Compare with existing SimHash in DB                            │
-│  4. If changed: Save to S3, update DB, send to SQS2               │
-│  5. If unchanged: Update status to 'ready' (skip extraction)       │
-│  6. Check if run complete → update run status                      │
+│                     CrawlerWorker Lambda                            │
+│  1. Parse message                                                  │
+│  2. Query run (status + metadata) - single DB call                 │
+│     ├─ ABORTED → return                                            │
+│     └─ failures >= 5 → mark job ERROR, return (circuit breaker)    │
+│  3. try:                                                           │
+│       Crawl URL (3 retries, 1s backoff)                            │
+│       SimHash check (skip if Hamming distance ≤ 3)                 │
+│       S3 save → raw/{company}/{external_id}.html                   │
+│     except: increment failures, mark job ERROR, return             │
+│  4. Update job (READY or SKIPPED, simhash, raw_s3_url)             │
+│  5. TODO Phase 2K: Send to ExtractorQueue                          │
+│  6. sleep(1) → rate limiting                                       │
+│  7. Return                                                         │
 └────────────────┬────────────────────────────────────────────────────┘
                  │
-                 ├─→ S3 Bucket: raw/{company}/{job_id}.html
+                 ├─→ S3 Bucket: raw/{company}/{external_id}.html
                  │
-                 └─→ Database: jobs.status = 'crawled' or 'ready'
-                     │
-                     ↓ (only if content changed)
+                 └─→ Database: jobs.status = READY/SKIPPED/ERROR
+                               ingestion_runs.run_metadata[{company}_failures]
+```
+
+**Phase 2K - Extractor Queue (Future)**
+```
 ┌─────────────────────────────────────────────────────────────────────┐
-│                       SQS2 (Extract Queue)                          │
-│  Message: {job_id (DB), run_id}                                    │
+│                     CrawlerWorker Lambda                            │
+│  ... (after S3 save)                                               │
+│  5. Send to ExtractorQueue.fifo                                    │
+│  6. Update job status: CRAWLED                                     │
 └────────────────┬────────────────────────────────────────────────────┘
-                 │ Triggers (batch size: 1)
+                 │
                  ↓
 ┌─────────────────────────────────────────────────────────────────────┐
-│                   ExtractorLambda (Worker 2)                        │
-│  1. Read job record from DB (get s3_key)                           │
-│  2. Download raw HTML from S3                                      │
-│  3. Extract structured data (title, description, etc.)             │
-│  4. Update DB with extracted fields, status = 'ready'              │
-│  5. Check if run complete → update run status                      │
+│                 ExtractorQueue.fifo (SQS FIFO)                      │
+│  Message: {run_id, user_id, company, external_id}                  │
+└────────────────┬────────────────────────────────────────────────────┘
+                 │ Triggers (BatchSize: 1)
+                 ↓
+┌─────────────────────────────────────────────────────────────────────┐
+│                    ExtractorWorker Lambda                           │
+│  1. Download raw HTML from S3                                      │
+│  2. Extract structured data (description, requirements)            │
+│  3. Update DB: status = READY, description, requirements           │
 └────────────────┬────────────────────────────────────────────────────┘
                  │
                  ↓
 ┌─────────────────────────────────────────────────────────────────────┐
 │                          Database                                   │
-│  ingestion_runs: Track overall progress                            │
-│  jobs: Individual job status and data                              │
+│  ingestion_runs: Track overall progress + metadata                 │
+│  jobs: Individual job status, simhash, raw_s3_url                  │
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -349,20 +374,27 @@ pending → initializing → ingesting → finished
 
 **Job Status**
 ```
-pending → crawled → ready
-    ↘        ↘
-     → error  → error
+Phase 2J (Crawler):
+pending → ready (crawled, SimHash changed)
+    ↘
+     → skipped (SimHash similar - no change)
+     → error (crawl/S3 failed)
      → expired (URL 404)
 
-With SimHash optimization:
-pending → ready (if content unchanged, skip extraction)
+Phase 2K (Extractor - adds extraction step):
+pending → crawled → ready
+    ↘        ↘
+     → skipped  → error
+     → error
+     → expired
 ```
 
 | Status | Description |
 |--------|-------------|
 | `pending` | Job created, waiting for crawler |
-| `crawled` | HTML fetched, waiting for extraction |
-| `ready` | Extraction complete (or skipped via SimHash) |
+| `crawled` | HTML fetched, waiting for extraction (Phase 2K) |
+| `ready` | Processing complete |
+| `skipped` | SimHash similar to previous run - no re-extraction needed |
 | `error` | Processing failed (see error_message) |
 | `expired` | Job URL returned 404 |
 
@@ -659,27 +691,33 @@ class GoogleExtractor(BaseJobExtractor):
 ### Phase 2 Implementation Status
 
 **Completed:**
-- ✅ Extractor base class and 6 company extractors (Google, Amazon, Anthropic, TikTok, Roblox, Netflix)
-- ✅ Async URL sourcing with httpx + asyncio.gather (parallel company fetches)
-- ✅ Database schema: users, user_settings, company_settings tables
-- ✅ API endpoints: GET /companies, GET/POST /settings, POST /dry-run
-- ✅ Frontend Stage 1: Company selection with filters
-- ✅ Frontend Stage 2: Dry-run preview with job counts
+- ✅ Phase 2A-2F: Extractor base class and 6 company extractors
+- ✅ Phase 2G: SSE progress endpoint with real-time updates
+- ✅ Phase 2H: Frontend progress display with diff-based updates
+- ✅ Phase 2I: Raw info crawling and extraction methods in extractors
+- ✅ Database: users, user_settings, company_settings, ingestion_runs, jobs tables
+- ✅ API endpoints: GET /companies, GET/POST /settings, POST /dry-run, POST /start, GET /progress SSE
+- ✅ IngestionWorker Lambda (async invoke, mock SQS publishing)
 
-**In Progress (Stage 3: Sync & Ingest):**
-- 🚧 ingestion_runs and jobs tables (schema defined, not yet migrated)
-- 🚧 POST /ingestion/start endpoint
-- 🚧 SQS queues setup (crawl queue, extract queue)
-- 🚧 CrawlerLambda (Worker 1)
-- 🚧 ExtractorLambda (Worker 2)
-- 🚧 SSE progress endpoint
-- 🚧 SimHash integration
-- 🚧 Frontend Stage 3: Sync & Ingest with progress display
+**Phase 2J (Planning):** Crawler Queue Infrastructure
+- 📋 SQS FIFO queue (CrawlerQueue.fifo) with MessageGroupId per company
+- 📋 S3 bucket for raw HTML storage
+- 📋 CrawlerWorker Lambda (SQS-triggered)
+- 📋 DB migration: add `metadata` to ingestion_runs, `raw_s3_url` to jobs
+- 📋 SimHash integration for content deduplication
+- 📋 Update IngestionWorker to publish real messages to SQS
 
-**Pending Design Decisions:**
-- Crawling rate limits per company
-- S3 cleanup policy (retention period)
-- DLQ configuration for failed messages
+**Phase 2K (Future):** Extractor Queue Infrastructure
+- 📋 SQS FIFO queue (ExtractorQueue.fifo)
+- 📋 ExtractorWorker Lambda
+- 📋 Add CRAWLED job status
+- 📋 CrawlerWorker sends to ExtractorQueue after S3 save
+
+**Design Decisions Made:**
+- ✅ [ADR-020](./DECISIONS.md#adr-020-sqs-fifo-with-messagegroupid-for-crawler-rate-limiting): FIFO + MessageGroupId for rate limiting (1s sleep)
+- ✅ [ADR-017](./DECISIONS.md#adr-017-use-simhash-for-raw-content-deduplication): SimHash with Hamming distance ≤ 3
+- ✅ No DLQ (simplicity)
+- ✅ Circuit breaker: 5 failures per company per run
 
 ---
 
@@ -697,5 +735,5 @@ class GoogleExtractor(BaseJobExtractor):
 
 ---
 
-**Current Phase**: Phase 2 In Progress 🚧
-**Next**: Implement crawler methods + JobCrawlerLambda
+**Current Phase**: Phase 2J Planning 📋
+**Next**: Implement CrawlerQueue.fifo + CrawlerWorker Lambda
