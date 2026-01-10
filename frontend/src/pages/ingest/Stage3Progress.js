@@ -34,7 +34,11 @@ function Stage3Progress({ runId, onAbort, onTerminal, onNewRun, isCompleted = fa
   const [logs, setLogs] = useState([]);
   const [logsLoading, setLogsLoading] = useState(false);
   const [logsError, setLogsError] = useState(null);
+  const [logViewMode, setLogViewMode] = useState('merged'); // 'merged' | 'tabs' | 'cards'
+  const [activeLogTab, setActiveLogTab] = useState('ingestion'); // For tabs mode
   const logContainerRef = useRef(null);
+  const ingestionLogRef = useRef(null);
+  const crawlerLogRef = useRef(null);
   const lastTimestampRef = useRef(null);
   const pollingRef = useRef(null);
 
@@ -513,27 +517,145 @@ function Stage3Progress({ runId, onAbort, onTerminal, onNewRun, isCompleted = fa
       {/* Log Viewer Section */}
       <div className="s3-section">
         <div className="s3-section-header">
-          <span>IngestionWorker Logs</span>
-          {logsLoading && <span className="s3-loading-indicator">Loading...</span>}
+          <span>Worker Logs</span>
+          <div className="s3-log-controls">
+            {logsLoading && <span className="s3-loading-indicator">Loading...</span>}
+            <div className="s3-log-mode-toggle">
+              <button
+                className={`s3-log-mode-btn ${logViewMode === 'merged' ? 'active' : ''}`}
+                onClick={() => setLogViewMode('merged')}
+                title="Merged view - all logs sorted by time"
+              >
+                Merged
+              </button>
+              <button
+                className={`s3-log-mode-btn ${logViewMode === 'tabs' ? 'active' : ''}`}
+                onClick={() => setLogViewMode('tabs')}
+                title="Tabs view - switch between workers"
+              >
+                Tabs
+              </button>
+              <button
+                className={`s3-log-mode-btn ${logViewMode === 'cards' ? 'active' : ''}`}
+                onClick={() => setLogViewMode('cards')}
+                title="Cards view - side by side"
+              >
+                Cards
+              </button>
+            </div>
+          </div>
         </div>
-        <div className="s3-log-container" ref={logContainerRef}>
-          {logs.length === 0 && !logsLoading && (
-            <div className="s3-log-empty">
-              Waiting for logs...
+
+        {/* Merged View - all logs sorted by timestamp */}
+        {logViewMode === 'merged' && (
+          <div className="s3-log-container" ref={logContainerRef}>
+            {logs.length === 0 && !logsLoading && (
+              <div className="s3-log-empty">Waiting for logs...</div>
+            )}
+            {logsError && <div className="s3-log-error">Error: {logsError}</div>}
+            {logs.map((log, index) => (
+              <div key={`${log.timestamp}-${index}`} className="s3-log-entry">
+                <span className="s3-log-time">{formatTimestamp(log.timestamp)}</span>
+                <span className={`s3-log-source s3-log-source-${log.source || 'ingestion'}`}>
+                  {log.source === 'crawler' ? 'CRL' : 'ING'}
+                </span>
+                <span className="s3-log-message">{log.message}</span>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Tabs View - separate tabs per worker */}
+        {logViewMode === 'tabs' && (
+          <div className="s3-log-tabs-container">
+            <div className="s3-log-tabs">
+              <button
+                className={`s3-log-tab ${activeLogTab === 'ingestion' ? 'active' : ''}`}
+                onClick={() => setActiveLogTab('ingestion')}
+              >
+                <span className="s3-log-source s3-log-source-ingestion">ING</span>
+                Ingestion
+                <span className="s3-log-tab-count">
+                  {logs.filter(l => (l.source || 'ingestion') === 'ingestion').length}
+                </span>
+              </button>
+              <button
+                className={`s3-log-tab ${activeLogTab === 'crawler' ? 'active' : ''}`}
+                onClick={() => setActiveLogTab('crawler')}
+              >
+                <span className="s3-log-source s3-log-source-crawler">CRL</span>
+                Crawler
+                <span className="s3-log-tab-count">
+                  {logs.filter(l => l.source === 'crawler').length}
+                </span>
+              </button>
             </div>
-          )}
-          {logsError && (
-            <div className="s3-log-error">
-              Error: {logsError}
+            <div className="s3-log-container" ref={logContainerRef}>
+              {logs.filter(l => (l.source || 'ingestion') === activeLogTab).length === 0 && !logsLoading && (
+                <div className="s3-log-empty">No {activeLogTab} logs yet...</div>
+              )}
+              {logsError && <div className="s3-log-error">Error: {logsError}</div>}
+              {logs
+                .filter(l => (l.source || 'ingestion') === activeLogTab)
+                .map((log, index) => (
+                  <div key={`${log.timestamp}-${index}`} className="s3-log-entry">
+                    <span className="s3-log-time">{formatTimestamp(log.timestamp)}</span>
+                    <span className="s3-log-message">{log.message}</span>
+                  </div>
+                ))}
             </div>
-          )}
-          {logs.map((log, index) => (
-            <div key={`${log.timestamp}-${index}`} className="s3-log-entry">
-              <span className="s3-log-time">{formatTimestamp(log.timestamp)}</span>
-              <span className="s3-log-message">{log.message}</span>
+          </div>
+        )}
+
+        {/* Cards View - side by side */}
+        {logViewMode === 'cards' && (
+          <div className="s3-log-cards">
+            <div className="s3-log-card">
+              <div className="s3-log-card-header">
+                <span className="s3-log-source s3-log-source-ingestion">ING</span>
+                <span>Ingestion Worker</span>
+                <span className="s3-log-card-count">
+                  {logs.filter(l => (l.source || 'ingestion') === 'ingestion').length}
+                </span>
+              </div>
+              <div className="s3-log-container s3-log-card-content" ref={ingestionLogRef}>
+                {logs.filter(l => (l.source || 'ingestion') === 'ingestion').length === 0 && !logsLoading && (
+                  <div className="s3-log-empty">Waiting...</div>
+                )}
+                {logs
+                  .filter(l => (l.source || 'ingestion') === 'ingestion')
+                  .map((log, index) => (
+                    <div key={`${log.timestamp}-${index}`} className="s3-log-entry">
+                      <span className="s3-log-time">{formatTimestamp(log.timestamp)}</span>
+                      <span className="s3-log-message">{log.message}</span>
+                    </div>
+                  ))}
+              </div>
             </div>
-          ))}
-        </div>
+            <div className="s3-log-card">
+              <div className="s3-log-card-header">
+                <span className="s3-log-source s3-log-source-crawler">CRL</span>
+                <span>Crawler Worker</span>
+                <span className="s3-log-card-count">
+                  {logs.filter(l => l.source === 'crawler').length}
+                </span>
+              </div>
+              <div className="s3-log-container s3-log-card-content" ref={crawlerLogRef}>
+                {logs.filter(l => l.source === 'crawler').length === 0 && !logsLoading && (
+                  <div className="s3-log-empty">Waiting...</div>
+                )}
+                {logs
+                  .filter(l => l.source === 'crawler')
+                  .map((log, index) => (
+                    <div key={`${log.timestamp}-${index}`} className="s3-log-entry">
+                      <span className="s3-log-time">{formatTimestamp(log.timestamp)}</span>
+                      <span className="s3-log-message">{log.message}</span>
+                    </div>
+                  ))}
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );

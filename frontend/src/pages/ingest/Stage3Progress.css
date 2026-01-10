@@ -249,6 +249,157 @@
   word-break: break-word;
 }
 
+/* Log source badges */
+.s3-log-source {
+  font-size: 10px;
+  font-weight: 600;
+  padding: 1px 6px;
+  border-radius: 3px;
+  margin-right: 8px;
+  min-width: 28px;
+  text-align: center;
+}
+
+.s3-log-source-ingestion {
+  background: #1e3a5f;
+  color: #60a5fa;
+}
+
+.s3-log-source-crawler {
+  background: #1e3a3e;
+  color: #5eead4;
+}
+
+.s3-log-source-extractor {
+  background: #3b2e4a;
+  color: #c4b5fd;
+}
+
+/* Log Controls and Mode Toggle */
+.s3-log-controls {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.s3-log-mode-toggle {
+  display: flex;
+  background: #1e293b;
+  border-radius: 6px;
+  padding: 2px;
+}
+
+.s3-log-mode-btn {
+  padding: 4px 10px;
+  font-size: 11px;
+  font-weight: 500;
+  color: #64748b;
+  background: transparent;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.s3-log-mode-btn:hover {
+  color: #94a3b8;
+}
+
+.s3-log-mode-btn.active {
+  background: #334155;
+  color: #e2e8f0;
+}
+
+/* Tabs View */
+.s3-log-tabs-container {
+  display: flex;
+  flex-direction: column;
+}
+
+.s3-log-tabs {
+  display: flex;
+  gap: 4px;
+  padding: 8px 12px;
+  background: #0f172a;
+  border-bottom: 1px solid #1e293b;
+}
+
+.s3-log-tab {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  font-size: 12px;
+  font-weight: 500;
+  color: #64748b;
+  background: transparent;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.s3-log-tab:hover {
+  background: #1e293b;
+  color: #94a3b8;
+}
+
+.s3-log-tab.active {
+  background: #1e293b;
+  color: #e2e8f0;
+}
+
+.s3-log-tab-count {
+  font-size: 10px;
+  padding: 2px 6px;
+  background: #334155;
+  border-radius: 10px;
+  color: #94a3b8;
+}
+
+/* Cards View */
+.s3-log-cards {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  padding: 12px;
+  background: #0a0f1a;
+}
+
+.s3-log-card {
+  display: flex;
+  flex-direction: column;
+  background: #0f172a;
+  border-radius: 8px;
+  overflow: hidden;
+  border: 1px solid #1e293b;
+}
+
+.s3-log-card-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: #1e293b;
+  font-size: 12px;
+  font-weight: 500;
+  color: #e2e8f0;
+}
+
+.s3-log-card-count {
+  margin-left: auto;
+  font-size: 10px;
+  padding: 2px 8px;
+  background: #334155;
+  border-radius: 10px;
+  color: #94a3b8;
+}
+
+.s3-log-card-content {
+  height: 200px;
+  border-radius: 0;
+}
+
 /* Placeholder States (kept for backwards compatibility) */
 .s3-details-placeholder {
   display: flex;
