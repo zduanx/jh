@@ -90,6 +90,13 @@ def compute_simhash(content: str) -> int:
         if v[i] > 0:
             simhash |= (1 << i)
 
+    # Convert to signed 64-bit for PostgreSQL BIGINT compatibility
+    # PostgreSQL BIGINT range: -9223372036854775808 to 9223372036854775807
+    # Unsigned 64-bit range: 0 to 18446744073709551615
+    # If MSB is set (value >= 2^63), convert to negative
+    if simhash >= (1 << 63):
+        simhash -= (1 << 64)
+
     return simhash
 
 
@@ -98,15 +105,19 @@ def hamming_distance(hash1: int, hash2: int) -> int:
     Compute Hamming distance between two 64-bit hashes.
 
     Hamming distance = number of bit positions where bits differ.
+    Works correctly for both signed and unsigned 64-bit values.
 
     Args:
-        hash1: First 64-bit hash
-        hash2: Second 64-bit hash
+        hash1: First 64-bit hash (signed or unsigned)
+        hash2: Second 64-bit hash (signed or unsigned)
 
     Returns:
         Number of differing bits (0-64)
     """
     xor = hash1 ^ hash2
+    # Mask to 64 bits to handle signed values correctly
+    # (Python integers can be arbitrary precision)
+    xor &= (1 << 64) - 1
     # Count set bits (differing positions)
     return bin(xor).count('1')
 
