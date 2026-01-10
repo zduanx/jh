@@ -1,5 +1,7 @@
 from datetime import datetime, timezone
+from typing import Dict, Any
 from sqlalchemy import BigInteger, Integer, String, Text, DateTime, ForeignKey
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 from models import Base
 
@@ -65,6 +67,10 @@ class IngestionRun(Base):
     )
 
     error_message: Mapped[str] = mapped_column(Text, nullable=True)
+
+    # Phase 2J: Per-company failure tracking for circuit breaker
+    # Format: {"google_failures": 0, "amazon_failures": 2, ...}
+    run_metadata: Mapped[Dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
 
     def __repr__(self) -> str:
         return f"<IngestionRun(id={self.id}, user_id={self.user_id}, status='{self.status}')>"

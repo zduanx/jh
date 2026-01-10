@@ -63,13 +63,15 @@ class JobData:
 @dataclass
 class CrawlMessage:
     """
-    SQS message for crawler worker (Phase 2I).
+    SQS message for crawler worker (Phase 2J).
 
-    Minimal message - crawler queries DB for url/simhash/status anyway.
+    Contains job URL to avoid extra DB query during crawl.
     """
     user_id: int
     run_id: int
     job: JobIdentifier
+    url: str
+    use_test_db: bool = False
 
     def to_dict(self) -> dict:
         return {
@@ -77,6 +79,8 @@ class CrawlMessage:
             "run_id": self.run_id,
             "company": self.job.company,
             "external_id": self.job.external_id,
+            "url": self.url,
+            "use_test_db": self.use_test_db,
         }
 
     @classmethod
@@ -85,6 +89,8 @@ class CrawlMessage:
             user_id=data["user_id"],
             run_id=data["run_id"],
             job=JobIdentifier(company=data["company"], external_id=data["external_id"]),
+            url=data["url"],
+            use_test_db=data.get("use_test_db", False),
         )
 
 
@@ -130,7 +136,7 @@ class InitializationResult:
             jobs.extend(company.jobs)
         return jobs
 
-    def to_crawl_messages(self) -> list[CrawlMessage]:
+    def to_crawl_messages(self, use_test_db: bool = False) -> list[CrawlMessage]:
         """Generate SQS messages for all jobs."""
         messages = []
         for company in self.companies:
@@ -141,6 +147,8 @@ class InitializationResult:
                     user_id=self.user_id,
                     run_id=self.run_id,
                     job=job.identifier,
+                    url=job.url,
+                    use_test_db=use_test_db,
                 ))
         return messages
 

@@ -96,7 +96,66 @@ Resources:
       Description: Async worker for job ingestion (15 min timeout)
       Timeout: 900
       MemorySize: 512
+      Policies:
+        - SQSSendMessagePolicy:
+            QueueName: !GetAtt CrawlerQueue.QueueName
+      Environment:
+        Variables:
+          CRAWLER_QUEUE_URL: !Ref CrawlerQueue
       # No Events - invoked async by API Lambda, not by HTTP
+
+  # ==========================================================================
+  # Crawler Queue - FIFO queue for per-company rate limiting
+  # ==========================================================================
+  CrawlerQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: CrawlerQueue.fifo
+      FifoQueue: true
+      ContentBasedDeduplication: true
+      VisibilityTimeout: 180  # 3 retries × ~30s crawl + overhead
+      MessageRetentionPeriod: 86400  # 1 day
+      # No DLQ - crawler handles retries internally and marks failures in DB
+
+  # ==========================================================================
+  # Raw Content Bucket - S3 storage for crawled HTML
+  # ==========================================================================
+  RawContentBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "jh-raw-content-${AWS::AccountId}"
+      LifecycleConfiguration:
+        Rules:
+          - Id: ExpireOldContent
+            Status: Enabled
+            ExpirationInDays: 30  # Raw HTML only needed temporarily
+
+  # ==========================================================================
+  # Crawler Worker Lambda - SQS-triggered for crawling job pages
+  # ==========================================================================
+  CrawlerWorker:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: CrawlerWorker
+      CodeUri: .
+      Handler: workers.crawler_worker.handler
+      Description: SQS-triggered worker for crawling job pages
+      Timeout: 120
+      MemorySize: 512
+      Policies:
+        - S3CrudPolicy:
+            BucketName: !Ref RawContentBucket
+      Environment:
+        Variables:
+          RAW_BUCKET: !Ref RawContentBucket
+          CRAWLER_QUEUE_URL: !Ref CrawlerQueue
+      Events:
+        CrawlerQueueEvent:
+          Type: SQS
+          Properties:
+            Queue: !GetAtt CrawlerQueue.Arn
+            BatchSize: 1
+            Enabled: true
 
   # ==========================================================================
   # API Gateway
@@ -128,14 +187,18 @@ Outputs:
     Description: API Lambda function name
     Value: !Ref JobHuntTrackerAPI
 
-  FunctionArn:
-    Description: API Lambda function ARN
-    Value: !GetAtt JobHuntTrackerAPI.Arn
-
   WorkerFunctionName:
     Description: Worker Lambda function name
     Value: !Ref IngestionWorker
 
-  WorkerFunctionArn:
-    Description: Worker Lambda function ARN
-    Value: !GetAtt IngestionWorker.Arn
+  CrawlerQueueUrl:
+    Description: Crawler SQS FIFO queue URL
+    Value: !Ref CrawlerQueue
+
+  CrawlerWorkerFunctionName:
+    Description: Crawler Worker Lambda function name
+    Value: !Ref CrawlerWorker
+
+  RawContentBucketName:
+    Description: S3 bucket for raw crawled content
+    Value: !Ref RawContentBucket

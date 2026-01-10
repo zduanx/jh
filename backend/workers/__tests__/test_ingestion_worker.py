@@ -14,7 +14,7 @@ from workers.ingestion_worker import (
     run_initialization_phase,
     process_run,
 )
-from workers.types import InitializationResult, IngestionResult
+from workers.types import InitializationResult
 from sourcing.extractor_utils import ExtractorResult
 from models.ingestion_run import RunStatus
 
@@ -22,8 +22,8 @@ from models.ingestion_run import RunStatus
 def make_extractor_result(
     company: str,
     status: str = "success",
-    jobs: list = None,
-    error_message: str = None,
+    jobs: list | None = None,
+    error_message: str | None = None,
 ) -> ExtractorResult:
     """Create a mock ExtractorResult."""
     if jobs is None:
@@ -190,7 +190,7 @@ class TestProcessRun:
     """Tests for process_run with all DB operations mocked."""
 
     def test_full_flow_success(self):
-        """Should go through all phases and return finished."""
+        """Should go through all phases and return ingesting (async flow)."""
         mock_db = MagicMock()
         mock_run = MagicMock(id=1, user_id=10, status=RunStatus.PENDING)
 
@@ -200,27 +200,28 @@ class TestProcessRun:
             companies=[],
             jobs_expired=0,
         )
-        mock_ingestion_result = IngestionResult(
-            jobs_ready=5,
-            jobs_skipped=0,
-            jobs_expired=0,
-            jobs_failed=0,
-        )
+
+        # Simulate update_run_status setting run.status to INGESTING
+        def update_status(db, run, status=None, **kwargs):
+            if status:
+                run.status = status
 
         result = process_run(
             db=mock_db,
             run_id=1,
             user_id=10,
             _get_run=MagicMock(return_value=mock_run),
-            _update_run_status=MagicMock(),
+            _update_run_status=update_status,
             _refresh_run=MagicMock(),  # Doesn't change status
             _get_user_enabled_settings=MagicMock(return_value=[MagicMock()]),
             _run_initialization_phase=MagicMock(return_value=mock_init_result),
-            _run_ingestion_phase=MagicMock(return_value=mock_ingestion_result),
+            _run_ingestion_phase=MagicMock(),  # Now just sends to SQS
         )
 
-        assert result["status"] == RunStatus.FINISHED
-        assert result["jobs_ready"] == 5
+        # After Phase 2J: process_run returns INGESTING status (async flow)
+        # CrawlerWorkers process jobs and update statuses asynchronously
+        assert result["status"] == RunStatus.INGESTING
+        assert result["total_jobs"] == 0  # From mock_init_result (empty companies)
 
     def test_run_not_found(self):
         """Should return error if run doesn't exist."""
@@ -309,38 +310,39 @@ class TestProcessRun:
 
         assert result["status"] == RunStatus.ABORTED
 
-    def test_abort_during_ingestion(self):
-        """Should detect abort after ingestion phase."""
+    def test_ingestion_phase_called_after_init(self):
+        """Should call ingestion phase after successful initialization."""
         mock_db = MagicMock()
         mock_run = MagicMock(id=1, user_id=10, status=RunStatus.PENDING)
-        call_count = [0]
-
-        def simulate_abort_on_second_call(db, run):
-            """Abort on second refresh (after ingestion)."""
-            call_count[0] += 1
-            if call_count[0] >= 2:
-                run.status = RunStatus.ABORTED
 
         mock_init_result = InitializationResult(
             user_id=10, run_id=1, companies=[], jobs_expired=0
         )
-        mock_ingestion_result = IngestionResult(
-            jobs_ready=5, jobs_skipped=0, jobs_expired=0, jobs_failed=0
-        )
+        mock_ingestion_phase = MagicMock()
 
-        result = process_run(
+        # Simulate update_run_status setting run.status
+        def update_status(_, run, status=None, **kwargs):
+            if status:
+                run.status = status
+
+        process_run(
             db=mock_db,
             run_id=1,
             user_id=10,
             _get_run=MagicMock(return_value=mock_run),
-            _update_run_status=MagicMock(),
-            _refresh_run=simulate_abort_on_second_call,
+            _update_run_status=update_status,
+            _refresh_run=MagicMock(),
             _get_user_enabled_settings=MagicMock(return_value=[MagicMock()]),
             _run_initialization_phase=MagicMock(return_value=mock_init_result),
-            _run_ingestion_phase=MagicMock(return_value=mock_ingestion_result),
+            _run_ingestion_phase=mock_ingestion_phase,
         )
 
-        assert result["status"] == RunStatus.ABORTED
+        # After Phase 2J: ingestion phase sends to SQS (async)
+        # Verify it was called with correct args
+        mock_ingestion_phase.assert_called_once()
+        call_args = mock_ingestion_phase.call_args
+        assert call_args[0][1] == mock_run  # run arg
+        assert call_args[0][2] == mock_init_result  # init_result arg
 
 
 class TestCrawlMessageGeneration:
@@ -385,7 +387,9 @@ class TestCrawlMessageGeneration:
         assert all(m.run_id == 5 for m in messages)
         assert messages[0].job.company == "google"
         assert messages[0].job.external_id == "g1"
+        assert messages[0].url == "https://google.com/1"
         assert messages[1].job.external_id == "g2"
+        assert messages[1].url == "https://google.com/2"
 
     def test_to_crawl_messages_empty(self):
         """Should return empty list when no jobs."""

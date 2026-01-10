@@ -791,6 +791,7 @@ class LogEntry(BaseModel):
     """Single log entry from CloudWatch."""
     timestamp: int
     message: str
+    source: str  # Worker type: "ingestion", "crawler", "extractor"
     ingestion_time: Optional[int] = None
 
 
@@ -800,19 +801,35 @@ class LogsResponse(BaseModel):
     next_token: Optional[str] = None
 
 
+# Map short names to CloudWatch log groups (ADR-019)
+LOG_GROUP_MAP = {
+    "ingestion": "/aws/lambda/IngestionWorker",
+    "crawler": "/aws/lambda/CrawlerWorker",
+    # "extractor": "/aws/lambda/ExtractorWorker",  # Phase 2K
+}
+
+# Map short names to CloudWatch filter patterns
+LOG_FILTER_MAP = {
+    "ingestion": lambda run_id: f'"[IngestionWorker" "run_id={run_id}]"',
+    "crawler": lambda run_id: f'"[CrawlerWorker" "run_id={run_id}"',
+    # "extractor": lambda run_id: f'"[ExtractorWorker" "run_id={run_id}"',  # Phase 2K
+}
+
+
 @router.get("/logs/{run_id}", response_model=LogsResponse)
 async def get_worker_logs(
     run_id: int,
     token: str,
+    groups: Optional[str] = None,
     start_time: Optional[int] = None,
-    next_token: Optional[str] = None,
     limit: int = 100,
 ):
     """
-    Get CloudWatch logs for a specific ingestion run.
+    Get CloudWatch logs for a specific ingestion run from multiple workers.
 
-    Fetches logs from the IngestionWorker Lambda, filtered by
-    the log prefix [IngestionWorker:run_id=X].
+    Fetches logs from IngestionWorker and CrawlerWorker Lambdas, filtered by
+    the log prefix pattern for each worker type. Results are merged and sorted
+    by timestamp.
 
     Uses FilterLogEvents API (free tier: 1M requests/month).
 
@@ -822,19 +839,23 @@ async def get_worker_logs(
     Args:
         run_id: Path parameter - the run to get logs for
         token: Query parameter - JWT token for authentication
+        groups: Optional - Comma-separated worker types to query (default: all)
+                Valid values: ingestion, crawler
         start_time: Optional - Unix timestamp (ms) to start from
-        next_token: Optional - Pagination token from previous response
-        limit: Optional - Max number of log entries (default 100, max 1000)
+        limit: Optional - Max number of log entries per group (default 100, max 500)
 
     Returns:
-        LogsResponse with log entries and optional pagination token
+        LogsResponse with log entries sorted by timestamp
 
     Example:
-        // Initial fetch
+        // Fetch all worker logs
         GET /api/ingestion/logs/123?token=xxx
 
-        // Pagination
-        GET /api/ingestion/logs/123?token=xxx&next_token=abc123
+        // Fetch only ingestion logs
+        GET /api/ingestion/logs/123?token=xxx&groups=ingestion
+
+        // Fetch crawler logs only
+        GET /api/ingestion/logs/123?token=xxx&groups=crawler
 
         // Polling for new logs (pass last timestamp + 1)
         GET /api/ingestion/logs/123?token=xxx&start_time=1704067200001
@@ -859,58 +880,60 @@ async def get_worker_logs(
     finally:
         db.close()
 
-    # Build filter pattern for this run
-    # Quote the full prefix to match exactly - this ensures we only get IngestionWorker logs
-    # and not logs from other systems (SQS workers, etc.) that might also have run_id
-    filter_pattern = f'"[IngestionWorker" "run_id={run_id}]"'
+    # Determine which groups to query (ADR-019)
+    if groups:
+        group_keys = [g.strip() for g in groups.split(",") if g.strip() in LOG_GROUP_MAP]
+    else:
+        group_keys = list(LOG_GROUP_MAP.keys())
 
-    # Query CloudWatch Logs
-    try:
-        logs_client = boto3.client("logs")
-
-        # Build request params
-        params = {
-            "logGroupName": "/aws/lambda/IngestionWorker",
-            "filterPattern": filter_pattern,
-            "limit": min(limit, 1000),  # CloudWatch max is 10000, we cap at 1000
-        }
-
-        # Always set a startTime - without it, CloudWatch scans all streams which is slow
-        # Default to last 24 hours if not specified
-        if start_time:
-            params["startTime"] = start_time
-        else:
-            import time
-            params["startTime"] = int((time.time() - 86400) * 1000)  # 24 hours ago in ms
-
-        if next_token:
-            params["nextToken"] = next_token
-
-        response = logs_client.filter_log_events(**params)
-
-        # Convert to response format
-        logs = [
-            LogEntry(
-                timestamp=event["timestamp"],
-                message=event["message"],
-                ingestion_time=event.get("ingestionTime"),
-            )
-            for event in response.get("events", [])
-        ]
-
-        return LogsResponse(
-            logs=logs,
-            next_token=response.get("nextToken"),
-        )
-
-    except logs_client.exceptions.ResourceNotFoundException:
-        # Log group doesn't exist yet (no Lambda invocations)
-        logger.warning(f"Log group /aws/lambda/IngestionWorker not found")
+    if not group_keys:
         return LogsResponse(logs=[], next_token=None)
 
-    except Exception as e:
-        logger.exception(f"Failed to fetch CloudWatch logs for run {run_id}: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to fetch logs"
-        )
+    # Query CloudWatch Logs for each group
+    logs_client = boto3.client("logs")
+    all_logs: list[LogEntry] = []
+
+    # Default start time to last 24 hours
+    import time
+    effective_start_time = start_time if start_time else int((time.time() - 86400) * 1000)
+
+    for group_key in group_keys:
+        log_group = LOG_GROUP_MAP[group_key]
+        filter_pattern = LOG_FILTER_MAP[group_key](run_id)
+
+        try:
+            params = {
+                "logGroupName": log_group,
+                "filterPattern": filter_pattern,
+                "startTime": effective_start_time,
+                "limit": min(limit, 500),  # Cap per-group limit
+            }
+
+            response = logs_client.filter_log_events(**params)
+
+            # Add logs with source tag
+            for event in response.get("events", []):
+                all_logs.append(LogEntry(
+                    timestamp=event["timestamp"],
+                    message=event["message"],
+                    source=group_key,
+                    ingestion_time=event.get("ingestionTime"),
+                ))
+
+        except logs_client.exceptions.ResourceNotFoundException:
+            # Log group doesn't exist yet (no Lambda invocations)
+            logger.debug(f"Log group {log_group} not found (no invocations yet)")
+            continue
+
+        except Exception as e:
+            logger.warning(f"Failed to fetch logs from {log_group}: {e}")
+            continue
+
+    # Sort all logs by timestamp
+    all_logs.sort(key=lambda x: x.timestamp)
+
+    # Apply total limit (after merge)
+    if len(all_logs) > limit:
+        all_logs = all_logs[:limit]
+
+    return LogsResponse(logs=all_logs, next_token=None)

@@ -53,6 +53,10 @@ class Job(Base):
     simhash: Mapped[int] = mapped_column(BigInteger, nullable=True)
     error_message: Mapped[str] = mapped_column(Text, nullable=True)
 
+    # Phase 2J: S3 path for raw HTML content
+    # Format: s3://bucket/raw/{company}/{external_id}.html
+    raw_s3_url: Mapped[str] = mapped_column(Text, nullable=True)
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
