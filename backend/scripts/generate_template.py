@@ -116,9 +116,16 @@ def generate_template_yaml(sam_config, env_metadata, static_env_vars):
     # Extract Worker Lambda configuration
     worker_name = sam_config.get('WORKER_FUNCTION_NAME', 'IngestionWorker')
     worker_desc = sam_config.get('WORKER_FUNCTION_DESCRIPTION', 'Async worker for job ingestion')
-    worker_handler = sam_config.get('WORKER_HANDLER', 'ingestion_worker.handler')
+    worker_handler = sam_config.get('WORKER_HANDLER', 'workers.ingestion_worker.handler')
     worker_timeout = sam_config.get('WORKER_TIMEOUT', '900')
     worker_memory = sam_config.get('WORKER_MEMORY', '512')
+
+    # Extract Crawler Worker configuration (Phase 2J)
+    crawler_name = sam_config.get('CRAWLER_FUNCTION_NAME', 'CrawlerWorker')
+    crawler_desc = sam_config.get('CRAWLER_FUNCTION_DESCRIPTION', 'SQS-triggered crawler worker')
+    crawler_handler = sam_config.get('CRAWLER_HANDLER', 'workers.crawler_worker.handler')
+    crawler_timeout = sam_config.get('CRAWLER_TIMEOUT', '60')
+    crawler_memory = sam_config.get('CRAWLER_MEMORY', '512')
 
     # Split CORS origins for YAML list
     cors_origin_list = [f'"{origin.strip()}"' for origin in cors_origins.split(',')]
@@ -223,6 +230,62 @@ def generate_template_yaml(sam_config, env_metadata, static_env_vars):
         f"      Timeout: {worker_timeout}",
         f"      MemorySize: {worker_memory}",
         "      # No Events - invoked async by API Lambda, not by HTTP",
+        "      Policies:",
+        "        - SQSSendMessagePolicy:",
+        "            QueueName: !GetAtt CrawlerQueue.QueueName",
+        "      Environment:",
+        "        Variables:",
+        "          CRAWLER_QUEUE_URL: !Ref CrawlerQueue",
+        "",
+        "  # ==========================================================================",
+        "  # SQS FIFO Queue - Per-company rate limiting via MessageGroupId",
+        "  # ==========================================================================",
+        "  CrawlerQueue:",
+        "    Type: AWS::SQS::Queue",
+        "    Properties:",
+        "      QueueName: CrawlerQueue.fifo",
+        "      FifoQueue: true",
+        "      ContentBasedDeduplication: true",
+        "      VisibilityTimeout: 120",
+        "      MessageRetentionPeriod: 86400",
+        "",
+        "  # ==========================================================================",
+        "  # Crawler Worker Lambda - SQS-triggered, processes one message at a time",
+        "  # ==========================================================================",
+        f"  {crawler_name}:",
+        "    Type: AWS::Serverless::Function",
+        "    Properties:",
+        f"      FunctionName: {crawler_name}",
+        f"      CodeUri: {code_uri}",
+        f"      Handler: {crawler_handler}",
+        f"      Description: {crawler_desc}",
+        f"      Timeout: {crawler_timeout}",
+        f"      MemorySize: {crawler_memory}",
+        "      Policies:",
+        "        - S3CrudPolicy:",
+        "            BucketName: !Ref RawContentBucket",
+        "      Environment:",
+        "        Variables:",
+        "          RAW_CONTENT_BUCKET: !Ref RawContentBucket",
+        "      Events:",
+        "        SQSEvent:",
+        "          Type: SQS",
+        "          Properties:",
+        "            Queue: !GetAtt CrawlerQueue.Arn",
+        "            BatchSize: 1",
+        "",
+        "  # ==========================================================================",
+        "  # S3 Bucket - Raw HTML storage with 30-day lifecycle",
+        "  # ==========================================================================",
+        "  RawContentBucket:",
+        "    Type: AWS::S3::Bucket",
+        "    Properties:",
+        '      BucketName: !Sub "jobhunt-raw-content-${AWS::AccountId}"',
+        "      LifecycleConfiguration:",
+        "        Rules:",
+        "          - Id: DeleteAfter30Days",
+        "            Status: Enabled",
+        "            ExpirationInDays: 30",
         "",
         "  # ==========================================================================",
         "  # API Gateway",
@@ -270,6 +333,22 @@ def generate_template_yaml(sam_config, env_metadata, static_env_vars):
         "  WorkerFunctionArn:",
         "    Description: Worker Lambda function ARN",
         f"    Value: !GetAtt {worker_name}.Arn",
+        "",
+        "  CrawlerQueueUrl:",
+        "    Description: Crawler SQS FIFO queue URL",
+        "    Value: !Ref CrawlerQueue",
+        "",
+        "  CrawlerQueueArn:",
+        "    Description: Crawler SQS FIFO queue ARN",
+        "    Value: !GetAtt CrawlerQueue.Arn",
+        "",
+        "  CrawlerWorkerName:",
+        "    Description: Crawler Lambda function name",
+        f"    Value: !Ref {crawler_name}",
+        "",
+        "  RawContentBucketName:",
+        "    Description: S3 bucket for raw HTML content",
+        "    Value: !Ref RawContentBucket",
         ""
     ])
 

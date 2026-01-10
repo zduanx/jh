@@ -97,6 +97,62 @@ Resources:
       Timeout: 900
       MemorySize: 512
       # No Events - invoked async by API Lambda, not by HTTP
+      Policies:
+        - SQSSendMessagePolicy:
+            QueueName: !GetAtt CrawlerQueue.QueueName
+      Environment:
+        Variables:
+          CRAWLER_QUEUE_URL: !Ref CrawlerQueue
+
+  # ==========================================================================
+  # SQS FIFO Queue - Per-company rate limiting via MessageGroupId
+  # ==========================================================================
+  CrawlerQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: CrawlerQueue.fifo
+      FifoQueue: true
+      ContentBasedDeduplication: true
+      VisibilityTimeout: 120
+      MessageRetentionPeriod: 86400
+
+  # ==========================================================================
+  # Crawler Worker Lambda - SQS-triggered, processes one message at a time
+  # ==========================================================================
+  CrawlerWorker:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: CrawlerWorker
+      CodeUri: .
+      Handler: workers.crawler_worker.handler
+      Description: SQS-triggered crawler worker
+      Timeout: 60
+      MemorySize: 512
+      Policies:
+        - S3CrudPolicy:
+            BucketName: !Ref RawContentBucket
+      Environment:
+        Variables:
+          RAW_CONTENT_BUCKET: !Ref RawContentBucket
+      Events:
+        SQSEvent:
+          Type: SQS
+          Properties:
+            Queue: !GetAtt CrawlerQueue.Arn
+            BatchSize: 1
+
+  # ==========================================================================
+  # S3 Bucket - Raw HTML storage with 30-day lifecycle
+  # ==========================================================================
+  RawContentBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "jobhunt-raw-content-${AWS::AccountId}"
+      LifecycleConfiguration:
+        Rules:
+          - Id: DeleteAfter30Days
+            Status: Enabled
+            ExpirationInDays: 30
 
   # ==========================================================================
   # API Gateway
@@ -139,3 +195,19 @@ Outputs:
   WorkerFunctionArn:
     Description: Worker Lambda function ARN
     Value: !GetAtt IngestionWorker.Arn
+
+  CrawlerQueueUrl:
+    Description: Crawler SQS FIFO queue URL
+    Value: !Ref CrawlerQueue
+
+  CrawlerQueueArn:
+    Description: Crawler SQS FIFO queue ARN
+    Value: !GetAtt CrawlerQueue.Arn
+
+  CrawlerWorkerName:
+    Description: Crawler Lambda function name
+    Value: !Ref CrawlerWorker
+
+  RawContentBucketName:
+    Description: S3 bucket for raw HTML content
+    Value: !Ref RawContentBucket
