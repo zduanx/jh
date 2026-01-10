@@ -63,7 +63,7 @@ logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
 # Environment variables
-RAW_BUCKET = os.environ.get("RAW_BUCKET", "")
+RAW_BUCKET = os.environ.get("RAW_CONTENT_BUCKET", "")
 
 # Constants
 MAX_CRAWL_RETRIES = 3
@@ -373,7 +373,14 @@ def handler(event: dict, context) -> dict:
         log.log_info(f"Sleeping {RATE_LIMIT_SLEEP}s (rate limit)")
         time.sleep(RATE_LIMIT_SLEEP)
 
-        log.log_info(f"Done: {result.get('status')}")
+        # Log result with error details if present
+        status = result.get('status')
+        reason = result.get('reason', '')
+        error = result.get('error', '')
+        if status == 'error':
+            log.log_info(f"Done: {status} ({reason}) - {error[:200] if error else 'no details'}")
+        else:
+            log.log_info(f"Done: {status}" + (f" ({reason})" if reason else ""))
         return result
 
     except Exception as e:
