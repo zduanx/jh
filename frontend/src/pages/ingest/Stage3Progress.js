@@ -39,11 +39,12 @@ function Stage3Progress({ runId, onAbort, onTerminal, onNewRun, isCompleted = fa
   const logContainerRef = useRef(null);
   const ingestionLogRef = useRef(null);
   const crawlerLogRef = useRef(null);
+  const extractorLogRef = useRef(null);
   const lastTimestampRef = useRef(null);
   const pollingRef = useRef(null);
 
   // Track if user is at bottom of log containers (for smart auto-scroll)
-  const isAtBottomRef = useRef({ merged: true, ingestion: true, crawler: true });
+  const isAtBottomRef = useRef({ merged: true, ingestion: true, crawler: true, extractor: true });
 
   const apiUrl = process.env.REACT_APP_API_URL;
 
@@ -219,6 +220,7 @@ function Stage3Progress({ runId, onAbort, onTerminal, onNewRun, isCompleted = fa
         autoScrollIfAtBottom(logContainerRef, 'merged');
         autoScrollIfAtBottom(ingestionLogRef, 'ingestion');
         autoScrollIfAtBottom(crawlerLogRef, 'crawler');
+        autoScrollIfAtBottom(extractorLogRef, 'extractor');
       }
 
       setLogsError(null);
@@ -581,7 +583,7 @@ function Stage3Progress({ runId, onAbort, onTerminal, onNewRun, isCompleted = fa
               <div key={`${log.timestamp}-${index}`} className="s3-log-entry">
                 <span className="s3-log-time">{formatTimestamp(log.timestamp)}</span>
                 <span className={`s3-log-source s3-log-source-${log.source || 'ingestion'}`}>
-                  {log.source === 'crawler' ? 'CRL' : 'ING'}
+                  {log.source === 'crawler' ? 'CRL' : log.source === 'extractor' ? 'EXT' : 'ING'}
                 </span>
                 <span className="s3-log-message">{log.message}</span>
               </div>
@@ -611,6 +613,16 @@ function Stage3Progress({ runId, onAbort, onTerminal, onNewRun, isCompleted = fa
                 Crawler
                 <span className="s3-log-tab-count">
                   {logs.filter(l => l.source === 'crawler').length}
+                </span>
+              </button>
+              <button
+                className={`s3-log-tab ${activeLogTab === 'extractor' ? 'active' : ''}`}
+                onClick={() => setActiveLogTab('extractor')}
+              >
+                <span className="s3-log-source s3-log-source-extractor">EXT</span>
+                Extractor
+                <span className="s3-log-tab-count">
+                  {logs.filter(l => l.source === 'extractor').length}
                 </span>
               </button>
             </div>
@@ -670,6 +682,28 @@ function Stage3Progress({ runId, onAbort, onTerminal, onNewRun, isCompleted = fa
                 )}
                 {logs
                   .filter(l => l.source === 'crawler')
+                  .map((log, index) => (
+                    <div key={`${log.timestamp}-${index}`} className="s3-log-entry">
+                      <span className="s3-log-time">{formatTimestamp(log.timestamp)}</span>
+                      <span className="s3-log-message">{log.message}</span>
+                    </div>
+                  ))}
+              </div>
+            </div>
+            <div className="s3-log-card">
+              <div className="s3-log-card-header">
+                <span className="s3-log-source s3-log-source-extractor">EXT</span>
+                <span>Extractor Worker</span>
+                <span className="s3-log-card-count">
+                  {logs.filter(l => l.source === 'extractor').length}
+                </span>
+              </div>
+              <div className="s3-log-container s3-log-card-content" ref={extractorLogRef} onScroll={handleLogScroll('extractor')}>
+                {logs.filter(l => l.source === 'extractor').length === 0 && !logsLoading && (
+                  <div className="s3-log-empty">Waiting...</div>
+                )}
+                {logs
+                  .filter(l => l.source === 'extractor')
                   .map((log, index) => (
                     <div key={`${log.timestamp}-${index}`} className="s3-log-entry">
                       <span className="s3-log-time">{formatTimestamp(log.timestamp)}</span>
