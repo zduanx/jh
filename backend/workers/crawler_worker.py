@@ -320,7 +320,8 @@ def process_crawl_message(
     new_simhash = compute_simhash(raw_content)
     old_simhash = job.simhash
 
-    if is_similar(old_simhash, new_simhash, threshold=3):
+    # Phase 2L: force=true bypasses SimHash check (still computes and stores simhash)
+    if not message.force and is_similar(old_simhash, new_simhash, threshold=3):
         log.log_info("Content similar (SKIPPED)")
         update_job_status(db, job, JobStatus.SKIPPED, simhash=new_simhash)
         # Check run finalization (job now has terminal status)
@@ -406,7 +407,7 @@ def handler(event: dict, context) -> dict:
 
     job_key = f"{message.job.company}/{message.job.external_id}"
     log = CrawlerLogContext(message.run_id, job_key, use_test_db=message.use_test_db)
-    log.log_info("Processing message")
+    log.log_info(f"Processing message (force={message.force})")
 
     # Get database session
     if message.use_test_db:

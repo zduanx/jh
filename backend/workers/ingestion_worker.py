@@ -217,6 +217,7 @@ def run_ingestion_phase(
     run: IngestionRun,
     init_result: InitializationResult,
     use_test_db: bool = False,
+    force: bool = False,
 ) -> None:
     """
     Run ingestion phase: send jobs to SQS for async crawling.
@@ -230,13 +231,14 @@ def run_ingestion_phase(
         run: Ingestion run record
         init_result: Result from initialization phase with all jobs
         use_test_db: Whether workers should use TEST_DATABASE_URL
+        force: Phase 2L - bypass SimHash check when True
     """
     import json
     import os
     import boto3
 
     log = IngestionLogContext(run.id, use_test_db=use_test_db)
-    log.log_info("Starting ingestion phase")
+    log.log_info(f"Starting ingestion phase{' (force mode)' if force else ''}")
 
     # Get queue URL from environment
     queue_url = os.environ.get("CRAWLER_QUEUE_URL", "")
@@ -251,7 +253,7 @@ def run_ingestion_phase(
         return
 
     # Generate crawl messages
-    messages = init_result.to_crawl_messages(use_test_db=use_test_db)
+    messages = init_result.to_crawl_messages(use_test_db=use_test_db, force=force)
     log.log_info(f"Sending {len(messages)} messages to SQS")
 
     if not messages:
@@ -297,6 +299,7 @@ def process_run(
     run_id: int,
     user_id: int,
     use_test_db: bool = False,
+    force: bool = False,
     # Dependency injection for testing
     _get_run=get_run,
     _update_run_status=update_run_status,
@@ -313,6 +316,7 @@ def process_run(
         run_id: ID of the run to process
         user_id: ID of the user who owns the run
         use_test_db: Whether to pass use_test_db flag to SQS messages
+        force: Phase 2L - bypass SimHash check when True
         _*: Dependency injection for DB operations (for testing)
 
     Returns:
@@ -378,7 +382,7 @@ def process_run(
     # Publishes jobs to SQS and returns immediately
     # CrawlerWorkers process async and update job statuses in DB
     # =======================================================================
-    _run_ingestion_phase(db, run, init_result, use_test_db=use_test_db)
+    _run_ingestion_phase(db, run, init_result, use_test_db=use_test_db, force=force)
 
     # Return current status (run stays INGESTING, workers update async)
     return {
@@ -402,6 +406,7 @@ def handler(event: dict, context) -> dict:
             run_id: int,
             user_id: int,
             use_test_db: bool  // Optional: when true, uses TEST_DATABASE_URL
+            force: bool  // Optional: Phase 2L - bypass SimHash check
         }
         context: Lambda context (unused)
 
@@ -411,6 +416,7 @@ def handler(event: dict, context) -> dict:
     run_id = event.get("run_id")
     user_id = event.get("user_id")
     use_test_db = event.get("use_test_db", False)
+    force = event.get("force", False)
 
     if not run_id or not user_id:
         logger.error(f"Missing required fields: run_id={run_id}, user_id={user_id}")
@@ -432,7 +438,7 @@ def handler(event: dict, context) -> dict:
     log.log_info(f"Starting worker for user_id={user_id}")
 
     try:
-        return process_run(db, run_id, user_id, use_test_db=use_test_db)
+        return process_run(db, run_id, user_id, use_test_db=use_test_db, force=force)
 
     except Exception as e:
         log.log_error(f"Worker error: {e}")

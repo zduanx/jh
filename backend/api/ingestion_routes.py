@@ -388,8 +388,14 @@ async def get_current_run(
         return CurrentRunResponse(run_id=None)
 
 
+class StartIngestionRequest(BaseModel):
+    """Request body for starting ingestion."""
+    force: bool = False  # Phase 2L: bypass SimHash check when True
+
+
 @router.post("/start", response_model=StartIngestionResponse)
 async def start_ingestion(
+    request: StartIngestionRequest = None,
     current_user: dict = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
@@ -402,18 +408,25 @@ async def start_ingestion(
 
     Auth: JWT required
 
+    Request body (optional):
+        force: bool - If true, bypass SimHash check and re-crawl all jobs
+
     Returns:
         StartIngestionResponse with run_id
 
     Example:
         POST /api/ingestion/start
         Authorization: Bearer <jwt_token>
+        Body: { "force": true }
 
         Response:
         {
             "run_id": 123
         }
     """
+    # Handle None request (no body sent)
+    force = request.force if request else False
+
     user_id = current_user["user_id"]
 
     # Verify user has enabled companies before starting
@@ -424,13 +437,14 @@ async def start_ingestion(
             detail="No enabled companies configured. Add companies in Stage 1."
         )
 
-    # Create ingestion run record
-    run = IngestionRun(user_id=user_id, status=RunStatus.PENDING)
+    # Create ingestion run record with force flag in metadata
+    run_metadata = {"force": force} if force else {}
+    run = IngestionRun(user_id=user_id, status=RunStatus.PENDING, run_metadata=run_metadata)
     db.add(run)
     db.commit()
     db.refresh(run)
 
-    logger.info(f"Created ingestion run {run.id} for user {user_id}")
+    logger.info(f"Created ingestion run {run.id} for user {user_id}, force={force}")
 
     # Trigger async worker Lambda
     worker_function_name = os.environ.get("WORKER_FUNCTION_NAME")
@@ -445,6 +459,7 @@ async def start_ingestion(
                 "run_id": run.id,
                 "user_id": user_id,
                 "use_test_db": is_local,  # True for local dev, False for Lambda
+                "force": force,  # Phase 2L: pass force flag to worker
             }
             payload = json.dumps(payload_data)
 
@@ -458,7 +473,7 @@ async def start_ingestion(
 
             logger.info(
                 f"Invoked worker {worker_function_name} for run {run.id}, "
-                f"StatusCode={response.get('StatusCode')}, use_test_db={is_local}"
+                f"StatusCode={response.get('StatusCode')}, use_test_db={is_local}, force={force}"
             )
         except Exception as e:
             # Log but don't fail - run record exists, can be recovered

@@ -72,6 +72,7 @@ class CrawlMessage:
     job: JobIdentifier
     url: str
     use_test_db: bool = False
+    force: bool = False  # Phase 2L: bypass SimHash check when True
 
     def to_dict(self) -> dict:
         return {
@@ -81,6 +82,7 @@ class CrawlMessage:
             "external_id": self.job.external_id,
             "url": self.url,
             "use_test_db": self.use_test_db,
+            "force": self.force,
         }
 
     @classmethod
@@ -91,6 +93,7 @@ class CrawlMessage:
             job=JobIdentifier(company=data["company"], external_id=data["external_id"]),
             url=data["url"],
             use_test_db=data.get("use_test_db", False),
+            force=data.get("force", False),
         )
 
 
@@ -136,7 +139,7 @@ class InitializationResult:
             jobs.extend(company.jobs)
         return jobs
 
-    def to_crawl_messages(self, use_test_db: bool = False) -> list[CrawlMessage]:
+    def to_crawl_messages(self, use_test_db: bool = False, force: bool = False) -> list[CrawlMessage]:
         """Generate SQS messages for all jobs."""
         messages = []
         for company in self.companies:
@@ -149,6 +152,7 @@ class InitializationResult:
                     job=job.identifier,
                     url=job.url,
                     use_test_db=use_test_db,
+                    force=force,
                 ))
         return messages
 
