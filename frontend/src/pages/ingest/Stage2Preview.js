@@ -26,6 +26,7 @@ export function Stage2ActionBar({
   onSave,
   onDryRun,
   onConfirmOpen,
+  onForceConfirmOpen,
 }) {
   const canDryRun = !isDirty && !loading && !saving;
 
@@ -59,6 +60,14 @@ export function Stage2ActionBar({
       </div>
 
       <div className="s2-action-bar-right">
+        <button
+          className="s2-force-btn"
+          onClick={onForceConfirmOpen}
+          disabled={!canStartIngestion}
+          title="Force re-crawl all jobs (bypass content check)"
+        >
+          Force Ingestion
+        </button>
         <button
           className="s2-next-btn"
           onClick={onConfirmOpen}
@@ -114,6 +123,7 @@ function Stage2Preview({
   const [modalOpen, setModalOpen] = useState(false);
   const [editingCompany, setEditingCompany] = useState(null);
   const [confirmModalOpen, setConfirmModalOpen] = useState(false);
+  const [forceConfirmModalOpen, setForceConfirmModalOpen] = useState(false);
 
   const apiUrl = process.env.REACT_APP_API_URL;
 
@@ -474,6 +484,7 @@ function Stage2Preview({
       onSave: handleSave,
       onDryRun: handleDryRun,
       onConfirmOpen: () => setConfirmModalOpen(true),
+      onForceConfirmOpen: () => setForceConfirmModalOpen(true),
     });
   }, [isDirty, saving, loading, hasResults, resultsStale, canStartIngestion, onActionBarChange]);
 
@@ -618,11 +629,58 @@ function Stage2Preview({
               <button
                 className="s2-confirm-proceed"
                 onClick={() => {
-                  onNext();
+                  onNext(false);
                 }}
                 disabled={startingIngestion}
               >
                 {startingIngestion ? 'Starting...' : 'Start Ingestion'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Force Confirmation Modal */}
+      {forceConfirmModalOpen && (
+        <div className="s2-confirm-overlay" onClick={() => setForceConfirmModalOpen(false)}>
+          <div className="s2-confirm-modal s2-confirm-force" onClick={e => e.stopPropagation()}>
+            <div className="s2-confirm-header">
+              <h3>Force Ingestion?</h3>
+              <button
+                className="s2-confirm-close"
+                onClick={() => setForceConfirmModalOpen(false)}
+              >
+                ×
+              </button>
+            </div>
+            <div className="s2-confirm-body">
+              <p className="s2-confirm-warning">
+                This will re-crawl ALL jobs regardless of content changes.
+              </p>
+              <ul className="s2-confirm-list">
+                <li><strong>{stats.companyCount}</strong> {stats.companyCount === 1 ? 'company' : 'companies'}</li>
+                <li><strong>{stats.totalUrls}</strong> jobs to process</li>
+              </ul>
+              <p className="s2-confirm-note">
+                Use this for testing or when you need to re-extract all job details.
+              </p>
+            </div>
+            <div className="s2-confirm-footer">
+              <button
+                className="s2-confirm-cancel"
+                onClick={() => setForceConfirmModalOpen(false)}
+                disabled={startingIngestion}
+              >
+                Cancel
+              </button>
+              <button
+                className="s2-confirm-force-proceed"
+                onClick={() => {
+                  onNext(true);
+                }}
+                disabled={startingIngestion}
+              >
+                {startingIngestion ? 'Starting...' : 'Force Ingestion'}
               </button>
             </div>
           </div>

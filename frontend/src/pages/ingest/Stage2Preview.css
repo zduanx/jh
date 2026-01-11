@@ -401,6 +401,29 @@
   cursor: not-allowed;
 }
 
+.s2-force-btn {
+  padding: 12px 20px;
+  background: #dc2626;
+  color: white;
+  border: none;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  outline: none;
+  margin-right: 8px;
+}
+
+.s2-force-btn:hover:not(:disabled) {
+  background: #b91c1c;
+}
+
+.s2-force-btn:disabled {
+  background: #fca5a5;
+  cursor: not-allowed;
+}
+
 .s2-next-btn {
   padding: 12px 24px;
   background: #3b82f6;
@@ -576,6 +599,32 @@
 
 .s2-confirm-proceed:hover {
   background: #2563eb;
+}
+
+/* Force Confirmation Modal */
+.s2-confirm-force {
+  border: 2px solid #dc2626;
+}
+
+.s2-confirm-warning {
+  color: #dc2626;
+  font-weight: 500;
+  margin-bottom: 12px;
+}
+
+.s2-confirm-force-proceed {
+  padding: 10px 20px;
+  background: #dc2626;
+  border: none;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 500;
+  color: white;
+  cursor: pointer;
+}
+
+.s2-confirm-force-proceed:hover {
+  background: #b91c1c;
 }
 
 /* Responsive */

@@ -111,7 +111,8 @@ function IngestPage() {
   }, [fetchData]);
 
   // Start ingestion - called from Stage 2 confirm
-  const handleStartIngestion = async () => {
+  // force: boolean - if true, bypass SimHash check (re-crawl all jobs)
+  const handleStartIngestion = async (force = false) => {
     setStartingIngestion(true);
     setError(null);
 
@@ -123,6 +124,7 @@ function IngestPage() {
           'Authorization': `Bearer ${token}`,
           'Content-Type': 'application/json',
         },
+        body: JSON.stringify({ force }),
       });
 
       if (!res.ok) {
