@@ -127,6 +127,14 @@ def generate_template_yaml(sam_config, env_metadata, static_env_vars):
     crawler_timeout = sam_config.get('CRAWLER_TIMEOUT', '60')
     crawler_memory = sam_config.get('CRAWLER_MEMORY', '512')
 
+    # Extract Extractor Worker configuration (Phase 2K)
+    extractor_name = sam_config.get('EXTRACTOR_FUNCTION_NAME', 'ExtractorWorker')
+    extractor_desc = sam_config.get('EXTRACTOR_FUNCTION_DESCRIPTION', 'SQS-triggered extractor worker')
+    extractor_handler = sam_config.get('EXTRACTOR_HANDLER', 'workers.extractor_worker.handler')
+    extractor_timeout = sam_config.get('EXTRACTOR_TIMEOUT', '30')
+    extractor_memory = sam_config.get('EXTRACTOR_MEMORY', '256')
+    extractor_reserved_concurrency = sam_config.get('EXTRACTOR_RESERVED_CONCURRENCY', '5')
+
     # Split CORS origins for YAML list
     cors_origin_list = [f'"{origin.strip()}"' for origin in cors_origins.split(',')]
 
@@ -264,6 +272,47 @@ def generate_template_yaml(sam_config, env_metadata, static_env_vars):
         "      Policies:",
         "        - S3CrudPolicy:",
         "            BucketName: !Ref RawContentBucket",
+        "        - SQSSendMessagePolicy:",
+        "            QueueName: !GetAtt ExtractorQueue.QueueName",
+        "      Environment:",
+        "        Variables:",
+        "          RAW_CONTENT_BUCKET: !Ref RawContentBucket",
+        "          EXTRACTOR_QUEUE_URL: !Ref ExtractorQueue",
+        "      Events:",
+        "        SQSEvent:",
+        "          Type: SQS",
+        "          Properties:",
+        "            Queue: !GetAtt CrawlerQueue.Arn",
+        "            BatchSize: 1",
+        "",
+        "  # ==========================================================================",
+        "  # Extractor Queue - Standard SQS (not FIFO, no rate limiting needed)",
+        "  # Phase 2K: Receives messages from CrawlerWorker after S3 save",
+        "  # ==========================================================================",
+        "  ExtractorQueue:",
+        "    Type: AWS::SQS::Queue",
+        "    Properties:",
+        "      QueueName: ExtractorQueue",
+        "      VisibilityTimeout: 60",
+        "      MessageRetentionPeriod: 86400",
+        "",
+        "  # ==========================================================================",
+        "  # Extractor Worker Lambda - SQS-triggered, extracts description/requirements",
+        "  # Phase 2K: ReservedConcurrentExecutions=5 to limit DB connections",
+        "  # ==========================================================================",
+        f"  {extractor_name}:",
+        "    Type: AWS::Serverless::Function",
+        "    Properties:",
+        f"      FunctionName: {extractor_name}",
+        f"      CodeUri: {code_uri}",
+        f"      Handler: {extractor_handler}",
+        f"      Description: {extractor_desc}",
+        f"      Timeout: {extractor_timeout}",
+        f"      MemorySize: {extractor_memory}",
+        f"      ReservedConcurrentExecutions: {extractor_reserved_concurrency}",
+        "      Policies:",
+        "        - S3ReadPolicy:",
+        "            BucketName: !Ref RawContentBucket",
         "      Environment:",
         "        Variables:",
         "          RAW_CONTENT_BUCKET: !Ref RawContentBucket",
@@ -271,7 +320,7 @@ def generate_template_yaml(sam_config, env_metadata, static_env_vars):
         "        SQSEvent:",
         "          Type: SQS",
         "          Properties:",
-        "            Queue: !GetAtt CrawlerQueue.Arn",
+        "            Queue: !GetAtt ExtractorQueue.Arn",
         "            BatchSize: 1",
         "",
         "  # ==========================================================================",
@@ -349,6 +398,18 @@ def generate_template_yaml(sam_config, env_metadata, static_env_vars):
         "  RawContentBucketName:",
         "    Description: S3 bucket for raw HTML content",
         "    Value: !Ref RawContentBucket",
+        "",
+        "  ExtractorQueueUrl:",
+        "    Description: Extractor SQS queue URL",
+        "    Value: !Ref ExtractorQueue",
+        "",
+        "  ExtractorQueueArn:",
+        "    Description: Extractor SQS queue ARN",
+        "    Value: !GetAtt ExtractorQueue.Arn",
+        "",
+        "  ExtractorWorkerName:",
+        "    Description: Extractor Lambda function name",
+        f"    Value: !Ref {extractor_name}",
         ""
     ])
 

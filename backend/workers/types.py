@@ -167,3 +167,37 @@ class IngestionResult:
 
     def to_dict(self) -> dict:
         return asdict(self)
+
+
+@dataclass
+class ExtractMessage:
+    """
+    SQS message for extractor worker (Phase 2K).
+
+    Sent by CrawlerWorker after saving raw HTML to S3.
+    Contains all info needed for extraction without DB query.
+    """
+    run_id: int
+    job_id: int
+    company: str
+    raw_s3_url: str  # S3 key (e.g., "raw/google/abc123.html")
+    use_test_db: bool = False
+
+    def to_dict(self) -> dict:
+        return {
+            "run_id": self.run_id,
+            "job_id": self.job_id,
+            "company": self.company,
+            "raw_s3_url": self.raw_s3_url,
+            "use_test_db": self.use_test_db,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "ExtractMessage":
+        return cls(
+            run_id=data["run_id"],
+            job_id=data["job_id"],
+            company=data["company"],
+            raw_s3_url=data["raw_s3_url"],
+            use_test_db=data.get("use_test_db", False),
+        )

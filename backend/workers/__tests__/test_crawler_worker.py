@@ -249,7 +249,7 @@ class TestProcessCrawlMessage:
         call_args = mock_update_job.call_args
         assert call_args[0][2] == JobStatus.ERROR
 
-    @patch("workers.crawler_worker.update_job_status")
+    @patch("workers.crawler_worker.send_to_extractor_queue")
     @patch("workers.crawler_worker.save_to_s3")
     @patch("workers.crawler_worker.is_similar")
     @patch("workers.crawler_worker.compute_simhash")
@@ -264,9 +264,9 @@ class TestProcessCrawlMessage:
         mock_compute_simhash,
         mock_is_similar,
         mock_save_s3,
-        mock_update_job,
+        mock_send_extractor,
     ):
-        """Should crawl, save to S3, and mark READY for new content."""
+        """Should crawl, save to S3, and send to ExtractorQueue for new content."""
         mock_db = MagicMock()
         mock_get_run.return_value = make_mock_run()
         mock_asyncio_run.return_value = "<html>brand new content</html>"
@@ -279,16 +279,15 @@ class TestProcessCrawlMessage:
 
         result = process_crawl_message(mock_db, message, "test-bucket")
 
-        assert result["status"] == "ready"
+        assert result["status"] == "queued"
         assert result["s3_url"] == "s3://test-bucket/raw/google/jobs_123.html"
         mock_save_s3.assert_called_once()
-        mock_update_job.assert_called_once()
-        call_args = mock_update_job.call_args
-        assert call_args[0][2] == JobStatus.READY
-        assert call_args[1]["simhash"] == 12345
-        assert call_args[1]["raw_s3_url"] == "s3://test-bucket/raw/google/jobs_123.html"
+        mock_send_extractor.assert_called_once()
+        # Verify job was updated with simhash and s3_url (status stays PENDING)
+        assert mock_job.simhash == 12345
+        assert mock_job.raw_s3_url == "s3://test-bucket/raw/google/jobs_123.html"
 
-    @patch("workers.crawler_worker.update_job_status")
+    @patch("workers.crawler_worker.send_to_extractor_queue")
     @patch("workers.crawler_worker.save_to_s3")
     @patch("workers.crawler_worker.is_similar")
     @patch("workers.crawler_worker.compute_simhash")
@@ -303,9 +302,9 @@ class TestProcessCrawlMessage:
         mock_compute_simhash,
         mock_is_similar,
         mock_save_s3,
-        mock_update_job,
+        mock_send_extractor,
     ):
-        """Should update job when content has changed significantly."""
+        """Should update job and send to ExtractorQueue when content has changed."""
         mock_db = MagicMock()
         mock_get_run.return_value = make_mock_run()
         mock_asyncio_run.return_value = "<html>updated content</html>"
@@ -318,8 +317,9 @@ class TestProcessCrawlMessage:
 
         result = process_crawl_message(mock_db, message, "test-bucket")
 
-        assert result["status"] == "ready"
+        assert result["status"] == "queued"
         mock_is_similar.assert_called_once_with(11111, 99999, threshold=3)
+        mock_send_extractor.assert_called_once()
 
     @patch("workers.crawler_worker.get_run_with_metadata")
     def test_circuit_breaker_below_threshold(self, mock_get_run):

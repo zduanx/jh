@@ -805,14 +805,14 @@ class LogsResponse(BaseModel):
 LOG_GROUP_MAP = {
     "ingestion": "/aws/lambda/IngestionWorker",
     "crawler": "/aws/lambda/CrawlerWorker",
-    # "extractor": "/aws/lambda/ExtractorWorker",  # Phase 2K
+    "extractor": "/aws/lambda/ExtractorWorker",  # Phase 2K
 }
 
 # Map short names to CloudWatch filter patterns
 LOG_FILTER_MAP = {
     "ingestion": lambda run_id: f'"[IngestionWorker" "run_id={run_id}]"',
     "crawler": lambda run_id: f'"[CrawlerWorker" "run_id={run_id}"',
-    # "extractor": lambda run_id: f'"[ExtractorWorker" "run_id={run_id}"',  # Phase 2K
+    "extractor": lambda run_id: f'"[ExtractorWorker" "run_id={run_id}"',  # Phase 2K
 }
 
 

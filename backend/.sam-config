@@ -59,3 +59,22 @@ API_CORS_ALLOW_ORIGINS=http://localhost:3000,https://zduan-job.vercel.app
 ENV_VAR_ALGORITHM=HS256
 ENV_VAR_ACCESS_TOKEN_EXPIRE_MINUTES=1440
 ENV_VAR_GOOGLE_CLIENT_SECRET=optional-for-token-validation
+
+# ============================================================================
+# Lambda Function Configuration - Crawler Worker (SQS-triggered, Phase 2J)
+# ============================================================================
+CRAWLER_FUNCTION_NAME=CrawlerWorker
+CRAWLER_FUNCTION_DESCRIPTION=SQS-triggered crawler worker
+CRAWLER_HANDLER=workers.crawler_worker.handler
+CRAWLER_TIMEOUT=60
+CRAWLER_MEMORY=512
+
+# ============================================================================
+# Lambda Function Configuration - Extractor Worker (SQS-triggered, Phase 2K)
+# ============================================================================
+EXTRACTOR_FUNCTION_NAME=ExtractorWorker
+EXTRACTOR_FUNCTION_DESCRIPTION=SQS-triggered extractor worker
+EXTRACTOR_HANDLER=workers.extractor_worker.handler
+EXTRACTOR_TIMEOUT=30
+EXTRACTOR_MEMORY=256
+EXTRACTOR_RESERVED_CONCURRENCY=5

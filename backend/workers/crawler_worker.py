@@ -1,5 +1,5 @@
 """
-Crawler Worker Lambda Handler (Phase 2J)
+Crawler Worker Lambda Handler (Phase 2J + 2K)
 
 This Lambda is triggered by SQS FIFO queue (CrawlerQueue.fifo).
 It processes one job at a time, crawling the job page and storing raw HTML in S3.
@@ -23,17 +23,22 @@ Workflow:
 1. Parse SQS message
 2. Query run status + run_metadata (single DB call)
    - If ABORTED → return (message deleted)
-   - If failures >= 5 for this company → mark job ERROR, return
+   - If failures >= 5 for this company → mark job ERROR, check finalization, return
 3. Try crawl with internal retry (3 attempts, 1s backoff)
 4. Compare SimHash with previous value
-   - If similar (Hamming distance ≤ 3) → mark SKIPPED, return
-   - If different → save to S3, mark READY
+   - If similar (Hamming distance ≤ 3) → mark SKIPPED, check finalization, return
+   - If different → save to S3, send to ExtractorQueue
 5. Sleep 1s before return (rate limiting)
+
+Phase 2K additions:
+- After terminal status (skipped/error), check run finalization
+- After S3 save, send message to ExtractorQueue (job stays PENDING)
+- ExtractorWorker will set final status (READY or ERROR)
 
 Environment Variables:
 - DATABASE_URL: PostgreSQL connection string
-- RAW_BUCKET: S3 bucket for raw HTML storage
-- CRAWLER_QUEUE_URL: SQS queue URL (for DLQ handling)
+- RAW_CONTENT_BUCKET: S3 bucket for raw HTML storage
+- EXTRACTOR_QUEUE_URL: SQS queue URL for extraction
 
 Log Format:
 All logs use prefix [CrawlerWorker:run_id=X:job=company/external_id] for CloudWatch filtering.
@@ -50,6 +55,7 @@ from typing import Optional
 import boto3
 from sqlalchemy.orm import Session
 
+from db.run_service import try_finalize_run
 from db.session import SessionLocal, get_test_session_local
 from extractors import get_extractor
 from extractors.config import TitleFilters
@@ -57,13 +63,14 @@ from models.ingestion_run import IngestionRun, RunStatus
 from models.job import Job, JobStatus
 from utils.simhash import compute_simhash, is_similar
 from utils.worker_logging import CrawlerLogContext
-from workers.types import CrawlMessage
+from workers.types import CrawlMessage, ExtractMessage
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
 # Environment variables
 RAW_BUCKET = os.environ.get("RAW_CONTENT_BUCKET", "")
+EXTRACTOR_QUEUE_URL = os.environ.get("EXTRACTOR_QUEUE_URL", "")
 
 # Constants
 MAX_CRAWL_RETRIES = 3
@@ -112,6 +119,27 @@ def build_s3_key(company: str, external_id: str) -> str:
     # Replace slashes in external_id with underscores for S3 key
     safe_id = external_id.replace("/", "_")
     return f"raw/{company}/{safe_id}.html"
+
+
+# =============================================================================
+# SQS Operations (Phase 2K)
+# =============================================================================
+
+def send_to_extractor_queue(message: ExtractMessage) -> None:
+    """
+    Send message to ExtractorQueue for extraction processing.
+
+    Args:
+        message: ExtractMessage to send
+    """
+    if not EXTRACTOR_QUEUE_URL:
+        raise ValueError("EXTRACTOR_QUEUE_URL not configured")
+
+    sqs = boto3.client("sqs")
+    sqs.send_message(
+        QueueUrl=EXTRACTOR_QUEUE_URL,
+        MessageBody=json.dumps(message.to_dict()),
+    )
 
 
 # =============================================================================
@@ -256,6 +284,9 @@ def process_crawl_message(
         job = get_job(db, message.user_id, message.job.company, message.job.external_id)
         if job:
             update_job_status(db, job, JobStatus.ERROR, error_message="Circuit breaker: too many failures")
+            # Check run finalization (job now has terminal status)
+            if try_finalize_run(db, message.run_id):
+                log.log_info("Run finalized (was last job)")
         return {"status": "error", "reason": "circuit_breaker"}
 
     # Step 2: Crawl with retry (using URL from message, no DB query needed)
@@ -274,6 +305,9 @@ def process_crawl_message(
         job = get_job(db, message.user_id, message.job.company, message.job.external_id)
         if job:
             update_job_status(db, job, JobStatus.ERROR, error_message=str(e)[:500])
+            # Check run finalization (job now has terminal status)
+            if try_finalize_run(db, message.run_id):
+                log.log_info("Run finalized (was last job)")
         return {"status": "error", "reason": "crawl_failed", "error": str(e)}
 
     # Step 3: Get job record (needed for simhash comparison and status update)
@@ -289,6 +323,9 @@ def process_crawl_message(
     if is_similar(old_simhash, new_simhash, threshold=3):
         log.log_info("Content similar (SKIPPED)")
         update_job_status(db, job, JobStatus.SKIPPED, simhash=new_simhash)
+        # Check run finalization (job now has terminal status)
+        if try_finalize_run(db, message.run_id):
+            log.log_info("Run finalized (was last job)")
         return {"status": "skipped", "reason": "content_similar"}
 
     # Step 5: Save to S3
@@ -301,24 +338,38 @@ def process_crawl_message(
         # Increment failure count
         increment_failure_count(db, run, message.job.company)
         update_job_status(db, job, JobStatus.ERROR, error_message=f"S3 error: {e}")
+        # Check run finalization (job now has terminal status)
+        if try_finalize_run(db, message.run_id):
+            log.log_info("Run finalized (was last job)")
         return {"status": "error", "reason": "s3_failed", "error": str(e)}
 
-    # Step 6: Update job status
-    # TODO Phase 2K: Change READY → CRAWLED (new intermediate status)
-    update_job_status(
-        db,
-        job,
-        JobStatus.READY,
-        simhash=new_simhash,
+    # Step 6: Update job with simhash and S3 URL (status stays PENDING for extraction)
+    job.simhash = new_simhash
+    job.raw_s3_url = s3_url
+    job.updated_at = datetime.now(timezone.utc)
+    db.commit()
+
+    # Step 7: Send to ExtractorQueue for extraction
+    extract_message = ExtractMessage(
+        run_id=message.run_id,
+        job_id=job.id,
+        company=message.job.company,
         raw_s3_url=s3_url,
+        use_test_db=message.use_test_db,
     )
-    log.log_info("Marked READY")
+    try:
+        send_to_extractor_queue(extract_message)
+        log.log_info("Sent to ExtractorQueue")
+    except Exception as e:
+        log.log_error(f"Failed to send to ExtractorQueue: {e}")
+        # Mark job as error since we can't proceed with extraction
+        update_job_status(db, job, JobStatus.ERROR, error_message=f"ExtractorQueue error: {e}")
+        # Check run finalization
+        if try_finalize_run(db, message.run_id):
+            log.log_info("Run finalized (was last job)")
+        return {"status": "error", "reason": "extractor_queue_failed", "error": str(e)}
 
-    # TODO Phase 2K: Step 7 - Send to ExtractorQueue.fifo for description/requirements extraction
-    # extract_message = ExtractMessage(user_id=message.user_id, run_id=message.run_id, ...)
-    # sqs.send_message(QueueUrl=EXTRACTOR_QUEUE_URL, MessageBody=..., MessageGroupId=company)
-
-    return {"status": "ready", "s3_url": s3_url}
+    return {"status": "queued", "s3_url": s3_url}
 
 
 # =============================================================================
@@ -392,6 +443,8 @@ def handler(event: dict, context) -> dict:
             job = get_job(db, message.user_id, message.job.company, message.job.external_id)
             if job and job.status == JobStatus.PENDING:
                 update_job_status(db, job, JobStatus.ERROR, error_message=str(e)[:500])
+                # Check run finalization
+                try_finalize_run(db, message.run_id)
         except Exception:
             pass
 

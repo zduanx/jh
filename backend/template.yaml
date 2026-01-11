@@ -131,6 +131,47 @@ Resources:
       Policies:
         - S3CrudPolicy:
             BucketName: !Ref RawContentBucket
+        - SQSSendMessagePolicy:
+            QueueName: !GetAtt ExtractorQueue.QueueName
+      Environment:
+        Variables:
+          RAW_CONTENT_BUCKET: !Ref RawContentBucket
+          EXTRACTOR_QUEUE_URL: !Ref ExtractorQueue
+      Events:
+        SQSEvent:
+          Type: SQS
+          Properties:
+            Queue: !GetAtt CrawlerQueue.Arn
+            BatchSize: 1
+
+  # ==========================================================================
+  # Extractor Queue - Standard SQS (not FIFO, no rate limiting needed)
+  # Phase 2K: Receives messages from CrawlerWorker after S3 save
+  # ==========================================================================
+  ExtractorQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: ExtractorQueue
+      VisibilityTimeout: 60
+      MessageRetentionPeriod: 86400
+
+  # ==========================================================================
+  # Extractor Worker Lambda - SQS-triggered, extracts description/requirements
+  # Phase 2K: ReservedConcurrentExecutions=5 to limit DB connections
+  # ==========================================================================
+  ExtractorWorker:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: ExtractorWorker
+      CodeUri: .
+      Handler: workers.extractor_worker.handler
+      Description: SQS-triggered extractor worker
+      Timeout: 30
+      MemorySize: 256
+      ReservedConcurrentExecutions: 5
+      Policies:
+        - S3ReadPolicy:
+            BucketName: !Ref RawContentBucket
       Environment:
         Variables:
           RAW_CONTENT_BUCKET: !Ref RawContentBucket
@@ -138,7 +179,7 @@ Resources:
         SQSEvent:
           Type: SQS
           Properties:
-            Queue: !GetAtt CrawlerQueue.Arn
+            Queue: !GetAtt ExtractorQueue.Arn
             BatchSize: 1
 
   # ==========================================================================
@@ -211,3 +252,15 @@ Outputs:
   RawContentBucketName:
     Description: S3 bucket for raw HTML content
     Value: !Ref RawContentBucket
+
+  ExtractorQueueUrl:
+    Description: Extractor SQS queue URL
+    Value: !Ref ExtractorQueue
+
+  ExtractorQueueArn:
+    Description: Extractor SQS queue ARN
+    Value: !GetAtt ExtractorQueue.Arn
+
+  ExtractorWorkerName:
+    Description: Extractor Lambda function name
+    Value: !Ref ExtractorWorker
