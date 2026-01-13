@@ -1,9 +1,11 @@
 """
-API routes for job listing and details (Phase 3A).
+API routes for job listing, details, and sync (Phase 3A/3B).
 
 Endpoints:
-- GET  /api/jobs           List all jobs grouped by company
-- GET  /api/jobs/{job_id}  Get full job details
+- GET  /api/jobs              List all jobs grouped by company
+- GET  /api/jobs/{job_id}     Get full job details
+- POST /api/jobs/sync         Sync all jobs (extract URLs, UPSERT, mark expired)
+- POST /api/jobs/{job_id}/re-extract  Re-extract single job from S3 HTML
 
 Interactive API docs:
 - Swagger UI: http://localhost:8000/docs
@@ -11,15 +13,18 @@ Interactive API docs:
 """
 
 import logging
+from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 from typing import Optional
-from datetime import datetime
 from sqlalchemy.orm import Session
 
 from auth.dependencies import get_current_user
 from db.session import get_db
-from db.jobs_service import get_jobs_grouped_by_company, get_job_by_id
+from db.jobs_service import get_jobs_grouped_by_company, get_job_by_id, upsert_jobs, mark_expired_jobs
+from db.company_settings_service import get_enabled_settings
+from models.ingestion_run import IngestionRun, RunStatus
+from sourcing.extractor_utils import run_extractors_async
 
 logger = logging.getLogger(__name__)
 
@@ -203,3 +208,286 @@ async def get_job_details(
         )
 
     return JobDetailResponse.model_validate(job)
+
+
+# =============================================================================
+# Phase 3B: Sync All Jobs
+# =============================================================================
+
+class CompanySyncResult(BaseModel):
+    """Sync result for a single company."""
+    company: str
+    found: int        # Total jobs found by extractor on career page (B)
+    existing: int     # Jobs in DB AND still on career page (A ∩ B)
+    new: int          # Jobs on career page but not in DB (B - A)
+    expired: int      # Jobs marked as expired, in DB but not on career page (A - B)
+    error: Optional[str] = None
+
+
+class SyncResponse(BaseModel):
+    """Response for POST /api/jobs/sync."""
+    companies: list[CompanySyncResult]
+    total_found: int
+    total_existing: int
+    total_new: int
+    total_expired: int
+
+
+@router.post("/sync", response_model=SyncResponse)
+async def sync_all_jobs(
+    current_user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Sync all jobs: run extractors, compare with DB, mark expired.
+
+    This is a synchronous operation that:
+    1. Gets user's enabled companies from settings
+    2. Runs extractors to get current job URLs
+    3. Compares with existing jobs in DB
+    4. Marks jobs NOT in results as EXPIRED
+    5. Returns per-company breakdown (found, existing, new, expired)
+
+    NOTE: Does NOT insert new jobs - just identifies them for later extraction.
+
+    Auth: JWT required
+
+    Returns:
+        SyncResponse with per-company breakdown and totals
+
+    Example:
+        POST /api/jobs/sync
+        Authorization: Bearer <jwt_token>
+
+        Response:
+        {
+            "companies": [
+                {"company": "google", "found": 50, "existing": 45, "new": 5, "expired": 2},
+                {"company": "amazon", "found": 30, "existing": 28, "new": 2, "expired": 1}
+            ],
+            "total_found": 80,
+            "total_existing": 73,
+            "total_new": 7,
+            "total_expired": 3
+        }
+    """
+    from models.job import Job, JobStatus
+
+    user_id = current_user["user_id"]
+
+    # Get enabled settings
+    settings = get_enabled_settings(db, user_id)
+    if not settings:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No enabled companies configured. Add companies in Settings."
+        )
+
+    logger.info(f"Starting sync for user {user_id}")
+
+    try:
+        # Run extractors
+        extractor_results = await run_extractors_async(settings)
+
+        # Process each company
+        company_results: list[CompanySyncResult] = []
+        all_found_ids: set[tuple[str, str]] = set()  # (company, external_id)
+
+        for company_name, result in extractor_results.items():
+            if result.status != "success":
+                company_results.append(CompanySyncResult(
+                    company=company_name,
+                    found=0,
+                    existing=0,
+                    new=0,
+                    expired=0,
+                    error=result.error_message,
+                ))
+                continue
+
+            # Get external IDs from extractor
+            found_external_ids = {job["id"] for job in result.included_jobs}
+            found_count = len(found_external_ids)
+
+            # Track all found jobs for expired detection
+            for ext_id in found_external_ids:
+                all_found_ids.add((company_name, ext_id))
+
+            # Get existing READY jobs for this company from DB
+            existing_jobs = db.query(Job).filter(
+                Job.user_id == user_id,
+                Job.company == company_name,
+                Job.status == JobStatus.READY,
+            ).all()
+
+            existing_external_ids = {job.external_id for job in existing_jobs}
+
+            # Calculate counts using set operations
+            # A = existing_external_ids (READY in DB)
+            # B = found_external_ids (on career page)
+            # new = B - A (on career page but not in DB)
+            # expired = A - B (in DB but not on career page)
+            # existing = A ∩ B (in DB AND still on career page)
+            new_count = len(found_external_ids - existing_external_ids)
+            existing_count = len(existing_external_ids & found_external_ids)
+
+            # Mark expired jobs for this company (in DB but not in extractor results)
+            expired_count = 0
+            for job in existing_jobs:
+                if job.external_id not in found_external_ids:
+                    job.status = JobStatus.EXPIRED
+                    job.updated_at = datetime.now(timezone.utc)
+                    expired_count += 1
+
+            company_results.append(CompanySyncResult(
+                company=company_name,
+                found=found_count,
+                existing=existing_count,
+                new=new_count,
+                expired=expired_count,
+            ))
+
+            logger.info(f"Sync {company_name}: found={found_count}, existing={existing_count}, new={new_count}, expired={expired_count}")
+
+        db.commit()
+
+        # Calculate totals
+        total_found = sum(r.found for r in company_results)
+        total_existing = sum(r.existing for r in company_results)
+        total_new = sum(r.new for r in company_results)
+        total_expired = sum(r.expired for r in company_results)
+
+        logger.info(f"Sync complete: found={total_found}, existing={total_existing}, new={total_new}, expired={total_expired}")
+
+        return SyncResponse(
+            companies=company_results,
+            total_found=total_found,
+            total_existing=total_existing,
+            total_new=total_new,
+            total_expired=total_expired,
+        )
+
+    except Exception as e:
+        logger.exception(f"Sync failed for user {user_id}: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Sync failed. Please try again."
+        )
+
+
+# =============================================================================
+# Phase 3B: Re-Extract Single Job
+# =============================================================================
+
+class ReExtractResponse(BaseModel):
+    """Response for POST /api/jobs/{job_id}/re-extract."""
+    success: bool
+    job_id: int
+    description_length: Optional[int] = None
+    requirements_length: Optional[int] = None
+    error: Optional[str] = None
+
+
+@router.post("/{job_id}/re-extract", response_model=ReExtractResponse)
+async def re_extract_job(
+    job_id: int,
+    current_user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Re-run extraction for a single job from existing S3 HTML.
+
+    Downloads the raw HTML from S3 and re-runs the company's extractor
+    to update description and requirements fields. Useful after fixing
+    extractors to populate previously empty fields.
+
+    Auth: JWT required
+
+    Args:
+        job_id: Path parameter - the job ID to re-extract
+
+    Returns:
+        ReExtractResponse with success status and content lengths
+
+    Example:
+        POST /api/jobs/123/re-extract
+        Authorization: Bearer <jwt_token>
+
+        Response (Success):
+        {
+            "success": true,
+            "job_id": 123,
+            "description_length": 1250,
+            "requirements_length": 450
+        }
+
+        Response (Error - No S3 URL):
+        {
+            "success": false,
+            "job_id": 123,
+            "error": "No raw HTML found for this job. Run full ingestion first."
+        }
+    """
+    import boto3
+    from extractors.registry import get_extractor
+
+    user_id = current_user["user_id"]
+
+    # Get job and verify ownership
+    job = get_job_by_id(db, job_id, user_id)
+    if not job:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Job {job_id} not found"
+        )
+
+    # Check if we have raw HTML in S3
+    if not job.raw_s3_url:
+        return ReExtractResponse(
+            success=False,
+            job_id=job_id,
+            error="No raw HTML found for this job. Run full ingestion first."
+        )
+
+    try:
+        # Parse S3 URL: s3://bucket/key
+        s3_url = job.raw_s3_url
+        if s3_url.startswith("s3://"):
+            s3_url = s3_url[5:]  # Remove "s3://"
+        parts = s3_url.split("/", 1)
+        bucket = parts[0]
+        key = parts[1] if len(parts) > 1 else ""
+
+        # Download from S3
+        s3_client = boto3.client("s3")
+        response = s3_client.get_object(Bucket=bucket, Key=key)
+        raw_html = response["Body"].read().decode("utf-8")
+
+        # Get extractor for this company
+        extractor = get_extractor(job.company)
+
+        # Extract info from raw HTML
+        extracted = extractor.extract_raw_info(raw_html)
+
+        # Update job with extracted content
+        job.description = extracted.get("description")
+        job.requirements = extracted.get("requirements")
+        job.updated_at = datetime.now(timezone.utc)
+        db.commit()
+
+        logger.info(f"Re-extracted job {job_id}: desc={len(job.description or '')} chars, req={len(job.requirements or '')} chars")
+
+        return ReExtractResponse(
+            success=True,
+            job_id=job_id,
+            description_length=len(job.description or ""),
+            requirements_length=len(job.requirements or ""),
+        )
+
+    except Exception as e:
+        logger.exception(f"Re-extract failed for job {job_id}: {e}")
+        return ReExtractResponse(
+            success=False,
+            job_id=job_id,
+            error=f"Re-extraction failed: {str(e)[:200]}"
+        )

@@ -108,10 +108,13 @@ class RobloxExtractor(BaseJobExtractor[TitleFilters]):
         """
         Extract structured job details from Roblox careers page HTML.
 
-        Roblox job pages have content between content-intro and description divs,
-        with sections marked by <strong> tags:
+        Roblox job pages have content in rich-text div with sections:
+        - content-intro: Company intro
         - "You Will:" - Responsibilities (description)
-        - "You Have:" or "You Are" - Requirements
+        - "You Have:" - Required qualifications
+        - "You Are:" - Preferred traits
+
+        Sections can be marked with <h2> or <strong> tags.
 
         Args:
             raw_content: Raw HTML string from crawl_raw_info()
@@ -143,37 +146,54 @@ class RobloxExtractor(BaseJobExtractor[TitleFilters]):
             text = re.sub(r'\n\n- ', '\n- ', text)  # No blank lines between list items
             return text.strip()
 
-        # Extract main job content (between content-intro and description div)
-        content_match = re.search(
-            r'<div class="content-intro">(.*?)<div class="description"',
+        # Try new format first: rich-text div with h2 sections
+        rich_text_match = re.search(
+            r'class="rich-text[^"]*"[^>]*>(.*?)</div></div></div></section>',
             raw_content,
             re.DOTALL
         )
 
-        if not content_match:
-            raise ValueError("Could not find job content section")
+        if rich_text_match:
+            job_content = rich_text_match.group(1)
+        else:
+            # Fallback to old format: content-intro to description div
+            content_match = re.search(
+                r'<div class="content-intro">(.*?)<div class="description"',
+                raw_content,
+                re.DOTALL
+            )
+            if not content_match:
+                raise ValueError("Could not find job content section")
+            job_content = content_match.group(1)
 
-        job_content = content_match.group(1)
-
-        # Extract description (You Will section)
+        # Extract description parts
         description_parts = []
 
-        # Look for intro sections before "You Will" or "You Are"
-        # Pattern handles both <p><strong> and <h2><strong> wrappers
+        # Get intro from content-intro div
         intro_match = re.search(
-            r'</div>(.*?)(?:<(?:p|h2)>)?<strong>You (?:Will|Are)',
+            r'<div class="content-intro">(.*?)</div>',
             job_content,
-            re.DOTALL | re.IGNORECASE
+            re.DOTALL
         )
         if intro_match:
             intro_text = strip_html(intro_match.group(1))
-            if intro_text and len(intro_text) > 50:  # Skip if too short
+            if intro_text and len(intro_text) > 50:
                 description_parts.append(intro_text)
 
-        # You Will section (responsibilities)
-        # Handles both <strong>You Will</strong> and <h2><strong>You Will</strong></h2>
+        # Get content between content-intro and first section (You Will/You Are/You Have)
+        between_match = re.search(
+            r'</div>(?:<p>)?(.*?)(?:<h2>You |<(?:p|h2)><strong>You )',
+            job_content,
+            re.DOTALL | re.IGNORECASE
+        )
+        if between_match:
+            between_text = strip_html(between_match.group(1))
+            if between_text and len(between_text) > 50:
+                description_parts.append(between_text)
+
+        # You Will section (responsibilities) - handles <h2>, <strong>, and <p> wrappers
         you_will_match = re.search(
-            r'<strong>You Will:?</strong>(?:</h2>)?(.*?)(?:(?:<(?:p|h2)>)?<strong>You (?:Have|Are)|$)',
+            r'(?:<h2>|<p>|<strong>)You Will:?(?:</h2>|</p>|</strong>)(.*?)(?:<h2>You |<p>You |<(?:p|h2)><strong>You |<div class="content-pay|$)',
             job_content,
             re.DOTALL | re.IGNORECASE
         )
@@ -182,30 +202,30 @@ class RobloxExtractor(BaseJobExtractor[TitleFilters]):
             if you_will:
                 description_parts.append(f"Responsibilities:\n{you_will}")
 
-        # Extract requirements (You Have or You Are section)
+        # Extract requirements
         requirements_parts = []
 
-        # You Have section
+        # You Have section - handles <h2>, <strong>, and <p> wrappers
         you_have_match = re.search(
-            r'<strong>You Have:?</strong>(?:</h2>)?(.*?)(?:(?:<(?:p|h2)>)?<strong>|<div class="description"|$)',
+            r'(?:<h2>|<p>|<strong>)You Have:?\s*(?:</h2>|</p>|</strong>)(.*?)(?:<h2>You |<p>You |<(?:p|h2)><strong>You |<div class="content-pay|$)',
             job_content,
             re.DOTALL | re.IGNORECASE
         )
         if you_have_match:
             you_have = strip_html(you_have_match.group(1))
             if you_have:
-                requirements_parts.append(you_have)
+                requirements_parts.append(f"Required:\n{you_have}")
 
-        # You Are section (alternative format)
+        # You Are section (preferred traits) - handles <h2>, <strong>, and <p> wrappers
         you_are_match = re.search(
-            r'<strong>You Are[^<]*</strong>(?:</h2>)?(.*?)(?:(?:<(?:p|h2)>)?<strong>You Will|$)',
+            r'(?:<h2>|<p>|<strong>)You Are:?(?:</h2>|</p>|</strong>)(.*?)(?:<h2>|<p>You |<(?:p|h2)><strong>|<div class="content-pay|$)',
             job_content,
             re.DOTALL | re.IGNORECASE
         )
         if you_are_match:
             you_are = strip_html(you_are_match.group(1))
             if you_are:
-                requirements_parts.append(you_are)
+                requirements_parts.append(f"Preferred:\n{you_are}")
 
         return {
             'description': '\n\n'.join(description_parts),

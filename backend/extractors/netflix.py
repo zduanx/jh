@@ -247,16 +247,29 @@ class NetflixExtractor(BaseJobExtractor[TitleFilters]):
         requirements_parts = []
 
         # Look for qualifications section markers
+        # Netflix uses various patterns:
+        # - <b><span>Qualifications:</span></b>
+        # - <strong>Qualifications:</strong>
+        # - <h2>Who you are</h2>
+        # - "We're Eager to Talk to You If:" (plain text in <p>)
         qual_patterns = [
+            r'<(?:strong|b)[^>]*>\s*<span>\s*Qualifications?:?\s*</span>\s*</(?:strong|b)>',  # Netflix: <b><span>Qualifications:</span></b>
             r'<(?:strong|b)[^>]*>\s*(?:We are looking for individuals with the following )?qualifications?:?\s*</(?:strong|b)>',
             r'<h2[^>]*>\s*(?:Required )?Qualifications?:?\s*</h2>',
             r'<(?:strong|b)[^>]*>\s*Requirements?:?\s*</(?:strong|b)>',
+            r'<h2[^>]*>\s*<span>\s*Who you are\s*</span>\s*</h2>',  # Netflix variant
+            r'<h2[^>]*>\s*Who you are\s*</h2>',  # Netflix variant without span
+            r"<p>We&#39;re Eager to Talk to You If:?</p>",  # Netflix variant: plain text requirement header
+            r"<p>We're Eager to Talk to You If:?</p>",  # Netflix variant: decoded
         ]
 
         nice_to_have_patterns = [
             r'<(?:strong|b)[^>]*>\s*Nice to have:?\s*</(?:strong|b)>',
             r'<(?:strong|b)[^>]*>\s*Preferred:?\s*</(?:strong|b)>',
             r'<h2[^>]*>\s*Nice to have:?\s*</h2>',
+            r'<h2[^>]*>\s*<span>\s*What sets you apart\s*</span>\s*</h2>',  # Netflix variant
+            r'<h2[^>]*>\s*What sets you apart\s*</h2>',  # Netflix variant without span
+            r'<li>Some nice to haves:',  # Netflix variant: inline in list item
         ]
 
         # Patterns that mark end of requirements (back to description content)
@@ -264,6 +277,8 @@ class NetflixExtractor(BaseJobExtractor[TitleFilters]):
             r'<(?:strong|b)[^>]*>\s*What (?:will you|you will) learn',
             r'<(?:strong|b)[^>]*>\s*The (?:Summer )?Internship',
             r'<(?:strong|b)[^>]*>\s*About (?:the|this)',
+            r'<h2[^>]*>\s*A few more things about us\s*</h2>',  # Netflix compensation section
+            r'<p>Our compensation structure',  # Netflix: compensation section starts
         ]
 
         # Find the start of qualifications section
