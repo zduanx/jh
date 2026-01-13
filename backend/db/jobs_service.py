@@ -241,3 +241,52 @@ def get_job_counts_for_run(db: Session, run_id: int) -> dict:
             counts[status] = count
 
     return counts
+
+
+# =============================================================================
+# Phase 3A: Job Listing Functions
+# =============================================================================
+
+def get_jobs_grouped_by_company(db: Session, user_id: int) -> dict[str, list[Job]]:
+    """
+    Get all READY jobs for a user, grouped by company.
+
+    Args:
+        db: Database session
+        user_id: User ID
+
+    Returns:
+        Dict mapping company name to list of Job objects
+        {company: [Job, Job, ...], ...}
+    """
+    jobs = db.query(Job).filter(
+        Job.user_id == user_id,
+        Job.status == JobStatus.READY,
+    ).order_by(Job.company, Job.title).all()
+
+    # Group by company
+    result: dict[str, list[Job]] = {}
+    for job in jobs:
+        if job.company not in result:
+            result[job.company] = []
+        result[job.company].append(job)
+
+    return result
+
+
+def get_job_by_id(db: Session, job_id: int, user_id: int) -> Job | None:
+    """
+    Get a single job by ID, verifying user ownership.
+
+    Args:
+        db: Database session
+        job_id: Job ID
+        user_id: User ID (for ownership check)
+
+    Returns:
+        Job object if found and owned by user, None otherwise
+    """
+    return db.query(Job).filter(
+        Job.id == job_id,
+        Job.user_id == user_id,
+    ).first()

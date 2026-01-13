@@ -721,19 +721,277 @@ class GoogleExtractor(BaseJobExtractor):
 
 ---
 
-## Phase 3-4 (Future)
+## Phase 3 Architecture: Search Page
 
-### Phase 3: Search & Application Tracking
-- Search API with filters
-- Add jobs to personal tracker
-- Application CRUD operations
+**Status**: Planning 📋
+**Goals**:
+1. Display all jobs with company-grouped layout
+2. Fuzzy search across titles, descriptions, requirements
+3. Sync All: Update job metadata without re-crawling
+4. Re-Extract: Re-run extraction from S3 for individual jobs
 
-### Phase 4: Status Tracking & Analytics
-- Application workflow management
+### Architecture Overview
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                         Search Page (React)                                  │
+│  ┌───────────────────────────────────────────────────────────────────────┐  │
+│  │  🔍 [search query__________________] [Search] [Clear]    [Sync All]   │  │
+│  └───────────────────────────────────────────────────────────────────────┘  │
+│  ┌─────────────────┬─────────────────────────────────────────────────────┐  │
+│  │  COMPANIES      │  JOB DETAILS                                        │  │
+│  │  ┌───────────┐  │  ┌─────────────────────────────────────────────┐    │  │
+│  │  │ Google ▼  │  │  │  Senior K8s Engineer ↗                     │    │  │
+│  │  │ Ready: 45 │  │  │  Mountain View, CA                         │    │  │
+│  │  │ Match: 8  │  │  ├─────────────────────────────────────────────┤    │  │
+│  │  │ ● Job 1   │  │  │  Description: ...                          │    │  │
+│  │  │ ○ Job 2   │  │  │  Requirements: ...                         │    │  │
+│  │  │ ⌄ 5 more  │  │  │                          [Re-Extract]      │    │  │
+│  │  └───────────┘  │  └─────────────────────────────────────────────┘    │  │
+│  └─────────────────┴─────────────────────────────────────────────────────┘  │
+└────────────────┬────────────────────────────────────────────────────────────┘
+                 │ HTTPS API calls
+                 ↓
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                      API Gateway + Lambda                                    │
+│                                                                              │
+│  GET  /api/jobs                → List all jobs grouped by company           │
+│  GET  /api/jobs/{id}           → Get full job details                       │
+│  GET  /api/jobs/search?q=...   → Fuzzy search jobs                          │
+│  POST /api/jobs/sync           → Sync All: update metadata, mark expired    │
+│  POST /api/jobs/{id}/re-extract → Re-extract single job from S3             │
+└────────────────┬────────────────────────────────────────────────────────────┘
+                 │
+                 ↓
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                          PostgreSQL (Neon)                                   │
+│  jobs table:                                                                 │
+│  - Trigram index on title (pg_trgm) for fuzzy search                        │
+│  - Phase 3C: tsvector for full-text search                                  │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### UI Layout (1:3 Column Design)
+
+**Left Column (1/4)**: Company cards with expandable job lists
+- Company logo, name, ready count
+- After search: matched count
+- Expand/collapse to show jobs
+- Radio buttons for job selection
+- "⌄ N more" / "⌃ show less" for long lists
+
+**Right Column (3/4)**: Selected job details
+- Clickable title → opens job URL in new tab
+- Location
+- Description (full text)
+- Requirements (full text)
+- [Re-Extract] button
+
+### API Endpoints (Phase 3)
+
+#### GET /api/jobs (Phase 3A)
+List all jobs grouped by company.
+
+```json
+Response:
+{
+  "companies": [
+    {
+      "name": "google",
+      "display_name": "Google",
+      "logo_url": "https://...",
+      "ready_count": 45,
+      "jobs": [
+        {
+          "id": 123,
+          "title": "Kubernetes Platform Engineer",
+          "location": "Seattle, WA"
+        }
+      ]
+    }
+  ],
+  "total_ready": 126
+}
+```
+
+#### GET /api/jobs/{job_id} (Phase 3A)
+Get full job details.
+
+```json
+Response:
+{
+  "id": 123,
+  "company": "google",
+  "external_id": "abc123",
+  "title": "Kubernetes Platform Engineer",
+  "location": "Seattle, WA",
+  "url": "https://careers.google.com/...",
+  "status": "ready",
+  "description": "Build and maintain our Kubernetes platform...",
+  "requirements": "• 3+ years Kubernetes experience\n• Go or Python...",
+  "raw_s3_url": "s3://bucket/raw/google/abc123.html",
+  "updated_at": "2026-01-12T10:30:00Z"
+}
+```
+
+#### POST /api/jobs/sync (Phase 3B)
+Sync All: Update metadata, mark expired. Does NOT crawl or extract.
+
+```json
+Request: {}
+
+Response:
+{
+  "updated": 130,
+  "expired": 5,
+  "duration_ms": 8500
+}
+```
+
+**Process:**
+1. Get enabled companies from settings
+2. Run extractors to get current job URLs (like dry-run)
+3. UPSERT jobs with metadata only (title, location, url, updated_at)
+4. Mark jobs not in results as EXPIRED
+5. Does NOT change status to PENDING (preserves READY/SKIPPED)
+6. Does NOT clear description/requirements
+
+#### POST /api/jobs/{job_id}/re-extract (Phase 3B)
+Re-extract single job from S3 HTML.
+
+```json
+Request: {}
+
+Response (Success):
+{
+  "success": true,
+  "job_id": 123,
+  "description_length": 1250,
+  "requirements_length": 450
+}
+
+Response (Error):
+{
+  "success": false,
+  "error": "No raw HTML found for this job. Run full ingestion first."
+}
+```
+
+**Process:**
+1. Get job by ID, verify user ownership
+2. Check raw_s3_url exists
+3. Download raw HTML from S3
+4. Run company's extract_raw_info() method
+5. Update job: description, requirements
+6. Return success with content lengths
+
+#### GET /api/jobs/search?q={query} (Phase 3C)
+Fuzzy search using pg_trgm.
+
+```json
+Request: GET /api/jobs/search?q=kubernetes
+
+Response:
+{
+  "companies": [
+    {
+      "name": "google",
+      "display_name": "Google",
+      "ready_count": 45,
+      "matched_count": 8,
+      "jobs": [
+        {
+          "id": 123,
+          "title": "Kubernetes Platform Engineer",
+          "location": "Seattle, WA",
+          "similarity": 0.85
+        }
+      ]
+    }
+  ],
+  "total_ready": 126,
+  "total_matched": 16,
+  "query": "kubernetes"
+}
+```
+
+### Search Implementation (Phase 3C)
+
+**Fuzzy Search (pg_trgm)**
+```sql
+-- Enable extension
+CREATE EXTENSION IF NOT EXISTS pg_trgm;
+
+-- Trigram index for fuzzy matching
+CREATE INDEX idx_jobs_title_trgm ON jobs USING GIN(title gin_trgm_ops);
+
+-- Search query
+SELECT *, similarity(title, 'kubernetes') AS sim
+FROM jobs
+WHERE user_id = ?
+  AND status = 'ready'
+  AND similarity(title, 'kubernetes') > 0.3
+ORDER BY sim DESC;
+```
+
+**Full-Text Search (tsvector) - Optional Enhancement**
+```sql
+-- Add tsvector column
+ALTER TABLE jobs ADD COLUMN search_vector TSVECTOR;
+
+-- GIN index for full-text
+CREATE INDEX idx_jobs_search_vector ON jobs USING GIN(search_vector);
+
+-- Trigger for auto-update
+CREATE TRIGGER jobs_search_vector_trigger
+  BEFORE INSERT OR UPDATE ON jobs
+  FOR EACH ROW EXECUTE FUNCTION jobs_search_vector_update();
+
+-- Hybrid search: full-text OR fuzzy
+SELECT *
+FROM jobs
+WHERE user_id = ?
+  AND (search_vector @@ plainto_tsquery('english', 'kubernetes')
+       OR similarity(title, 'kubernetes') > 0.3)
+ORDER BY ts_rank(search_vector, query) + similarity(title, 'kubernetes') DESC;
+```
+
+### Phase 3 Implementation Status
+
+**Phase 3A: Basic Job Display (UI Only)**
+- 📋 GET /api/jobs endpoint
+- 📋 GET /api/jobs/{id} endpoint
+- 📋 Frontend: 1:3 column layout
+- 📋 Frontend: Company cards with expand/collapse
+- 📋 Frontend: Job details panel
+- 📋 Search bar placeholder (disabled)
+
+**Phase 3B: Sync All & Re-Extract**
+- 📋 POST /api/jobs/sync endpoint
+- 📋 POST /api/jobs/{id}/re-extract endpoint
+- 📋 Frontend: Sync All button with loading state
+- 📋 Frontend: Re-Extract button per job
+- 📋 Success/error banners and toasts
+
+**Phase 3C: Fuzzy Search**
+- 📋 GET /api/jobs/search endpoint
+- 📋 Database: pg_trgm index
+- 📋 Frontend: Enable search bar
+- 📋 Optional: tsvector for full-text search
+- 📋 Optional: Search result snippets with highlights
+
+---
+
+## Phase 4 (Future)
+
+### Phase 4: Job Tracking & Cart
+- Add jobs to tracked list
+- Track page with saved jobs
+- Application status tracking
 - Timeline visualization
 - Analytics dashboard
 
 ---
 
-**Current Phase**: Phase 2J Planning 📋
-**Next**: Implement CrawlerQueue.fifo + CrawlerWorker Lambda
+**Current Phase**: Phase 2 Complete ✅
+**Next**: Phase 3A - Basic Job Display
