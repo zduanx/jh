@@ -1,6 +1,7 @@
 /* Search Page - Phase 3A */
 
 .search-container {
+  position: relative;
   padding: 32px;
   max-width: 1400px;
   margin: 0 auto;
@@ -360,6 +361,17 @@
   font-size: 14px;
 }
 
+.job-details-title-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 16px;
+}
+
+.job-details-title-row .re-extract-btn {
+  flex-shrink: 0;
+}
+
 .job-details-subtitle {
   margin: 0;
   font-size: 12px;
@@ -412,28 +424,67 @@
   padding: 16px 24px;
   border-top: 1px solid #e2e8f0;
   display: flex;
+  align-items: center;
   justify-content: flex-end;
+  gap: 16px;
 }
 
 .re-extract-btn {
   padding: 10px 20px;
-  background: #e2e8f0;
-  color: #94a3b8;
+  background: #f59e0b;
+  color: white;
   border: none;
   border-radius: 8px;
   font-size: 14px;
   font-weight: 500;
+  cursor: pointer;
+  transition: background 0.2s ease;
+}
+
+.re-extract-btn:hover:not(:disabled) {
+  background: #d97706;
+}
+
+.re-extract-btn:disabled {
+  background: #fcd34d;
   cursor: not-allowed;
 }
 
-.re-extract-btn:not(:disabled) {
-  background: #f59e0b;
-  color: white;
-  cursor: pointer;
+/* Re-Extract Toast */
+.re-extract-toast {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 500;
+  animation: slideIn 0.2s ease;
 }
 
-.re-extract-btn:not(:disabled):hover {
-  background: #d97706;
+.re-extract-toast.success {
+  background: #f0fdf4;
+  color: #166534;
+}
+
+.re-extract-toast.error {
+  background: #fef2f2;
+  color: #991b1b;
+}
+
+.re-extract-toast-icon {
+  font-weight: bold;
+}
+
+@keyframes slideIn {
+  from {
+    opacity: 0;
+    transform: translateX(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
 }
 
 /* Footer - Total Count */
@@ -542,6 +593,219 @@
   color: #64748b;
   font-size: 15px;
 }
+
+/* =============================================================================
+   Sync Overlay & Popup (Phase 3B)
+   ============================================================================= */
+
+/* Sync Overlay - blocks page content during sync */
+.sync-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(255, 255, 255, 0.9);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+  border-radius: 12px;
+}
+
+.sync-overlay-content {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+  padding: 48px;
+  background: white;
+  border-radius: 16px;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.15);
+}
+
+.sync-overlay-content p {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 600;
+  color: #1e293b;
+}
+
+.sync-overlay-subtext {
+  font-size: 14px !important;
+  font-weight: 400 !important;
+  color: #64748b !important;
+}
+
+/* Sync Result Popup */
+.sync-popup-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+
+.sync-popup {
+  background: white;
+  border-radius: 16px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
+  min-width: 500px;
+  max-width: 600px;
+  overflow: hidden;
+}
+
+.sync-popup-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 20px 24px;
+  background: #f0fdf4;
+  border-bottom: 1px solid #e2e8f0;
+}
+
+.sync-popup-header.error {
+  background: #fef2f2;
+}
+
+.sync-popup-icon {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: #10b981;
+  color: white;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 18px;
+  font-weight: bold;
+}
+
+.sync-popup-header.error .sync-popup-icon {
+  background: #ef4444;
+}
+
+.sync-popup-header h3 {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 600;
+  color: #1e293b;
+}
+
+.sync-popup-body {
+  padding: 24px;
+}
+
+.sync-error-message {
+  margin: 0;
+  color: #ef4444;
+  font-size: 15px;
+}
+
+/* Sync Results Table */
+.sync-results-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+}
+
+.sync-results-table th {
+  text-align: left;
+  padding: 10px 12px;
+  font-weight: 600;
+  color: #64748b;
+  border-bottom: 2px solid #e2e8f0;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.sync-results-table td {
+  padding: 12px;
+  border-bottom: 1px solid #f1f5f9;
+  color: #334155;
+}
+
+.sync-results-table .company-name {
+  font-weight: 500;
+  text-transform: capitalize;
+}
+
+.sync-results-table tbody tr:hover {
+  background: #f8fafc;
+}
+
+.sync-results-table tbody tr.error-row {
+  background: #fef2f2;
+  color: #94a3b8;
+}
+
+.sync-results-table tfoot td {
+  border-top: 2px solid #e2e8f0;
+  border-bottom: none;
+  background: #f8fafc;
+}
+
+.sync-results-table .highlight-new {
+  color: #3b82f6;
+  font-weight: 600;
+}
+
+.sync-results-table .highlight-expired {
+  color: #f59e0b;
+  font-weight: 600;
+}
+
+/* Sync Errors */
+.sync-errors {
+  margin-top: 16px;
+  padding: 12px 16px;
+  background: #fef2f2;
+  border-radius: 8px;
+}
+
+.sync-company-error {
+  margin: 0 0 8px 0;
+  font-size: 13px;
+  color: #991b1b;
+}
+
+.sync-company-error:last-child {
+  margin-bottom: 0;
+}
+
+/* Sync Popup Footer */
+.sync-popup-footer {
+  padding: 16px 24px;
+  border-top: 1px solid #e2e8f0;
+  display: flex;
+  justify-content: flex-end;
+}
+
+.sync-popup-close {
+  padding: 10px 24px;
+  background: #3b82f6;
+  color: white;
+  border: none;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.2s ease;
+}
+
+.sync-popup-close:hover {
+  background: #2563eb;
+}
+
+/* =============================================================================
+   Responsive
+   ============================================================================= */
 
 /* Responsive */
 @media (max-width: 1024px) {

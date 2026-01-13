@@ -1,6 +1,47 @@
-import React from 'react';
+import React, { useState } from 'react';
 
-function JobDetails({ job, loading }) {
+function JobDetails({ job, loading, onReExtract }) {
+  const [reExtracting, setReExtracting] = useState(false);
+  const [reExtractResult, setReExtractResult] = useState(null);
+
+  const apiUrl = process.env.REACT_APP_API_URL;
+
+  const handleReExtract = async () => {
+    if (!job) return;
+
+    setReExtracting(true);
+    setReExtractResult(null);
+
+    try {
+      const token = localStorage.getItem('access_token');
+      const res = await fetch(`${apiUrl}/api/jobs/${job.id}/re-extract`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+      });
+
+      const data = await res.json();
+
+      if (data.success) {
+        setReExtractResult({ success: true, message: 'Re-extraction complete' });
+        // Notify parent to refresh job details
+        if (onReExtract) {
+          onReExtract(job.id);
+        }
+      } else {
+        setReExtractResult({ success: false, message: data.error || 'Re-extraction failed' });
+      }
+    } catch (err) {
+      setReExtractResult({ success: false, message: err.message || 'Re-extraction failed' });
+    } finally {
+      setReExtracting(false);
+      // Auto-dismiss result after 5 seconds
+      setTimeout(() => setReExtractResult(null), 5000);
+    }
+  };
+
   if (loading) {
     return (
       <div className="job-details-column">
@@ -27,15 +68,30 @@ function JobDetails({ job, loading }) {
     <div className="job-details-column">
       <div className="job-details-content">
         <div className="job-details-header">
-          <h2 className="job-details-title">
-            <a href={job.url} target="_blank" rel="noopener noreferrer">
-              {job.title || 'Untitled Position'}
-            </a>
-            <span className="external-icon">↗</span>
-          </h2>
+          <div className="job-details-title-row">
+            <h2 className="job-details-title">
+              <a href={job.url} target="_blank" rel="noopener noreferrer">
+                {job.title || 'Untitled Position'}
+              </a>
+              <span className="external-icon">↗</span>
+            </h2>
+            <button
+              className="re-extract-btn"
+              onClick={handleReExtract}
+              disabled={reExtracting}
+            >
+              {reExtracting ? 'Re-Extracting...' : 'Re-Extract'}
+            </button>
+          </div>
           <p className="job-details-subtitle">
             ID: {job.id} | {job.company}:{job.external_id}
           </p>
+          {reExtractResult && (
+            <div className={`re-extract-toast ${reExtractResult.success ? 'success' : 'error'}`}>
+              <span className="re-extract-toast-icon">{reExtractResult.success ? '✓' : '✗'}</span>
+              <span>{reExtractResult.message}</span>
+            </div>
+          )}
         </div>
 
         <div className="job-details-body">
@@ -61,11 +117,6 @@ function JobDetails({ job, loading }) {
           </div>
         </div>
 
-        <div className="job-details-footer">
-          <button className="re-extract-btn" disabled title="Coming in Phase 3B">
-            Re-Extract
-          </button>
-        </div>
       </div>
     </div>
   );
