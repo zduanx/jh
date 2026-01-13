@@ -13,4 +13,4 @@ class TestNetflixExtractor(BaseExtractorSnapshotTest):
 
     extractor_class = NetflixExtractor
     company = "netflix"
-    test_cases = ["790312551421", "790302341342"]
+    test_cases = ["790312551421", "790302341342", "790311790854", "790313551689", "790311932723"]

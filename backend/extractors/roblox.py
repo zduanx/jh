@@ -191,9 +191,9 @@ class RobloxExtractor(BaseJobExtractor[TitleFilters]):
             if between_text and len(between_text) > 50:
                 description_parts.append(between_text)
 
-        # You Will section (responsibilities) - handles <h2>, <strong>, and <p> wrappers
+        # You Will section (responsibilities) - handles <h2>, <h3>, <strong>, and <p> wrappers
         you_will_match = re.search(
-            r'(?:<h2>|<p>|<strong>)You Will:?(?:</h2>|</p>|</strong>)(.*?)(?:<h2>You |<p>You |<(?:p|h2)><strong>You |<div class="content-pay|$)',
+            r'(?:<h[23]>|<p>|<strong>)You Will:?(?:</h[23]>|</p>|</strong>)(.*?)(?:<h[23]>You |<p>You |<(?:p|h[23])><strong>You |<div class="content-pay|$)',
             job_content,
             re.DOTALL | re.IGNORECASE
         )
@@ -205,9 +205,9 @@ class RobloxExtractor(BaseJobExtractor[TitleFilters]):
         # Extract requirements
         requirements_parts = []
 
-        # You Have section - handles <h2>, <strong>, and <p> wrappers
+        # You Have section - handles <h2>, <h3>, <strong>, and <p> wrappers
         you_have_match = re.search(
-            r'(?:<h2>|<p>|<strong>)You Have:?\s*(?:</h2>|</p>|</strong>)(.*?)(?:<h2>You |<p>You |<(?:p|h2)><strong>You |<div class="content-pay|$)',
+            r'(?:<h[23]>|<p>|<strong>)You Have:?\s*(?:</h[23]>|</p>|</strong>)(.*?)(?:<h[23]>You |<p>You |<(?:p|h[23])><strong>You |<div class="content-pay|$)',
             job_content,
             re.DOTALL | re.IGNORECASE
         )
@@ -216,9 +216,9 @@ class RobloxExtractor(BaseJobExtractor[TitleFilters]):
             if you_have:
                 requirements_parts.append(f"Required:\n{you_have}")
 
-        # You Are section (preferred traits) - handles <h2>, <strong>, and <p> wrappers
+        # You Are section (preferred traits) - handles <h2>, <h3>, <strong>, and <p> wrappers
         you_are_match = re.search(
-            r'(?:<h2>|<p>|<strong>)You Are:?(?:</h2>|</p>|</strong>)(.*?)(?:<h2>|<p>You |<(?:p|h2)><strong>|<div class="content-pay|$)',
+            r'(?:<h[23]>|<p>|<strong>)You Are:?(?:</h[23]>|</p>|</strong>)(.*?)(?:<h[23]>|<p>You |<(?:p|h[23])><strong>|<div class="content-pay|$)',
             job_content,
             re.DOTALL | re.IGNORECASE
         )

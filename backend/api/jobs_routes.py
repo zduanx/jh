@@ -2,10 +2,10 @@
 API routes for job listing, details, and sync (Phase 3A/3B).
 
 Endpoints:
-- GET  /api/jobs              List all jobs grouped by company
-- GET  /api/jobs/{job_id}     Get full job details
-- POST /api/jobs/sync         Sync all jobs (extract URLs, UPSERT, mark expired)
-- POST /api/jobs/{job_id}/re-extract  Re-extract single job from S3 HTML
+- GET  /api/jobs                            List all jobs grouped by company
+- GET  /api/jobs/{job_id}                   Get full job details
+- POST /api/jobs/sync                       Sync all jobs (extract URLs, UPSERT, mark expired)
+- POST /api/jobs/re-extract              Re-extract job(s) from S3 HTML (body: job_id or company)
 
 Interactive API docs:
 - Swagger UI: http://localhost:8000/docs
@@ -376,118 +376,211 @@ async def sync_all_jobs(
 
 
 # =============================================================================
-# Phase 3B: Re-Extract Single Job
+# Phase 3B: Re-Extract Jobs
 # =============================================================================
 
-class ReExtractResponse(BaseModel):
-    """Response for POST /api/jobs/{job_id}/re-extract."""
-    success: bool
+class ReExtractRequest(BaseModel):
+    """Request body for POST /api/jobs/re-extract."""
+    job_id: Optional[int] = None
+    company: Optional[str] = None
+
+
+class ReExtractJobResult(BaseModel):
+    """Result for a single job extraction."""
     job_id: int
+    title: Optional[str] = None
+    success: bool
     description_length: Optional[int] = None
     requirements_length: Optional[int] = None
     error: Optional[str] = None
 
 
-@router.post("/{job_id}/re-extract", response_model=ReExtractResponse)
-async def re_extract_job(
-    job_id: int,
+class ReExtractResponse(BaseModel):
+    """Response for POST /api/jobs/re-extract."""
+    company: Optional[str] = None
+    total_jobs: int
+    successful: int
+    failed: int
+    results: list[ReExtractJobResult]
+
+
+@router.post("/re-extract", response_model=ReExtractResponse)
+async def re_extract_jobs(
+    request: ReExtractRequest,
     current_user: dict = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     """
-    Re-run extraction for a single job from existing S3 HTML.
+    Re-run extraction for job(s) from existing S3 HTML.
 
-    Downloads the raw HTML from S3 and re-runs the company's extractor
+    Downloads raw HTML from S3 and re-runs the company's extractor
     to update description and requirements fields. Useful after fixing
     extractors to populate previously empty fields.
 
     Auth: JWT required
 
-    Args:
-        job_id: Path parameter - the job ID to re-extract
+    Request body (one of):
+        - job_id: Re-extract a single job
+        - company: Re-extract all READY jobs for a company
 
     Returns:
-        ReExtractResponse with success status and content lengths
+        ReExtractResponse with batch results
 
-    Example:
-        POST /api/jobs/123/re-extract
-        Authorization: Bearer <jwt_token>
+    Examples:
+        # Single job
+        POST /api/jobs/re-extract
+        {"job_id": 123}
 
-        Response (Success):
+        # All jobs for a company
+        POST /api/jobs/re-extract
+        {"company": "netflix"}
+
+        Response:
         {
-            "success": true,
-            "job_id": 123,
-            "description_length": 1250,
-            "requirements_length": 450
-        }
-
-        Response (Error - No S3 URL):
-        {
-            "success": false,
-            "job_id": 123,
-            "error": "No raw HTML found for this job. Run full ingestion first."
+            "company": "netflix",
+            "total_jobs": 25,
+            "successful": 25,
+            "failed": 0,
+            "results": [
+                {"job_id": 1, "title": "SWE", "success": true, "description_length": 3815, "requirements_length": 918}
+            ]
         }
     """
     import boto3
+    from models.job import Job, JobStatus
     from extractors.registry import get_extractor
 
     user_id = current_user["user_id"]
 
-    # Get job and verify ownership
-    job = get_job_by_id(db, job_id, user_id)
-    if not job:
+    # Validate request - must have exactly one of job_id or company
+    if request.job_id is None and request.company is None:
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Job {job_id} not found"
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Must specify either job_id or company"
+        )
+    if request.job_id is not None and request.company is not None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Specify only one of job_id or company, not both"
         )
 
-    # Check if we have raw HTML in S3
-    if not job.raw_s3_url:
+    # Single job mode
+    if request.job_id is not None:
+        job = get_job_by_id(db, request.job_id, user_id)
+        if not job:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Job {request.job_id} not found"
+            )
+        jobs = [job]
+        company_name = job.company
+    else:
+        # Company mode
+        company_name = request.company.lower()
+        jobs = db.query(Job).filter(
+            Job.user_id == user_id,
+            Job.company == company_name,
+            Job.status == JobStatus.READY,
+        ).all()
+
+    if not jobs:
         return ReExtractResponse(
-            success=False,
-            job_id=job_id,
-            error="No raw HTML found for this job. Run full ingestion first."
+            company=company_name,
+            total_jobs=0,
+            successful=0,
+            failed=0,
+            results=[],
         )
 
+    # Get extractor for this company (once, outside the loop)
     try:
-        # Parse S3 URL: s3://bucket/key
-        s3_url = job.raw_s3_url
-        if s3_url.startswith("s3://"):
-            s3_url = s3_url[5:]  # Remove "s3://"
-        parts = s3_url.split("/", 1)
-        bucket = parts[0]
-        key = parts[1] if len(parts) > 1 else ""
-
-        # Download from S3
-        s3_client = boto3.client("s3")
-        response = s3_client.get_object(Bucket=bucket, Key=key)
-        raw_html = response["Body"].read().decode("utf-8")
-
-        # Get extractor for this company
-        extractor = get_extractor(job.company)
-
-        # Extract info from raw HTML
-        extracted = extractor.extract_raw_info(raw_html)
-
-        # Update job with extracted content
-        job.description = extracted.get("description")
-        job.requirements = extracted.get("requirements")
-        job.updated_at = datetime.now(timezone.utc)
-        db.commit()
-
-        logger.info(f"Re-extracted job {job_id}: desc={len(job.description or '')} chars, req={len(job.requirements or '')} chars")
-
-        return ReExtractResponse(
-            success=True,
-            job_id=job_id,
-            description_length=len(job.description or ""),
-            requirements_length=len(job.requirements or ""),
-        )
-
+        extractor = get_extractor(company_name)
     except Exception as e:
-        logger.exception(f"Re-extract failed for job {job_id}: {e}")
+        logger.error(f"Failed to get extractor for {company_name}: {e}")
         return ReExtractResponse(
-            success=False,
-            job_id=job_id,
-            error=f"Re-extraction failed: {str(e)[:200]}"
+            company=company_name,
+            total_jobs=len(jobs),
+            successful=0,
+            failed=len(jobs),
+            results=[
+                ReExtractJobResult(
+                    job_id=job.id,
+                    title=job.title,
+                    success=False,
+                    error=f"No extractor found for {company_name}"
+                )
+                for job in jobs
+            ],
         )
+
+    # Initialize S3 client once
+    s3_client = boto3.client("s3")
+
+    results: list[ReExtractJobResult] = []
+    successful = 0
+    failed = 0
+
+    for job in jobs:
+        # Check if we have raw HTML in S3
+        if not job.raw_s3_url:
+            results.append(ReExtractJobResult(
+                job_id=job.id,
+                title=job.title,
+                success=False,
+                error="No raw HTML found for this job"
+            ))
+            failed += 1
+            continue
+
+        try:
+            # Parse S3 URL: s3://bucket/key
+            s3_url = job.raw_s3_url
+            if s3_url.startswith("s3://"):
+                s3_url = s3_url[5:]  # Remove "s3://"
+            parts = s3_url.split("/", 1)
+            bucket = parts[0]
+            key = parts[1] if len(parts) > 1 else ""
+
+            # Download from S3
+            response = s3_client.get_object(Bucket=bucket, Key=key)
+            raw_html = response["Body"].read().decode("utf-8")
+
+            # Extract info from raw HTML
+            extracted = extractor.extract_raw_info(raw_html)
+
+            # Update job with extracted content
+            job.description = extracted.get("description")
+            job.requirements = extracted.get("requirements")
+            job.updated_at = datetime.now(timezone.utc)
+
+            results.append(ReExtractJobResult(
+                job_id=job.id,
+                title=job.title,
+                success=True,
+                description_length=len(job.description or ""),
+                requirements_length=len(job.requirements or ""),
+            ))
+            successful += 1
+
+        except Exception as e:
+            logger.exception(f"Re-extract failed for job {job.id}: {e}")
+            results.append(ReExtractJobResult(
+                job_id=job.id,
+                title=job.title,
+                success=False,
+                error=f"Re-extraction failed: {str(e)[:100]}"
+            ))
+            failed += 1
+
+    # Commit all updates at once
+    db.commit()
+
+    logger.info(f"Re-extracted {company_name}: {successful}/{len(jobs)} successful")
+
+    return ReExtractResponse(
+        company=company_name,
+        total_jobs=len(jobs),
+        successful=successful,
+        failed=failed,
+        results=results,
+    )

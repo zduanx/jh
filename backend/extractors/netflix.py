@@ -249,27 +249,56 @@ class NetflixExtractor(BaseJobExtractor[TitleFilters]):
         # Look for qualifications section markers
         # Netflix uses various patterns:
         # - <b><span>Qualifications:</span></b>
+        # - <b><span>Basic Qualifications:</span></b>
         # - <strong>Qualifications:</strong>
         # - <h2>Who you are</h2>
         # - "We're Eager to Talk to You If:" (plain text in <p>)
         qual_patterns = [
-            r'<(?:strong|b)[^>]*>\s*<span>\s*Qualifications?:?\s*</span>\s*</(?:strong|b)>',  # Netflix: <b><span>Qualifications:</span></b>
-            r'<(?:strong|b)[^>]*>\s*(?:We are looking for individuals with the following )?qualifications?:?\s*</(?:strong|b)>',
-            r'<h2[^>]*>\s*(?:Required )?Qualifications?:?\s*</h2>',
+            r'<(?:strong|b)[^>]*>\s*<span>\s*(?:Basic )?Qualifications?:?\s*</span>\s*</(?:strong|b)>',  # Netflix: <b><span>Qualifications:</span></b>
+            r'<(?:strong|b)[^>]*>\s*(?:We are looking for individuals with the following )?(?:Basic )?qualifications?:?\s*</(?:strong|b)>',
+            r'<h2[^>]*>\s*(?:Required |Basic )?Qualifications?:?\s*</h2>',
             r'<(?:strong|b)[^>]*>\s*Requirements?:?\s*</(?:strong|b)>',
             r'<h2[^>]*>\s*<span>\s*Who you are\s*</span>\s*</h2>',  # Netflix variant
             r'<h2[^>]*>\s*Who you are\s*</h2>',  # Netflix variant without span
             r"<p>We&#39;re Eager to Talk to You If:?</p>",  # Netflix variant: plain text requirement header
             r"<p>We're Eager to Talk to You If:?</p>",  # Netflix variant: decoded
+            r'<(?:strong|b)[^>]*>Must-Have Skills\s*<span>:?</span>\s*</(?:strong|b)>',  # Netflix: <b>Must-Have Skills<span>:</span></b>
+            r'<(?:strong|b)[^>]*>Must-Have Skills:?\s*</(?:strong|b)>',  # Netflix: <b>Must-Have Skills:</b>
+            r'<h2[^>]*>\s*What we are looking for\s*</h2>',  # Netflix variant
+            r'<(?:strong|b)[^>]*>\s*What we are looking for:?\s*</(?:strong|b)>',  # Netflix: <b>What we are looking for:</b>
+            r'<(?:strong|b)[^>]*>\s*You will enjoy working with us if you:?\s*</(?:strong|b)>',  # Netflix variant
+            r"<(?:strong|b)[^>]*>\s*Skills\s*&amp;\s*experience\s+we['\u2019]re\s+seeking:?\s*</(?:strong|b)>",  # Netflix: <b>Skills & experience we're seeking:</b>
+            r'<p>(?:<br\s*/?>)?What we are looking for in you:?</p>',  # Netflix: <p>What we are looking for in you:</p>
+            r"<h[23]>\s*Skills\s*&amp;\s*experience\s+we['\u2019]re\s+seeking:?\s*</h[23]>",  # Netflix: <h2/h3>Skills & experience we're seeking:</h2/h3>
+            r'<p>What you need to have</p>',  # Netflix: <p>What you need to have</p>
+            r'<p>(?:<br\s*/?>)?Who you are:?</p>',  # Netflix: <p>Who you are:</p> or <p><br />Who you are:</p>
+            r'<p><b>(?:<span>)?What sets you apart(?:</span>)?</b></p>',  # Netflix: <p><b><span>What sets you apart</span></b></p>
+            r'<h2>(?:<span>)?About You(?:</span>)?</h2>',  # Netflix: <h2><span>About You</span></h2>
+            r'<h2>(?:<span>)?Must Have(?:</span>)?</h2>',  # Netflix: <h2><span>Must Have</span></h2>
+            r'<p>(?:<br\s*/?>)?What you need to be successful:?</p>',  # Netflix: <p>What you need to be successful:</p>
+            r'<span>We are confident you can do this job if you\.{3}</span>',  # Netflix: We are confident you can do this job if you...
+            r'<p><b>(?:<span>)?You will thrive in the role if:?(?:</span>)?</b></p>',  # Netflix: <p><b><span>You will thrive in the role if:</span></b></p>
+            r'<p><b>(?:<span>)?Desired Background:?(?:</span>)?</b></p>',  # Netflix: <p><b><span>Desired Background:</span></b></p>
+            r'<h2><b>(?:<span>)?Requirements:?(?:</span>)?</b></h2>',  # Netflix: <h2><b><span>Requirements:</span></b></h2>
         ]
 
         nice_to_have_patterns = [
+            r'<(?:strong|b)[^>]*>\s*<span>\s*Nice To Have:?\s*</span>\s*</(?:strong|b)>',  # Netflix: <b><span>Nice To Have:</span></b>
             r'<(?:strong|b)[^>]*>\s*Nice to have:?\s*</(?:strong|b)>',
             r'<(?:strong|b)[^>]*>\s*Preferred:?\s*</(?:strong|b)>',
             r'<h2[^>]*>\s*Nice to have:?\s*</h2>',
             r'<h2[^>]*>\s*<span>\s*What sets you apart\s*</span>\s*</h2>',  # Netflix variant
             r'<h2[^>]*>\s*What sets you apart\s*</h2>',  # Netflix variant without span
             r'<li>Some nice to haves:',  # Netflix variant: inline in list item
+            r'<(?:strong|b)[^>]*>Nice-to-Have Skills\s*<span>:?</span>\s*</(?:strong|b)>',  # Netflix: <b>Nice-to-Have Skills<span>:</span></b>
+            r'<(?:strong|b)[^>]*>Nice-to-Have Skills:?\s*</(?:strong|b)>',  # Netflix: <b>Nice-to-Have Skills:</b>
+            r'<li><p>Nice to have:',  # Netflix variant: inline in list item with <p>
+            r'<h[23]>\s*Nice to haves?:?\s*</h[23]>',  # Netflix: <h2/h3>Nice to haves:</h2/h3>
+            r'<p>Some nice to haves?</p>',  # Netflix: <p>Some nice to haves</p>
+            r'<p>Nice to have experience:?</p>',  # Netflix: <p>Nice to have experience:</p>
+            r'<p><span>Additive skill set</span></p>',  # Netflix: <p><span>Additive skill set</span></p>
+            r'<p><b>(?:<span>)?Nice To Have(?:</span>)?</b></p>',  # Netflix: <p><b><span>Nice To Have</span></b></p>
+            r'<div><strong>What Sets You Apart</strong></div>',  # Netflix: <div><strong>What Sets You Apart</strong></div>
         ]
 
         # Patterns that mark end of requirements (back to description content)
@@ -278,7 +307,16 @@ class NetflixExtractor(BaseJobExtractor[TitleFilters]):
             r'<(?:strong|b)[^>]*>\s*The (?:Summer )?Internship',
             r'<(?:strong|b)[^>]*>\s*About (?:the|this)',
             r'<h2[^>]*>\s*A few more things about us\s*</h2>',  # Netflix compensation section
-            r'<p>Our compensation structure',  # Netflix: compensation section starts
+            r'<p>(?:<span>)?Our compensation structure',  # Netflix: compensation section starts
+            r'<p><span>Our culture is unique',  # Netflix: culture section starts
+            r'<p>\s*(?:<br\s*/?>\s*)?At Netflix, we carefully consider',  # Netflix: compensation section
+            r'<p>(?:<span>)?Read about the Netflix',  # Netflix: culture section starts
+            r'<p>(?:<span>)?Our team includes',  # Netflix: diversity section starts
+            r'<p>(?:<span>)?At Netflix, we strive to provide',  # Netflix: compensation section starts
+            r'<p>(?:<span>)?However, we are looking for more than',  # Netflix: soft skills section (not requirements)
+            r'<h2><b>(?:<b>)?Learn More(?:</b>)?</b></h2>',  # Netflix: <h2><b><b>Learn More</b></b></h2>
+            r'<div><strong>Spotlight on',  # Netflix: <div><strong>Spotlight on Content Engineering Teams:</strong></div>
+            r'<div><strong>A few more things about us',  # Netflix: <div><strong>A few more things about us:</strong></div>
         ]
 
         # Find the start of qualifications section

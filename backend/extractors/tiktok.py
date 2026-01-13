@@ -209,14 +209,9 @@ class TikTokExtractor(BaseJobExtractor[TitleFilters]):
         """
         Extract structured job details from TikTok job page HTML.
 
-        TikTok uses Next.js React Server Components (RSC) format.
-        Job content is embedded in self.__next_f.push() calls with
-        text blocks marked by T<hex_length>,<content> format.
-
-        Structure:
-        - First T block: Team intro + Responsibilities (plain text)
-        - Qualifications: Inline in RSC JSON ("Minimum Qualifications...")
-        - Additional blocks: Salary info, About TikTok (HTML)
+        TikTok uses two formats:
+        1. Next.js RSC format: Content in self.__next_f.push() calls with T<hex> blocks
+        2. Direct HTML format: Content in Tailwind-styled <p> tags with tt-text class
 
         Args:
             raw_content: Raw HTML string from crawl_raw_info()
@@ -248,10 +243,41 @@ class TikTokExtractor(BaseJobExtractor[TitleFilters]):
             text = re.sub(r'\n\n- ', '\n- ', text)  # No blank lines between list items
             return text.strip()
 
-        # Combine all RSC push content
+        # Try Format 2 first: Direct HTML with Tailwind classes
+        # Pattern: <p class="text-[32px]...">Section</p><p class="tt-text...">content</p>
+        responsibilities_match = re.search(
+            r'>Responsibilities</p>\s*<p[^>]*class="[^"]*tt-text[^"]*"[^>]*>(.*?)</p>',
+            raw_content,
+            re.DOTALL | re.IGNORECASE
+        )
+        qualifications_match = re.search(
+            r'>Qualifications</p>\s*<p[^>]*class="[^"]*tt-text[^"]*"[^>]*>(.*?)</p>',
+            raw_content,
+            re.DOTALL | re.IGNORECASE
+        )
+
+        if responsibilities_match or qualifications_match:
+            # Direct HTML format
+            description = ''
+            requirements = ''
+
+            if responsibilities_match:
+                description = strip_html(responsibilities_match.group(1))
+
+            if qualifications_match:
+                requirements = strip_html(qualifications_match.group(1))
+                # Normalize bullet points
+                requirements = requirements.replace('•', '-')
+
+            return {
+                'description': description,
+                'requirements': requirements,
+            }
+
+        # Format 1: Next.js RSC format
         pieces = re.findall(r'self\.__next_f\.push\(\[1,"(.*?)"\]\)', raw_content, re.DOTALL)
         if not pieces:
-            raise ValueError("Could not find Next.js RSC data")
+            raise ValueError("Could not find job content in any supported format")
 
         full = ''.join(pieces)
         # Unescape JSON string escapes (double-escaped in RSC format)

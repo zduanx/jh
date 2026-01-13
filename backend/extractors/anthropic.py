@@ -333,14 +333,50 @@ class AnthropicExtractor(BaseJobExtractor[TitleFilters]):
             return text.strip()
 
         def extract_section(pattern: str) -> str:
-            """Extract content between h2 header matching pattern and next h2"""
+            """Extract content between header matching pattern and next header.
+
+            Handles both h2 and h3 tags, with or without <strong> wrapper:
+            - <h2>About the role</h2>
+            - <h2 class="heading"><strong>About the role</strong></h2>
+            - <h3><strong>About the Role</strong></h3>
+
+            Pattern matches the beginning of header text (allows extra text after).
+            """
+            # Try h2 with <strong> wrapper first (newer Greenhouse format)
             match = re.search(
-                rf'<h2[^>]*>({pattern})[^<]*</h2>(.*?)(?=<h2|$)',
+                rf'<h2[^>]*>\s*<strong>{pattern}[^<]*</strong>\s*</h2>(.*?)(?=<h[23]|$)',
                 raw_content,
                 re.DOTALL | re.IGNORECASE
             )
             if match:
-                return strip_html(match.group(2))
+                return strip_html(match.group(1))
+
+            # Try h3 with <strong> wrapper (some Anthropic pages use h3)
+            match = re.search(
+                rf'<h3[^>]*>\s*<strong>{pattern}[^<]*</strong>\s*</h3>(.*?)(?=<h[23]|$)',
+                raw_content,
+                re.DOTALL | re.IGNORECASE
+            )
+            if match:
+                return strip_html(match.group(1))
+
+            # Fallback: pattern directly in h2
+            match = re.search(
+                rf'<h2[^>]*>{pattern}[^<]*</h2>(.*?)(?=<h[23]|$)',
+                raw_content,
+                re.DOTALL | re.IGNORECASE
+            )
+            if match:
+                return strip_html(match.group(1))
+
+            # Fallback: pattern directly in h3
+            match = re.search(
+                rf'<h3[^>]*>{pattern}[^<]*</h3>(.*?)(?=<h[23]|$)',
+                raw_content,
+                re.DOTALL | re.IGNORECASE
+            )
+            if match:
+                return strip_html(match.group(1))
             return ''
 
         # Build description from role info and responsibilities
@@ -350,18 +386,28 @@ class AnthropicExtractor(BaseJobExtractor[TitleFilters]):
         if about_role:
             description_parts.append(about_role)
 
+        # Try "Responsibilities" first, fall back to "What You'll Work On"
         responsibilities = extract_section('Responsibilities')
+        if not responsibilities:
+            responsibilities = extract_section("What You'll Work On")
         if responsibilities:
             description_parts.append(f"Responsibilities:\n{responsibilities}")
 
         # Build requirements from qualifications sections
+        # Try multiple pattern variants used across different job postings
         requirements_parts = []
 
+        # Required qualifications - try multiple patterns
         good_fit = extract_section('You may be a good fit')
+        if not good_fit:
+            good_fit = extract_section('You might be a great fit')
         if good_fit:
             requirements_parts.append(f"Required:\n{good_fit}")
 
+        # Preferred qualifications - try multiple patterns
         strong_candidates = extract_section('Strong candidates')
+        if not strong_candidates:
+            strong_candidates = extract_section('Bonus points')
         if strong_candidates:
             requirements_parts.append(f"Preferred:\n{strong_candidates}")
 

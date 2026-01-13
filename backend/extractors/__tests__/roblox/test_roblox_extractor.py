@@ -13,4 +13,4 @@ class TestRobloxExtractor(BaseExtractorSnapshotTest):
 
     extractor_class = RobloxExtractor
     company = "roblox"
-    test_cases = ["7350013", "7054468"]
+    test_cases = ["7350013", "7054468", "7376093"]
