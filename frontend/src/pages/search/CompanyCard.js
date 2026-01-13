@@ -1,13 +1,15 @@
 import React, { useState, useMemo } from 'react';
 
-function CompanyCard({ company, selectedJobId, onJobSelect }) {
+function CompanyCard({ company, selectedJobId, onJobSelect, apiUrl, onReExtractComplete }) {
   const [isExpanded, setIsExpanded] = useState(false);
   const [expandedLocations, setExpandedLocations] = useState({});
-
-  const jobs = company.jobs || [];
+  const [isReExtracting, setIsReExtracting] = useState(false);
+  const [showConfirmModal, setShowConfirmModal] = useState(false);
+  const [reExtractResult, setReExtractResult] = useState(null);
 
   // Group jobs by location
   const jobsByLocation = useMemo(() => {
+    const jobs = company.jobs || [];
     const groups = {};
     jobs.forEach((job) => {
       const location = job.location || 'Location not specified';
@@ -23,7 +25,7 @@ function CompanyCard({ company, selectedJobId, onJobSelect }) {
       return a.localeCompare(b);
     });
     return sortedLocations.map((loc) => ({ location: loc, jobs: groups[loc] }));
-  }, [jobs]);
+  }, [company.jobs]);
 
   const handleHeaderClick = () => {
     setIsExpanded(!isExpanded);
@@ -41,8 +43,62 @@ function CompanyCard({ company, selectedJobId, onJobSelect }) {
     onJobSelect(job.id);
   };
 
+  const handleReExtractClick = (e) => {
+    e.stopPropagation();
+    setShowConfirmModal(true);
+  };
+
+  const handleConfirmReExtract = async () => {
+    setShowConfirmModal(false);
+    setIsReExtracting(true);
+    setReExtractResult(null);
+
+    try {
+      const token = localStorage.getItem('access_token');
+      const res = await fetch(`${apiUrl}/api/jobs/re-extract`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ company: company.name }),
+      });
+
+      const data = await res.json();
+
+      if (res.ok) {
+        setReExtractResult({
+          success: true,
+          message: `Re-extracted ${data.successful}/${data.total_jobs} jobs`,
+        });
+        // Notify parent to refresh data
+        if (onReExtractComplete) {
+          onReExtractComplete(company.name);
+        }
+      } else {
+        setReExtractResult({
+          success: false,
+          message: data.detail || 'Re-extraction failed',
+        });
+      }
+    } catch (err) {
+      setReExtractResult({
+        success: false,
+        message: err.message || 'Network error',
+      });
+    } finally {
+      setIsReExtracting(false);
+      // Auto-dismiss toast after 5 seconds
+      setTimeout(() => setReExtractResult(null), 5000);
+    }
+  };
+
+  const handleCancelReExtract = () => {
+    setShowConfirmModal(false);
+  };
+
   return (
-    <div className={`company-card ${isExpanded ? 'expanded' : ''}`}>
+    <div className={`company-card ${isExpanded ? 'expanded' : ''} ${isReExtracting ? 'extracting' : ''}`}>
       <div className="company-card-header" onClick={handleHeaderClick}>
         <div className="company-logo">
           {company.logo_url ? (
@@ -55,8 +111,25 @@ function CompanyCard({ company, selectedJobId, onJobSelect }) {
           <div className="company-name">{company.display_name}</div>
           <div className="company-count">Ready: {company.ready_count}</div>
         </div>
+        <div className="company-actions">
+          <button
+            className="company-re-extract-btn"
+            onClick={handleReExtractClick}
+            disabled={isReExtracting || company.ready_count === 0}
+            title="Re-extract all jobs for this company"
+          >
+            {isReExtracting ? 'Extracting...' : 'Re-Extract'}
+          </button>
+        </div>
         <span className="expand-icon">{isExpanded ? '▼' : '▶'}</span>
       </div>
+
+      {/* Toast notification */}
+      {reExtractResult && (
+        <div className={`company-re-extract-toast ${reExtractResult.success ? 'success' : 'error'}`}>
+          {reExtractResult.success ? '✓' : '✗'} {reExtractResult.message}
+        </div>
+      )}
 
       {isExpanded && (
         <div className="job-list">
@@ -91,6 +164,30 @@ function CompanyCard({ company, selectedJobId, onJobSelect }) {
               )}
             </div>
           ))}
+        </div>
+      )}
+
+      {/* Confirmation Modal */}
+      {showConfirmModal && (
+        <div className="modal-overlay" onClick={handleCancelReExtract}>
+          <div className="modal-content" onClick={(e) => e.stopPropagation()}>
+            <h2>Confirm Re-Extract</h2>
+            <p>
+              Re-extract all <strong>{company.ready_count}</strong> jobs for{' '}
+              <strong>{company.display_name}</strong>?
+            </p>
+            <p className="modal-subtitle">
+              This will re-process raw HTML from S3 and update job descriptions and requirements.
+            </p>
+            <div className="modal-actions">
+              <button className="btn-cancel" onClick={handleCancelReExtract}>
+                Cancel
+              </button>
+              <button className="btn-confirm" onClick={handleConfirmReExtract}>
+                Re-Extract
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>

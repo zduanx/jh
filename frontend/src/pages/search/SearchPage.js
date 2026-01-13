@@ -132,6 +132,16 @@ function SearchPage() {
     setSyncError(null);
   };
 
+  // Handler for company-level re-extract completion
+  const handleCompanyReExtractComplete = useCallback(async (companyName) => {
+    // Refresh jobs list to reflect updated extractions
+    await fetchJobs();
+    // If a job from this company is selected, refresh its details
+    if (selectedJob && selectedJob.company === companyName) {
+      fetchJobDetails(selectedJobId);
+    }
+  }, [fetchJobs, selectedJob, selectedJobId, fetchJobDetails]);
+
   // Loading state
   if (loading) {
     return (
@@ -324,6 +334,8 @@ function SearchPage() {
               company={company}
               selectedJobId={selectedJobId}
               onJobSelect={handleJobSelect}
+              apiUrl={apiUrl}
+              onReExtractComplete={handleCompanyReExtractComplete}
             />
           ))}
         </div>

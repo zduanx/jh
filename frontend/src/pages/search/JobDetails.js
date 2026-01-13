@@ -14,24 +14,32 @@ function JobDetails({ job, loading, onReExtract }) {
 
     try {
       const token = localStorage.getItem('access_token');
-      const res = await fetch(`${apiUrl}/api/jobs/${job.id}/re-extract`, {
+      const res = await fetch(`${apiUrl}/api/jobs/re-extract`, {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${token}`,
           'Content-Type': 'application/json',
         },
+        body: JSON.stringify({ job_id: job.id }),
       });
 
       const data = await res.json();
 
-      if (data.success) {
-        setReExtractResult({ success: true, message: 'Re-extraction complete' });
+      if (data.successful > 0 && data.results?.length > 0) {
+        const result = data.results[0];
+        const descLen = result.description_length || 0;
+        const reqLen = result.requirements_length || 0;
+        setReExtractResult({
+          success: true,
+          message: `Re-extracted: ${descLen} desc, ${reqLen} req chars`
+        });
         // Notify parent to refresh job details
         if (onReExtract) {
           onReExtract(job.id);
         }
       } else {
-        setReExtractResult({ success: false, message: data.error || 'Re-extraction failed' });
+        const errorMsg = data.results?.[0]?.error || data.detail || 'Re-extraction failed';
+        setReExtractResult({ success: false, message: errorMsg });
       }
     } catch (err) {
       setReExtractResult({ success: false, message: err.message || 'Re-extraction failed' });
