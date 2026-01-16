@@ -1,6 +1,6 @@
 import React, { useState, useMemo } from 'react';
 
-function CompanyCard({ company, selectedJobId, onJobSelect, apiUrl, onReExtractComplete }) {
+function CompanyCard({ company, totalCount, selectedJobId, onJobSelect, apiUrl, onReExtractComplete }) {
   const [isExpanded, setIsExpanded] = useState(false);
   const [expandedLocations, setExpandedLocations] = useState({});
   const [isReExtracting, setIsReExtracting] = useState(false);
@@ -109,7 +109,7 @@ function CompanyCard({ company, selectedJobId, onJobSelect, apiUrl, onReExtractC
         </div>
         <div className="company-info">
           <div className="company-name">{company.display_name}</div>
-          <div className="company-count">Ready: {company.ready_count}</div>
+          <div className="company-count">{company.ready_count}/{totalCount}</div>
         </div>
         <div className="company-actions">
           <button

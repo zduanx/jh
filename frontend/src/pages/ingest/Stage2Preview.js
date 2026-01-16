@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import FilterModal from './components/FilterModal';
 import './Stage2Preview.css';
 
@@ -172,7 +172,7 @@ function Stage2Preview({
   };
 
   // Save settings to API
-  const handleSave = async () => {
+  const handleSave = useCallback(async () => {
     setSaving(true);
     setError(null);
 
@@ -243,10 +243,10 @@ function Stage2Preview({
     } finally {
       setSaving(false);
     }
-  };
+  }, [apiUrl, companies, localCompanies, savedSettings, onSettingsUpdate]);
 
   // Run dry-run API call
-  const handleDryRun = async () => {
+  const handleDryRun = useCallback(async () => {
     setLoading(true);
     setError(null);
 
@@ -279,7 +279,7 @@ function Stage2Preview({
     } finally {
       setLoading(false);
     }
-  };
+  }, [apiUrl, localCompanies]);
 
   // Calculate summary stats
   const getSummaryStats = () => {
@@ -486,7 +486,7 @@ function Stage2Preview({
       onConfirmOpen: () => setConfirmModalOpen(true),
       onForceConfirmOpen: () => setForceConfirmModalOpen(true),
     });
-  }, [isDirty, saving, loading, hasResults, resultsStale, canStartIngestion, onActionBarChange]);
+  }, [isDirty, saving, loading, hasResults, resultsStale, canStartIngestion, onActionBarChange, handleSave, handleDryRun]);
 
   return (
     <div className="stage-content">

@@ -18,11 +18,22 @@ function SearchPage() {
   const [syncResult, setSyncResult] = useState(null);
   const [syncError, setSyncError] = useState(null);
 
+  // Search state (Phase 3C)
+  const [searchQuery, setSearchQuery] = useState('');
+  const [activeQuery, setActiveQuery] = useState(null); // Query currently applied
+  const [isSearching, setIsSearching] = useState(false);
+  const [companyTotals, setCompanyTotals] = useState({}); // Original totals per company
+
   const apiUrl = process.env.REACT_APP_API_URL;
 
-  // Fetch jobs list on mount
-  const fetchJobs = useCallback(async () => {
-    setLoading(true);
+  // Fetch jobs list (optionally filtered by search query)
+  const fetchJobs = useCallback(async (query = null) => {
+    // Use isSearching for search requests, loading for initial load
+    if (query !== null) {
+      setIsSearching(true);
+    } else {
+      setLoading(true);
+    }
     setError(null);
 
     try {
@@ -31,7 +42,13 @@ function SearchPage() {
         throw new Error('Not authenticated');
       }
 
-      const res = await fetch(`${apiUrl}/api/jobs`, {
+      // Build URL with optional query parameter
+      let url = `${apiUrl}/api/jobs`;
+      if (query && query.trim().length >= 2) {
+        url += `?q=${encodeURIComponent(query.trim())}`;
+      }
+
+      const res = await fetch(url, {
         headers: { 'Authorization': `Bearer ${token}` }
       });
 
@@ -43,16 +60,52 @@ function SearchPage() {
       const data = await res.json();
       setCompanies(data.companies || []);
       setTotalReady(data.total_ready || 0);
+      // Normalize whitespace: trim and collapse internal whitespace/newlines to single space
+      const normalizedQuery = data.query?.trim().replace(/\s+/g, ' ') || null;
+      setActiveQuery(normalizedQuery);
+
+      // Store original totals when not searching (for "X/Y" display)
+      if (!data.query) {
+        const totals = {};
+        (data.companies || []).forEach(c => {
+          totals[c.name] = c.ready_count;
+        });
+        setCompanyTotals(totals);
+      }
     } catch (err) {
       setError(err.message);
     } finally {
       setLoading(false);
+      setIsSearching(false);
     }
   }, [apiUrl]);
 
   useEffect(() => {
     fetchJobs();
   }, [fetchJobs]);
+
+  // Search handler (Phase 3C)
+  const handleSearch = () => {
+    if (searchQuery.trim().length >= 2) {
+      fetchJobs(searchQuery);
+    } else if (searchQuery.trim().length === 0 && activeQuery) {
+      // Clear search if input is empty and there was an active query
+      fetchJobs();
+    }
+  };
+
+  const handleSearchKeyDown = (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      handleSearch();
+    }
+  };
+
+  // Clear search
+  const handleClearSearch = () => {
+    setSearchQuery('');
+    fetchJobs();
+  };
 
   // Fetch job details when selection changes
   const fetchJobDetails = useCallback(async (jobId) => {
@@ -189,14 +242,31 @@ function SearchPage() {
           <div className="search-input-wrapper">
             <input
               type="text"
-              placeholder="Search jobs by title, company, or location..."
-              disabled
-              title="Coming in Phase 3C"
+              placeholder="Search jobs..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              onKeyDown={handleSearchKeyDown}
+              onFocus={(e) => e.target.select()}
+              disabled={syncing}
             />
-            <button className="search-btn" disabled title="Coming in Phase 3C">
-              Search
-            </button>
+            {searchQuery && (
+              <button
+                className="search-clear-btn"
+                onClick={handleClearSearch}
+                title="Clear search"
+              >
+                ×
+              </button>
+            )}
+            {isSearching && <span className="search-spinner" />}
           </div>
+          <button
+            className="search-btn"
+            onClick={handleSearch}
+            disabled={syncing || searchQuery.trim().length < 2}
+          >
+            Search
+          </button>
           <button className="sync-all-btn" onClick={handleSyncAll}>
             Sync All
           </button>
@@ -307,14 +377,31 @@ function SearchPage() {
         <div className="search-input-wrapper">
           <input
             type="text"
-            placeholder="Search jobs by title, company, or location..."
-            disabled
-            title="Coming in Phase 3C"
+            placeholder="Search jobs..."
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            onKeyDown={handleSearchKeyDown}
+            onFocus={(e) => e.target.select()}
+            disabled={syncing}
           />
-          <button className="search-btn" disabled title="Coming in Phase 3C">
-            Search
-          </button>
+          {searchQuery && (
+            <button
+              className="search-clear-btn"
+              onClick={handleClearSearch}
+              title="Clear search"
+            >
+              ×
+            </button>
+          )}
+          {isSearching && <span className="search-spinner" />}
         </div>
+        <button
+          className="search-btn"
+          onClick={handleSearch}
+          disabled={syncing || searchQuery.trim().length < 2}
+        >
+          Search
+        </button>
         <button
           className="sync-all-btn"
           onClick={handleSyncAll}
@@ -324,6 +411,14 @@ function SearchPage() {
         </button>
       </div>
 
+      {/* Search Status */}
+      {activeQuery && (
+        <div className="search-status">
+          <span>Showing results for "<strong>{activeQuery}</strong>"</span>
+          <button className="search-status-clear" onClick={handleClearSearch}>Clear</button>
+        </div>
+      )}
+
       {/* Main Content - 1:3 Layout */}
       <div className="search-main">
         {/* Left Column - Companies */}
@@ -332,6 +427,7 @@ function SearchPage() {
             <CompanyCard
               key={company.name}
               company={company}
+              totalCount={companyTotals[company.name] || company.ready_count}
               selectedJobId={selectedJobId}
               onJobSelect={handleJobSelect}
               apiUrl={apiUrl}
