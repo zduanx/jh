@@ -1,11 +1,12 @@
 """
-API routes for job listing, details, and sync (Phase 3A/3B).
+API routes for job listing, details, sync, and search (Phase 3A/3B/3C).
 
 Endpoints:
 - GET  /api/jobs                            List all jobs grouped by company
+- GET  /api/jobs?q=...                      Search jobs (Phase 3C: tsvector + pg_trgm)
 - GET  /api/jobs/{job_id}                   Get full job details
 - POST /api/jobs/sync                       Sync all jobs (extract URLs, UPSERT, mark expired)
-- POST /api/jobs/re-extract              Re-extract job(s) from S3 HTML (body: job_id or company)
+- POST /api/jobs/re-extract                 Re-extract job(s) from S3 HTML (body: job_id or company)
 
 Interactive API docs:
 - Swagger UI: http://localhost:8000/docs
@@ -21,7 +22,7 @@ from sqlalchemy.orm import Session
 
 from auth.dependencies import get_current_user
 from db.session import get_db
-from db.jobs_service import get_jobs_grouped_by_company, get_job_by_id, upsert_jobs, mark_expired_jobs
+from db.jobs_service import get_jobs_grouped_by_company, get_job_by_id, upsert_jobs, mark_expired_jobs, get_jobs_with_search
 from db.company_settings_service import get_enabled_settings
 from models.ingestion_run import IngestionRun, RunStatus
 from sourcing.extractor_utils import run_extractors_async
@@ -71,6 +72,7 @@ class JobsListResponse(BaseModel):
     """Response for GET /api/jobs."""
     companies: list[CompanyJobs]
     total_ready: int
+    query: Optional[str] = None  # Phase 3C: Search query if provided
 
 
 class JobDetailResponse(BaseModel):
@@ -96,6 +98,7 @@ class JobDetailResponse(BaseModel):
 
 @router.get("", response_model=JobsListResponse)
 async def list_jobs(
+    q: Optional[str] = None,
     current_user: dict = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
@@ -105,10 +108,16 @@ async def list_jobs(
     Returns only READY jobs, grouped by company with counts.
     Auth: JWT required
 
-    Returns:
-        JobsListResponse with companies and total_ready count
+    Query Parameters:
+        q: Optional search query for hybrid full-text + fuzzy search (Phase 3C)
+           - Uses tsvector for word matching on title + description
+           - Uses pg_trgm for typo tolerance on title (similarity > 0.2)
+           - Min 2 characters required
 
-    Example:
+    Returns:
+        JobsListResponse with companies, total_ready count, and query (if provided)
+
+    Examples:
         GET /api/jobs
         Authorization: Bearer <jwt_token>
 
@@ -128,13 +137,23 @@ async def list_jobs(
             ],
             "total_ready": 126
         }
+
+        GET /api/jobs?q=kubernetes
+        Authorization: Bearer <jwt_token>
+
+        Response:
+        {
+            "companies": [...],
+            "total_ready": 8,
+            "query": "kubernetes"
+        }
     """
     user_id = current_user["user_id"]
 
-    # Get jobs grouped by company from service
-    jobs_by_company = get_jobs_grouped_by_company(db, user_id)
+    # Single DB query: get jobs (optionally filtered by search)
+    jobs_by_company, search_query = get_jobs_with_search(db, user_id, q)
 
-    # Build response with company metadata
+    # Build response
     companies = []
     total_ready = 0
 
@@ -157,7 +176,7 @@ async def list_jobs(
     # Sort companies by name for consistent ordering
     companies.sort(key=lambda c: c.name)
 
-    return JobsListResponse(companies=companies, total_ready=total_ready)
+    return JobsListResponse(companies=companies, total_ready=total_ready, query=search_query)
 
 
 @router.get("/{job_id}", response_model=JobDetailResponse)

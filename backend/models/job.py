@@ -1,5 +1,6 @@
 from datetime import datetime, timezone
 from sqlalchemy import BigInteger, Integer, String, Text, DateTime, ForeignKey
+from sqlalchemy.dialects.postgresql import TSVECTOR
 from sqlalchemy.orm import Mapped, mapped_column
 from models import Base
 
@@ -56,6 +57,10 @@ class Job(Base):
     # Phase 2J: S3 path for raw HTML content
     # Format: s3://bucket/raw/{company}/{external_id}.html
     raw_s3_url: Mapped[str] = mapped_column(Text, nullable=True)
+
+    # Phase 3C: Full-text search vector (auto-updated by trigger)
+    # Contains weighted tsvector: title (A) + description (B)
+    search_vector: Mapped[str] = mapped_column(TSVECTOR, nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),

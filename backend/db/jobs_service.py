@@ -290,3 +290,86 @@ def get_job_by_id(db: Session, job_id: int, user_id: int) -> Job | None:
         Job.id == job_id,
         Job.user_id == user_id,
     ).first()
+
+
+# =============================================================================
+# Phase 3C: Search Functions
+# =============================================================================
+
+def get_jobs_with_search(
+    db: Session,
+    user_id: int,
+    query: str | None = None,
+) -> tuple[dict[str, list[Job]], str | None]:
+    """
+    Get all READY jobs, optionally filtered by search query. Single DB query.
+
+    When query is provided, returns only matching jobs per company,
+    but still returns all companies that have READY jobs (with empty list if no matches).
+
+    Uses hybrid search (per ADR-014):
+    1. tsvector: Full-text search on title (A) + description (B) with stemming
+    2. pg_trgm: Fuzzy search on title only for typo tolerance (similarity > 0.2)
+
+    Args:
+        db: Database session
+        user_id: User ID
+        query: Optional search query string (min 2 chars, or None for all jobs)
+
+    Returns:
+        Tuple of:
+        - Dict mapping company name to list of Job objects {company: [Job, ...], ...}
+        - Normalized query string if searching, None otherwise
+    """
+    search_query = query.strip() if query and len(query.strip()) >= 2 else None
+
+    if search_query:
+        # Single query: get all READY jobs with 'matched' flag for search filtering
+        # This avoids 2 separate queries
+        result = db.execute(
+            text("""
+                SELECT *,
+                    (search_vector @@ plainto_tsquery('english', :query)
+                     OR similarity(title, :query) > 0.2) AS matched
+                FROM jobs
+                WHERE user_id = :user_id
+                  AND status = 'ready'
+                ORDER BY company, title
+            """),
+            {"user_id": user_id, "query": search_query},
+        )
+
+        # Group by company, only include matched jobs
+        jobs_by_company: dict[str, list[Job]] = {}
+        matched_count = 0
+
+        for row in result.mappings():
+            row_dict = dict(row)
+            matched = row_dict.pop('matched')  # Remove 'matched' before creating Job
+            company = row_dict['company']
+
+            # Always track company (even if no matches)
+            if company not in jobs_by_company:
+                jobs_by_company[company] = []
+
+            # Only add job if it matched the search
+            if matched:
+                jobs_by_company[company].append(Job(**row_dict))
+                matched_count += 1
+
+        logger.info(f"Search '{search_query}' for user={user_id}: {matched_count} matches in {len(jobs_by_company)} companies")
+
+    else:
+        # No search - just get all READY jobs grouped by company
+        jobs = db.query(Job).filter(
+            Job.user_id == user_id,
+            Job.status == JobStatus.READY,
+        ).order_by(Job.company, Job.title).all()
+
+        jobs_by_company = {}
+        for job in jobs:
+            if job.company not in jobs_by_company:
+                jobs_by_company[job.company] = []
+            jobs_by_company[job.company].append(job)
+
+    return jobs_by_company, search_query
