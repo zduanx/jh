@@ -4,6 +4,7 @@ from mangum import Mangum
 from api.routes import router as api_router
 from api.ingestion_routes import router as ingestion_router
 from api.jobs_routes import router as jobs_router
+from api.tracking_routes import router as tracking_router
 from auth.routes import router as auth_router
 from sourcing.routes import router as sourcing_router
 from config.settings import settings
@@ -29,6 +30,7 @@ app.include_router(auth_router, prefix="/auth", tags=["Authentication"])
 app.include_router(api_router, prefix="/api", tags=["API"])
 app.include_router(ingestion_router, prefix="/api/ingestion", tags=["Ingestion Workflow"])
 app.include_router(jobs_router, prefix="/api/jobs", tags=["Jobs"])
+app.include_router(tracking_router, prefix="/api/tracked", tags=["Job Tracking"])
 app.include_router(sourcing_router, prefix="/api/sourcing", tags=["Job URL Sourcing"])
 
 
