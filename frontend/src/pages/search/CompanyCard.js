@@ -1,6 +1,6 @@
 import React, { useState, useMemo } from 'react';
 
-function CompanyCard({ company, totalCount, selectedJobId, onJobSelect, apiUrl, onReExtractComplete }) {
+function CompanyCard({ company, totalCount, selectedJobId, onJobSelect, apiUrl, onReExtractComplete, trackedJobs }) {
   const [isExpanded, setIsExpanded] = useState(false);
   const [expandedLocations, setExpandedLocations] = useState({});
   const [isReExtracting, setIsReExtracting] = useState(false);
@@ -148,18 +148,21 @@ function CompanyCard({ company, totalCount, selectedJobId, onJobSelect, apiUrl, 
 
               {expandedLocations[location] && (
                 <div className="location-jobs">
-                  {locationJobs.map((job) => (
-                    <div
-                      key={job.id}
-                      className={`job-item ${selectedJobId === job.id ? 'selected' : ''}`}
-                      onClick={() => handleJobClick(job)}
-                    >
-                      <div className="job-radio">
-                        <div className="job-radio-inner" />
+                  {locationJobs.map((job) => {
+                    const isTracked = trackedJobs && trackedJobs[job.id];
+                    return (
+                      <div
+                        key={job.id}
+                        className={`job-item ${selectedJobId === job.id ? 'selected' : ''} ${isTracked ? 'tracked' : ''}`}
+                        onClick={() => handleJobClick(job)}
+                      >
+                        <div className="job-radio">
+                          <div className="job-radio-inner" />
+                        </div>
+                        <span className="job-title">{job.title || 'Untitled'}</span>
                       </div>
-                      <span className="job-title">{job.title || 'Untitled'}</span>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               )}
             </div>

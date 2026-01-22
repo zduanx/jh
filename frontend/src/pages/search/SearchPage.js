@@ -24,7 +24,94 @@ function SearchPage() {
   const [isSearching, setIsSearching] = useState(false);
   const [companyTotals, setCompanyTotals] = useState({}); // Original totals per company
 
+  // Tracking state (Phase 4A)
+  // { job_id: { tracking_id, stage } }
+  const [trackedJobs, setTrackedJobs] = useState({});
+
   const apiUrl = process.env.REACT_APP_API_URL;
+
+  // Fetch tracked job IDs on mount (Phase 4A)
+  const fetchTrackedIds = useCallback(async () => {
+    try {
+      const token = localStorage.getItem('access_token');
+      if (!token) return;
+
+      const res = await fetch(`${apiUrl}/api/tracked/ids`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        // Convert string keys to numbers for consistency
+        const tracked = {};
+        Object.entries(data.tracked || {}).forEach(([jobId, info]) => {
+          tracked[parseInt(jobId, 10)] = info;
+        });
+        setTrackedJobs(tracked);
+      }
+    } catch (err) {
+      console.error('Error fetching tracked IDs:', err);
+    }
+  }, [apiUrl]);
+
+  // Track a job (Phase 4A)
+  const handleTrackJob = async (jobId) => {
+    try {
+      const token = localStorage.getItem('access_token');
+      const res = await fetch(`${apiUrl}/api/tracked`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ job_id: jobId }),
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        // Update cache
+        setTrackedJobs(prev => ({
+          ...prev,
+          [jobId]: { tracking_id: data.tracking_id, stage: data.stage }
+        }));
+        return { success: true };
+      } else {
+        const data = await res.json();
+        return { success: false, error: data.detail || 'Failed to track job' };
+      }
+    } catch (err) {
+      return { success: false, error: err.message };
+    }
+  };
+
+  // Untrack a job (Phase 4A)
+  const handleUntrackJob = async (jobId) => {
+    const trackingInfo = trackedJobs[jobId];
+    if (!trackingInfo) return { success: false, error: 'Job not tracked' };
+
+    try {
+      const token = localStorage.getItem('access_token');
+      const res = await fetch(`${apiUrl}/api/tracked/${trackingInfo.tracking_id}`, {
+        method: 'DELETE',
+        headers: { 'Authorization': `Bearer ${token}` },
+      });
+
+      if (res.ok) {
+        // Remove from cache
+        setTrackedJobs(prev => {
+          const updated = { ...prev };
+          delete updated[jobId];
+          return updated;
+        });
+        return { success: true };
+      } else {
+        const data = await res.json();
+        return { success: false, error: data.detail || 'Failed to untrack job' };
+      }
+    } catch (err) {
+      return { success: false, error: err.message };
+    }
+  };
 
   // Fetch jobs list (optionally filtered by search query)
   const fetchJobs = useCallback(async (query = null) => {
@@ -82,7 +169,8 @@ function SearchPage() {
 
   useEffect(() => {
     fetchJobs();
-  }, [fetchJobs]);
+    fetchTrackedIds();
+  }, [fetchJobs, fetchTrackedIds]);
 
   // Search handler (Phase 3C)
   const handleSearch = () => {
@@ -432,6 +520,7 @@ function SearchPage() {
               onJobSelect={handleJobSelect}
               apiUrl={apiUrl}
               onReExtractComplete={handleCompanyReExtractComplete}
+              trackedJobs={trackedJobs}
             />
           ))}
         </div>
@@ -441,6 +530,9 @@ function SearchPage() {
           job={selectedJob}
           loading={jobLoading}
           onReExtract={(jobId) => fetchJobDetails(jobId)}
+          trackingInfo={selectedJob ? trackedJobs[selectedJob.id] : null}
+          onTrack={handleTrackJob}
+          onUntrack={handleUntrackJob}
         />
       </div>
 

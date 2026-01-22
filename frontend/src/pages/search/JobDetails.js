@@ -1,10 +1,45 @@
 import React, { useState } from 'react';
 
-function JobDetails({ job, loading, onReExtract }) {
+function JobDetails({ job, loading, onReExtract, trackingInfo, onTrack, onUntrack }) {
   const [reExtracting, setReExtracting] = useState(false);
   const [reExtractResult, setReExtractResult] = useState(null);
+  const [trackingAction, setTrackingAction] = useState(false); // true while track/untrack in progress
 
   const apiUrl = process.env.REACT_APP_API_URL;
+
+  // Track/Untrack handler (Phase 4A)
+  const handleTrackToggle = async () => {
+    if (!job || trackingAction) return;
+
+    setTrackingAction(true);
+    try {
+      if (trackingInfo) {
+        // Only allow untrack if stage is "interested"
+        if (trackingInfo.stage === 'interested') {
+          await onUntrack(job.id);
+        }
+      } else {
+        await onTrack(job.id);
+      }
+    } finally {
+      setTrackingAction(false);
+    }
+  };
+
+  // Get tracking button text and state
+  const getTrackingButton = () => {
+    if (!trackingInfo) {
+      // Not tracked - show "Interested" to add to tracking
+      return { text: 'Interested', canClick: true, className: 'track-btn' };
+    }
+    if (trackingInfo.stage === 'interested') {
+      // Already interested - show "Untrack" to remove
+      return { text: 'Untrack', canClick: true, className: 'track-btn tracked interested' };
+    }
+    // Other stages are read-only
+    const stageText = trackingInfo.stage.charAt(0).toUpperCase() + trackingInfo.stage.slice(1);
+    return { text: stageText, canClick: false, className: 'track-btn tracked readonly' };
+  };
 
   const handleReExtract = async () => {
     if (!job) return;
@@ -74,7 +109,7 @@ function JobDetails({ job, loading, onReExtract }) {
 
   return (
     <div className="job-details-column">
-      <div className="job-details-content">
+      <div className={`job-details-content ${trackingInfo ? 'tracked' : ''}`}>
         <div className="job-details-header">
           <div className="job-details-title-row">
             <h2 className="job-details-title">
@@ -83,13 +118,27 @@ function JobDetails({ job, loading, onReExtract }) {
               </a>
               <span className="external-icon">↗</span>
             </h2>
-            <button
-              className="re-extract-btn"
-              onClick={handleReExtract}
-              disabled={reExtracting}
-            >
-              {reExtracting ? 'Re-Extracting...' : 'Re-Extract'}
-            </button>
+            <div className="job-details-actions">
+              {(() => {
+                const btn = getTrackingButton();
+                return (
+                  <button
+                    className={btn.className}
+                    onClick={handleTrackToggle}
+                    disabled={!btn.canClick || trackingAction}
+                  >
+                    {trackingAction ? '...' : btn.text}
+                  </button>
+                );
+              })()}
+              <button
+                className="re-extract-btn"
+                onClick={handleReExtract}
+                disabled={reExtracting}
+              >
+                {reExtracting ? 'Re-Extracting...' : 'Re-Extract'}
+              </button>
+            </div>
           </div>
           <p className="job-details-subtitle">
             ID: {job.id} | {job.company}:{job.external_id}

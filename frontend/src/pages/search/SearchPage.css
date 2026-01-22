@@ -1041,6 +1041,67 @@
 }
 
 /* =============================================================================
+   Job Tracking (Phase 4A)
+   ============================================================================= */
+
+/* Track button in job details */
+.job-details-actions {
+  display: flex;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.track-btn {
+  padding: 10px 20px;
+  background: #3b82f6;
+  color: white;
+  border: none;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.2s ease;
+}
+
+.track-btn:hover:not(:disabled) {
+  background: #2563eb;
+}
+
+.track-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.7;
+}
+
+/* Tracked state - "Interested" (clickable to untrack) */
+.track-btn.tracked.interested {
+  background: #10b981;
+  color: white;
+}
+
+.track-btn.tracked.interested:hover:not(:disabled) {
+  background: #ef4444;
+}
+
+/* Tracked state - other stages (read-only) */
+.track-btn.tracked.readonly {
+  background: #e2e8f0;
+  color: #64748b;
+  cursor: default;
+}
+
+/* Visual indicator - green border on job details card when tracked */
+.job-details-content.tracked {
+  border: 2px solid #10b981;
+  border-radius: 12px;
+}
+
+/* Visual indicator - different text color for tracked jobs in list */
+.job-item.tracked .job-title {
+  color: #10b981;
+  font-weight: 500;
+}
+
+/* =============================================================================
    Responsive
    ============================================================================= */
 
