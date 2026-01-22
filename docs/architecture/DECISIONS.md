@@ -1553,3 +1553,391 @@ T=2s   msg2 becomes available → 2+ second gap enforced
 - [ADR-019](./DECISIONS.md#adr-019-configurable-cloudwatch-log-groups-for-multi-worker-logging): CloudWatch log groups
 - Phase 2J: Crawler infrastructure
 - Phase 2K: Extractor infrastructure (separate queue)
+
+---
+
+## ADR-021: Standard SQS with Reserved Concurrency for Extractor Rate Limiting
+
+**Date:** 2026-01-10
+**Status:** Accepted
+
+### Context
+Phase 2K ExtractorWorker needs to read HTML from S3, extract job descriptions/requirements, and save to Neon database. Unlike CrawlerWorker (which hits external career sites), ExtractorWorker only accesses our own infrastructure. However, we need to protect Neon from connection exhaustion and high QPS.
+
+### Decision
+Use **Standard SQS queue** with **ReservedConcurrentExecutions=5** and **BatchSize=1**.
+
+### Alternatives Considered
+
+| Approach | Concurrency Control | Retry Semantics | Complexity |
+|----------|---------------------|-----------------|------------|
+| **Standard SQS + Reserved Concurrency** (chosen) | Lambda limit | Simple (auto-retry) | Low |
+| Standard SQS + BatchSize=10 | Fewer Lambdas | Complex (partial failure) | Medium |
+| FIFO with single MessageGroupId | Sequential only | Simple | Low but slow |
+| FIFO with MessageGroupId per company | 6 concurrent | Simple | Low |
+| No queue (inline in CrawlerWorker) | Tied to crawler | N/A | Low but coupled |
+
+### Why Standard SQS (not FIFO)
+
+Unlike CrawlerWorker, ExtractorWorker has no external rate limiting requirements:
+- Reads from our S3 bucket (no third-party throttling)
+- Writes to our Neon database (we control the limits)
+- No per-company ordering needed
+
+FIFO overhead (300 msg/s limit, deduplication) provides no benefit here.
+
+### Why BatchSize=1 (not 10)
+
+| Factor | BatchSize=1 | BatchSize=10 |
+|--------|-------------|--------------|
+| Retry semantics | Simple - failed job retries alone | Complex - entire batch retries |
+| Partial failure | N/A | Must manually delete successful messages |
+| Error isolation | One bad job doesn't affect others | One stuck job delays batch |
+| Code complexity | Simple loop | Batch result reporting, partial ack |
+| Lambda cost | More invocations | Fewer invocations |
+
+With SQS Lambda trigger, if Lambda throws, the **entire batch** goes back to queue. Handling partial success requires manually deleting successful messages, losing SQS's built-in retry/DLQ behavior:
+
+```python
+# Complex batch handling (avoided)
+for msg in batch:
+    try:
+        process(msg)
+        sqs.delete_message(msg.receipt_handle)  # Manual delete
+    except:
+        pass  # Leave in queue for retry
+# Must return success even if some failed
+```
+
+The simplicity of BatchSize=1 outweighs batch efficiency gains for our low-volume use case.
+
+### Why ReservedConcurrentExecutions=5
+
+**Neon protection:**
+- Each Lambda = 1 DB connection
+- 5 Lambdas = 5 max connections (Neon free tier has 100)
+- Prevents connection exhaustion during bursts
+
+**QPS estimation:**
+- Extraction: ~200-500ms per job (S3 read + parse + DB write)
+- 5 Lambdas × 2-5 jobs/sec = 10-25 QPS
+- Well within Neon capacity
+
+**Comparison to CrawlerWorker:**
+- CrawlerWorker: 6 concurrent (one per company via FIFO MessageGroupId)
+- ExtractorWorker: 5 concurrent (via ReservedConcurrentExecutions)
+- Similar concurrency, different mechanisms for different needs
+
+### Configuration
+
+| Setting | Value | Reason |
+|---------|-------|--------|
+| Queue Type | Standard | No rate limiting needed |
+| BatchSize | 1 | Simple retry semantics |
+| ReservedConcurrentExecutions | 5 | Limit DB connections |
+| VisibilityTimeout | 60s | Longer than Lambda timeout |
+| Lambda Timeout | 30s | Extraction is fast |
+
+### Message Flow
+
+```
+CrawlerWorker (success, content changed)
+    ↓
+SendMessage to ExtractorQueue
+    ↓
+ExtractorWorker (max 5 concurrent)
+    ├── Read HTML from S3
+    ├── Call extract_raw_info() for company
+    ├── Save description/requirements to jobs table
+    └── Mark job status = 'ready'
+```
+
+### Skipped Jobs
+
+When CrawlerWorker detects unchanged content (SimHash match), it:
+- Marks job as `skipped` directly
+- Does NOT send to ExtractorQueue
+- Existing extracted data remains valid
+
+### Run Finalization
+
+After each job, ExtractorWorker checks if all jobs for the run are in terminal state (ready/skipped/error). If so, marks run as `finished`. Race condition is harmless - multiple workers may both see "0 remaining" and mark finished (idempotent).
+
+### Consequences
+
+**Positive:**
+- Simple retry semantics with BatchSize=1
+- Bounded DB connections (max 5)
+- Higher throughput than FIFO (no ordering overhead)
+- Decoupled from CrawlerWorker (independent retries)
+
+**Negative:**
+- More Lambda invocations than batching (slightly higher cost)
+- No exactly-once semantics (at-least-once is fine for idempotent updates)
+
+### Related
+- [ADR-020](./DECISIONS.md#adr-020-sqs-fifo-with-messagegroupid-for-crawler-rate-limiting): CrawlerWorker FIFO queue
+- [ADR-017](./DECISIONS.md#adr-017-use-simhash-for-raw-content-deduplication): SimHash skip logic
+- [ADR-022](./DECISIONS.md#adr-022-distributed-run-finalization): Run finalization
+- Phase 2K: Extractor infrastructure
+
+---
+
+## ADR-022: Distributed Run Finalization
+
+**Date:** 2026-01-10
+**Status:** Accepted
+
+### Context
+With distributed workers (CrawlerWorker and ExtractorWorker), we need a strategy to detect when all jobs for a run are complete and mark the run as `finished`. Multiple workers process jobs concurrently, so any worker could be the "last" one.
+
+### Decision
+**Each worker checks for run completion after processing a job.** If no pending jobs remain, the worker marks the run as `finished`.
+
+### Job Status State Machine
+
+```
+pending → ready      (crawl + extraction success)
+pending → skipped    (SimHash match, content unchanged)
+pending → error      (crawl or extraction failed)
+pending → expired    (job not in current extraction results)
+```
+
+**Terminal statuses:** `ready`, `skipped`, `error`, `expired`
+**Non-terminal:** `pending`
+
+### Who Sets What Status
+
+| Worker | Status | Condition |
+|--------|--------|-----------|
+| IngestionWorker | `pending` | UPSERT all jobs at run start |
+| IngestionWorker | `expired` | Job not in current extraction results |
+| CrawlerWorker | `skipped` | SimHash match (content unchanged) |
+| CrawlerWorker | `error` | Crawl failed after 3 retries |
+| ExtractorWorker | `ready` | Extraction success |
+| ExtractorWorker | `error` | Extraction failed |
+
+### Finalization Logic
+
+After setting a terminal status, worker executes:
+
+```sql
+-- Step 1: Check if any pending jobs remain
+SELECT COUNT(*) FROM jobs
+WHERE run_id = :run_id AND status = 'pending';
+
+-- Step 2: If count = 0, finalize run
+UPDATE ingestion_runs
+SET status = 'finished',
+    finished_at = NOW(),
+    jobs_ready = (SELECT COUNT(*) FROM jobs WHERE run_id = :run_id AND status = 'ready'),
+    jobs_skipped = (SELECT COUNT(*) FROM jobs WHERE run_id = :run_id AND status = 'skipped'),
+    jobs_failed = (SELECT COUNT(*) FROM jobs WHERE run_id = :run_id AND status = 'error')
+WHERE id = :run_id
+  AND status = 'ingesting';
+```
+
+### Race Condition Handling
+
+Two workers finish simultaneously:
+```
+Worker A: finishes job 99, sees 0 pending → marks run finished
+Worker B: finishes job 100, sees 0 pending → tries to mark run finished
+```
+
+The `AND status = 'ingesting'` guard makes this idempotent:
+- First UPDATE succeeds, changes status to `finished`
+- Second UPDATE affects 0 rows (status no longer `ingesting`)
+
+No locks needed. Both workers can safely attempt finalization.
+
+### Which Workers Finalize
+
+| Worker | Can Finalize? | When |
+|--------|---------------|------|
+| CrawlerWorker | ✅ | After setting `skipped` or `error` |
+| ExtractorWorker | ✅ | After setting `ready` or `error` |
+
+Both check because either could process the last job:
+- If all jobs are SimHash matches → CrawlerWorker sets all to `skipped` → CrawlerWorker finalizes
+- If all jobs need extraction → ExtractorWorker sets last to `ready` → ExtractorWorker finalizes
+- Mixed scenario → whichever worker processes the last pending job finalizes
+
+### Consistency Guarantees
+
+Using single Neon primary with READ COMMITTED isolation:
+- All writes go to same master
+- Once a transaction commits, other transactions see it on next query
+- No async replication lag (that's only for read replicas)
+
+The finalization check (`SELECT COUNT(*)`) will see all committed job status updates.
+
+### Alternatives Considered
+
+| Approach | Pros | Cons |
+|----------|------|------|
+| **Worker-based check** (chosen) | Simple, no extra infra | Every worker checks |
+| Dedicated finalizer Lambda | Single responsibility | Extra Lambda, timing complexity |
+| Frontend polling triggers | Offloads to client | Unreliable if user closes browser |
+| SQS message counting | Event-driven | Complex state tracking |
+
+### Consequences
+
+**Positive:**
+- No additional infrastructure
+- Works with any number of concurrent workers
+- Idempotent - safe with race conditions
+- Immediate finalization when last job completes
+
+**Negative:**
+- Extra DB query per job (check pending count)
+- Multiple workers may attempt finalization (but only one succeeds)
+
+### Related
+- [ADR-021](./DECISIONS.md#adr-021-standard-sqs-with-reserved-concurrency-for-extractor-rate-limiting): ExtractorWorker concurrency
+- [ADR-020](./DECISIONS.md#adr-020-sqs-fifo-with-messagegroupid-for-crawler-rate-limiting): CrawlerWorker queue
+- Phase 2K: Extractor infrastructure
+
+---
+
+## ADR-023: Separate Events Table vs JSONB for Job Tracking
+
+**Date:** 2026-01-21
+**Status:** Accepted
+**Phase:** 4A
+
+### Context
+
+Phase 4 introduces job tracking where users can track jobs they're interested in and log events (phone screens, interviews, offers, etc.). We need to decide how to store these events.
+
+A complete job tracking cycle involves multiple events per job:
+- Phone screen: date, time, location, notes
+- Technical interview: date, time, location, notes
+- Onsite: date, time, location, notes
+- Offer/rejection: date, notes
+
+We also want a calendar view showing upcoming events across all tracked jobs.
+
+### Decision
+
+Use a **separate `tracking_events` table** instead of JSONB array in the tracking table.
+
+### Alternatives Considered
+
+**Option A: JSONB array in job_tracking table**
+```python
+events: Mapped[list] = mapped_column(JSONB, default=list)
+# [{"type": "phone_screen", "date": "2026-01-15", "time": "14:00", "location": "Zoom", "note": "..."}]
+```
+
+**Option B: Separate tracking_events table** (chosen)
+```sql
+tracking_events:
+- id (PK)
+- tracking_id (FK job_tracking)
+- event_type (varchar)
+- event_date (date)
+- event_time (time, nullable)
+- location (text, nullable)
+- note (text, nullable)
+- created_at (timestamp)
+```
+
+### Reasoning
+
+| Requirement | JSONB | Separate Table |
+|-------------|-------|----------------|
+| Calendar query: "all interviews this week" | Hard - scan all rows, parse JSON | Easy - `WHERE event_date BETWEEN ... AND type = 'interview'` |
+| Sort events by date across jobs | App-side after fetching all | `ORDER BY event_date` |
+| Index on event_date | Not possible | Yes |
+| Add new event fields | Schema-less, flexible | Requires migration |
+| Query complexity | Single table read | JOIN required |
+
+The calendar view is the deciding factor. With JSONB, showing "all events this week" requires:
+1. Fetching ALL tracked jobs for the user
+2. Parsing JSON arrays in application code
+3. Filtering and sorting in memory
+
+With a separate table:
+```sql
+SELECT te.*, jt.job_id, j.title, j.company
+FROM tracking_events te
+JOIN job_tracking jt ON te.tracking_id = jt.id
+JOIN jobs j ON jt.job_id = j.id
+WHERE jt.user_id = :user_id
+  AND te.event_date BETWEEN :start AND :end
+ORDER BY te.event_date, te.event_time;
+```
+
+### Performance Considerations
+
+JOINs are not a concern at this scale:
+- Expected: ~50-100 tracked jobs per user, ~3-5 events per job = ~500 events max
+- With indexes on `tracking_id` and `event_date`, query time is < 1ms
+- PostgreSQL handles millions of rows with proper indexes
+
+### Schema
+
+**job_tracking table:**
+```sql
+CREATE TABLE job_tracking (
+    id SERIAL PRIMARY KEY,
+    user_id BIGINT REFERENCES users(user_id) ON DELETE CASCADE,
+    job_id INTEGER REFERENCES jobs(id) ON DELETE CASCADE,
+    stage VARCHAR(20) DEFAULT 'interested',
+    notes TEXT,
+    resume_s3_url TEXT,
+    tracked_at TIMESTAMP DEFAULT NOW(),
+    updated_at TIMESTAMP DEFAULT NOW(),
+    UNIQUE(user_id, job_id)
+);
+```
+
+**tracking_events table:**
+```sql
+CREATE TABLE tracking_events (
+    id SERIAL PRIMARY KEY,
+    tracking_id INTEGER REFERENCES job_tracking(id) ON DELETE CASCADE,
+    event_type VARCHAR(50) NOT NULL,
+    event_date DATE NOT NULL,
+    event_time TIME,
+    location TEXT,
+    note TEXT,
+    created_at TIMESTAMP DEFAULT NOW()
+);
+
+CREATE INDEX idx_tracking_events_tracking_id ON tracking_events(tracking_id);
+CREATE INDEX idx_tracking_events_date ON tracking_events(event_date);
+```
+
+### Event Types
+
+| Type | Description |
+|------|-------------|
+| `phone_screen` | Initial recruiter call |
+| `technical` | Technical phone/video interview |
+| `onsite` | On-site or virtual panel |
+| `hiring_manager` | Hiring manager interview |
+| `offer` | Offer received |
+| `negotiation` | Salary/terms negotiation |
+| `accepted` | Offer accepted |
+| `rejected` | Application rejected |
+| `withdrawn` | User withdrew application |
+| `other` | Custom event type |
+
+### Consequences
+
+**Positive:**
+- Efficient calendar queries with date range filtering
+- Can index event_date for fast lookups
+- Clean separation of concerns (tracking vs events)
+- Standard relational design, easy to understand
+
+**Negative:**
+- Extra table and JOINs (negligible at this scale)
+- Less flexible than schema-less JSONB
+- Migration required to add new event fields
+
+### Related
+- Phase 4A: Job tracking database design
+- Phase 4C: Calendar view implementation
