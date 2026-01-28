@@ -205,6 +205,17 @@ Resources:
     Type: AWS::S3::Bucket
     Properties:
       BucketName: !Sub "jobhunt-resume-content-${AWS::AccountId}"
+      CorsConfiguration:
+        CorsRules:
+          - AllowedOrigins:
+              - "http://localhost:3000"
+              - "https://zduan-job.vercel.app"
+            AllowedMethods:
+              - PUT
+              - GET
+            AllowedHeaders:
+              - "*"
+            MaxAge: 3600
 
   # ==========================================================================
   # API Gateway
