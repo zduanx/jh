@@ -67,9 +67,12 @@ Resources:
       Policies:
         - LambdaInvokePolicy:
             FunctionName: !Ref IngestionWorker
+        - S3CrudPolicy:
+            BucketName: !Ref ResumeContentBucket
       Environment:
         Variables:
           WORKER_FUNCTION_NAME: !Ref IngestionWorker
+          RESUME_CONTENT_BUCKET: !Ref ResumeContentBucket
       Events:
         HttpApiEvent:
           Type: HttpApi
@@ -196,6 +199,14 @@ Resources:
             ExpirationInDays: 30
 
   # ==========================================================================
+  # S3 Bucket - Resume storage (user-uploaded PDFs)
+  # ==========================================================================
+  ResumeContentBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "jobhunt-resume-content-${AWS::AccountId}"
+
+  # ==========================================================================
   # API Gateway
   # ==========================================================================
   HttpApi:
@@ -252,6 +263,10 @@ Outputs:
   RawContentBucketName:
     Description: S3 bucket for raw HTML content
     Value: !Ref RawContentBucket
+
+  ResumeContentBucketName:
+    Description: S3 bucket for user-uploaded resumes
+    Value: !Ref ResumeContentBucket
 
   ExtractorQueueUrl:
     Description: Extractor SQS queue URL

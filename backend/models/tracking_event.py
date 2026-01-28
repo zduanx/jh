@@ -1,19 +1,34 @@
 from datetime import datetime, timezone, date, time
+from enum import Enum
 from typing import Optional
-from sqlalchemy import Integer, String, Text, DateTime, Date, Time, ForeignKey
+from sqlalchemy import Integer, Text, DateTime, Date, Time, ForeignKey
+from sqlalchemy.dialects.postgresql import ENUM as PgEnum
 from sqlalchemy.orm import Mapped, mapped_column
 from models import Base
 
 
-class EventType:
-    """Tracking event type constants."""
-    PHONE_SCREEN = "phone_screen"
-    TECHNICAL = "technical"
-    ONSITE = "onsite"
-    HIRING_MANAGER = "hiring_manager"
+class EventType(str, Enum):
+    """Tracking event type enum.
+
+    Mirrors TrackingStage but excludes 'interested' since it's not an actionable event.
+    """
+    APPLIED = "applied"
+    SCREENING = "screening"
+    INTERVIEW = "interview"
+    REFERENCE = "reference"
     OFFER = "offer"
-    NEGOTIATION = "negotiation"
-    OTHER = "other"
+    ACCEPTED = "accepted"
+    DECLINED = "declined"
+    REJECTED = "rejected"
+
+
+# PostgreSQL enum type for event_type
+event_type_enum = PgEnum(
+    EventType,
+    name="event_type",
+    create_type=False,  # Created by migration
+    values_callable=lambda e: [member.value for member in e],
+)
 
 
 class TrackingEvent(Base):
@@ -37,7 +52,7 @@ class TrackingEvent(Base):
         nullable=False
     )
 
-    event_type: Mapped[str] = mapped_column(String(50), nullable=False)
+    event_type: Mapped[EventType] = mapped_column(event_type_enum, nullable=False)
 
     event_date: Mapped[date] = mapped_column(Date, nullable=False)
 

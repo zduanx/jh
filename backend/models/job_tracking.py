@@ -1,20 +1,39 @@
 from datetime import datetime, timezone
 from enum import Enum
 from sqlalchemy import BigInteger, Integer, Boolean, Text, DateTime, ForeignKey
-from sqlalchemy.dialects.postgresql import ENUM as PgEnum
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.dialects.postgresql import ENUM as PgEnum, JSONB
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 from models import Base
 
 
 class TrackingStage(str, Enum):
-    """Job tracking stage enum."""
+    """Job tracking stage enum.
+
+    Stage progression: interested -> applied -> screening -> interview -> reference -> offer -> accepted/declined
+    'rejected' can occur at any point and locks the card.
+
+    Note: 'interviewing' was renamed to 'interview' in Phase 4C migration.
+    """
     INTERESTED = "interested"
     APPLIED = "applied"
     SCREENING = "screening"
-    INTERVIEWING = "interviewing"
+    INTERVIEW = "interview"
+    REFERENCE = "reference"
     OFFER = "offer"
     ACCEPTED = "accepted"
+    DECLINED = "declined"
     REJECTED = "rejected"
+
+
+# Stage progression order (for validation)
+STAGE_ORDER = [
+    TrackingStage.INTERESTED,
+    TrackingStage.APPLIED,
+    TrackingStage.SCREENING,
+    TrackingStage.INTERVIEW,
+    TrackingStage.REFERENCE,
+    TrackingStage.OFFER,
+]
 
 
 # PostgreSQL enum type for stage
@@ -52,6 +71,9 @@ class JobTracking(Base):
         nullable=False
     )
 
+    # Relationship to Job for eager loading
+    job = relationship("Job", lazy="select")
+
     stage: Mapped[TrackingStage] = mapped_column(
         tracking_stage_enum,
         nullable=False,
@@ -64,7 +86,7 @@ class JobTracking(Base):
         default=False
     )
 
-    notes: Mapped[str] = mapped_column(Text, nullable=True)
+    notes: Mapped[dict] = mapped_column(JSONB, nullable=True, default=dict, server_default='{}')
 
     resume_s3_url: Mapped[str] = mapped_column(Text, nullable=True)
 
