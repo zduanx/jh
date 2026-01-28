@@ -918,16 +918,28 @@
 
 .trk-stepper {
   display: flex;
-  align-items: center;
-  margin-bottom: 20px;
+  align-items: flex-start;
+  margin-bottom: 12px;
   width: 100%;
 }
 
 .trk-stepper-main {
-  display: flex;
-  align-items: center;
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 8px;
   flex: 1;
-  min-width: 0;
+  position: relative;
+}
+
+/* Connector lines between nodes */
+.trk-stepper-main::before {
+  content: '';
+  position: absolute;
+  top: 6px;
+  left: 10%;
+  right: 10%;
+  height: 2px;
+  background: #e2e8f0;
 }
 
 .trk-stepper-node {
@@ -936,6 +948,8 @@
   align-items: center;
   cursor: pointer;
   transition: opacity 0.15s ease;
+  position: relative;
+  z-index: 1;
 }
 
 .trk-stepper-node.locked {
@@ -983,29 +997,21 @@
   color: #3b82f6;
 }
 
+/* Hide the old flex-based line elements */
 .trk-stepper-line {
-  flex: 1;
-  height: 2px;
-  background: #e2e8f0;
-  margin: 0 8px;
-  margin-bottom: 18px;
-  min-width: 20px;
+  display: none;
 }
 
-.trk-stepper-line.locked {
-  background: #f1f5f9;
-}
-
-/* Terminal stages (accepted/declined) - inline continuation */
+/* Terminal stages (accepted/declined) - vertical stack */
 .trk-stepper-terminal {
   display: flex;
-  flex-direction: row;
+  flex-direction: column;
   align-items: center;
-  gap: 16px;
-  margin-left: 12px;
-  padding-left: 12px;
+  gap: 8px;
+  margin-left: 16px;
+  padding-left: 16px;
   border-left: 2px solid #e2e8f0;
-  flex-shrink: 0;
+  min-width: 120px;
 }
 
 .trk-stepper-node.terminal {
@@ -1024,17 +1030,7 @@
 }
 
 .trk-stepper-branch-line {
-  width: 12px;
-  height: 2px;
-  background: #e2e8f0;
-}
-
-.trk-stepper-node.terminal.completed .trk-stepper-branch-line {
-  background: #3b82f6;
-}
-
-.trk-stepper-node.terminal.next .trk-stepper-branch-line {
-  background: #93c5fd;
+  display: none;
 }
 
 /* =============================================================================
@@ -1043,27 +1039,44 @@
 
 .trk-stage-cards {
   display: flex;
-  gap: 8px;
-  overflow-x: auto;
+  align-items: flex-start;
+  width: 100%;
   padding-bottom: 8px;
+}
+
+.trk-stage-cards-main {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 8px;
+  flex: 1;
 }
 
 .trk-stage-cards-terminal {
   display: flex;
   flex-direction: column;
   gap: 8px;
-  margin-left: 8px;
+  margin-left: 16px;
+  padding-left: 16px;
+  border-left: 2px solid #e2e8f0;
+  min-width: 120px;
 }
 
 .trk-stage-card {
-  min-width: 100px;
-  max-width: 140px;
   padding: 10px;
   background: #f8fafc;
   border: 1px solid #e2e8f0;
   border-radius: 8px;
   font-size: 12px;
   transition: all 0.15s ease;
+  box-sizing: border-box;
+  min-width: 0;
+  overflow: hidden;
+}
+
+/* Terminal stage cards */
+.trk-stage-cards-terminal .trk-stage-card {
+  width: 100%;
+  min-height: auto;
 }
 
 .trk-stage-card.completed {

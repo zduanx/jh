@@ -78,25 +78,17 @@ function ProgressStepper({ currentStage, events = [], isRejected, onStageClick }
       <div className="trk-stepper-main">
         {MAIN_STAGES.map((stage, index) => {
           const state = getStageState(stage, index);
-          const isLast = index === MAIN_STAGES.length - 1;
 
           return (
-            <React.Fragment key={stage}>
-              {/* Stage node */}
-              <div
-                className={`trk-stepper-node ${state}`}
-                onClick={() => handleClick(stage, state)}
-                title={stage}
-              >
-                <div className="trk-stepper-dot" />
-                <span className="trk-stepper-label">{stage}</span>
-              </div>
-
-              {/* Connector line (except after last) */}
-              {!isLast && (
-                <div className={`trk-stepper-line ${getStageState(MAIN_STAGES[index + 1], index + 1) === 'locked' ? 'locked' : ''}`} />
-              )}
-            </React.Fragment>
+            <div
+              key={stage}
+              className={`trk-stepper-node ${state}`}
+              onClick={() => handleClick(stage, state)}
+              title={stage}
+            >
+              <div className="trk-stepper-dot" />
+              <span className="trk-stepper-label">{stage}</span>
+            </div>
           );
         })}
       </div>

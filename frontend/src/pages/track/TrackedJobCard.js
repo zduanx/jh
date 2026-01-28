@@ -361,20 +361,22 @@ function TrackedJobCard({
 
             {/* Stage Cards */}
             <div className="trk-stage-cards">
-              {MAIN_STAGES.map((stageName) => (
-                <StageCard
-                  key={stageName}
-                  stageName={stageName}
-                  event={eventsByType[stageName]}
-                  stageData={getStageData(stageName)}
-                  state={getStageState(stageName)}
-                  isRejected={isRejected}
-                  onAdd={handleStageAdd}
-                  onEdit={handleStageEdit}
-                  onDelete={handleStageDelete}
-                  disabled={disabled}
-                />
-              ))}
+              <div className="trk-stage-cards-main">
+                {MAIN_STAGES.map((stageName) => (
+                  <StageCard
+                    key={stageName}
+                    stageName={stageName}
+                    event={eventsByType[stageName]}
+                    stageData={getStageData(stageName)}
+                    state={getStageState(stageName)}
+                    isRejected={isRejected}
+                    onAdd={handleStageAdd}
+                    onEdit={handleStageEdit}
+                    onDelete={handleStageDelete}
+                    disabled={disabled}
+                  />
+                ))}
+              </div>
               {/* Terminal stages */}
               <div className="trk-stage-cards-terminal">
                 {TERMINAL_STAGES.map((stageName) => (
