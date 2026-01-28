@@ -1,5 +1,5 @@
 """
-API routes for job tracking (Phase 4A/4B/4C).
+API routes for job tracking (Phase 4A/4B/4C/4D).
 
 Endpoints:
 - GET    /api/tracked/ids              Get tracked job IDs with stage info (4A)
@@ -13,10 +13,13 @@ Event endpoints (Phase 4C):
 - PATCH  /api/tracked/{tracking_id}/events/{event_id}   Update event
 - DELETE /api/tracked/{tracking_id}/events/{event_id}   Delete latest event (auto-rollback)
 
-Resume endpoints (Phase 4D):
+Resume endpoints (Phase 4C):
 - GET    /api/tracked/{tracking_id}/resume/upload-url   Get presigned URL for direct S3 upload
 - POST   /api/tracked/{tracking_id}/resume/confirm      Confirm upload and save S3 URL to DB
 - GET    /api/tracked/{tracking_id}/resume/url          Get presigned URL for download/preview
+
+Calendar endpoints (Phase 4D):
+- GET    /api/tracked/calendar/events  Get all events for calendar view (default: ±3 months)
 
 Note: Rejection is handled via PATCH with stage="rejected" and notes containing
 rejected_at/rejection_reason - no separate endpoint needed.
@@ -25,7 +28,8 @@ rejected_at/rejection_reason - no separate endpoint needed.
 import logging
 import os
 from datetime import datetime, date, time
-from typing import Optional, Literal, Any
+from typing import Optional, Literal
+from dateutil.relativedelta import relativedelta
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session, joinedload
@@ -103,7 +107,7 @@ class TrackedJobEventInfo(BaseModel):
     event_date: date
     event_time: Optional[time] = None
     location: Optional[str] = None
-    note: Optional[str] = None
+    note: Optional[dict] = None  # JSONB: stage-specific data (e.g., {type, with_person, note})
     created_at: datetime
     is_deletable: bool = False
 
@@ -163,7 +167,7 @@ class TrackingEventResponse(BaseModel):
     event_date: date
     event_time: Optional[time] = None
     location: Optional[str] = None
-    note: Optional[str] = None
+    note: Optional[dict] = None  # JSONB: stage-specific data (e.g., {type, with_person, note})
     created_at: datetime
     is_deletable: bool = False
 
@@ -176,7 +180,7 @@ class CreateEventRequest(BaseModel):
     event_date: date
     event_time: Optional[time] = None
     location: Optional[str] = None
-    note: Optional[str] = None
+    note: Optional[dict] = None  # JSONB: stage-specific data (e.g., {type, with_person, note})
 
 
 class UpdateEventRequest(BaseModel):
@@ -184,7 +188,7 @@ class UpdateEventRequest(BaseModel):
     event_date: Optional[date] = None
     event_time: Optional[time] = None
     location: Optional[str] = None
-    note: Optional[str] = None
+    note: Optional[dict] = None  # JSONB: stage-specific data (e.g., {type, with_person, note})
 
 
 class DeleteEventResponse(BaseModel):
@@ -192,6 +196,42 @@ class DeleteEventResponse(BaseModel):
     deleted_event_id: int
     new_stage: str
     next_deletable_event: Optional[dict] = None
+
+
+# =============================================================================
+# Phase 4D: Calendar Events Models
+# =============================================================================
+
+class CalendarEventJobInfo(BaseModel):
+    """Job info embedded in calendar event response."""
+    title: Optional[str]
+    company: str
+    company_logo_url: Optional[str] = None
+
+
+class CalendarEventInfo(BaseModel):
+    """Single event for calendar view."""
+    id: int
+    tracking_id: int
+    event_type: str
+    event_date: date
+    event_time: Optional[time] = None
+    location: Optional[str] = None
+    note: Optional[dict] = None  # JSONB: stage-specific data (e.g., {type, with_person, note})
+    job: CalendarEventJobInfo
+
+
+class CalendarDateRange(BaseModel):
+    """Date range for cached events."""
+    start: date
+    end: date
+
+
+class CalendarEventsResponse(BaseModel):
+    """Response for GET /api/tracked/calendar/events."""
+    events: list[CalendarEventInfo]
+    range: CalendarDateRange
+    months: list[str]  # List of months covered, e.g. ["2025-10", "2025-11", ...]
 
 
 # =============================================================================
@@ -262,9 +302,7 @@ class TrackingNotes(BaseModel):
     salary: Optional[str] = None
     location: Optional[str] = None
     general_note: Optional[str] = None
-
-    # Per-stage data (keyed by stage name, includes "rejected")
-    stages: Optional[dict[str, Any]] = None
+    # Note: Stage-specific data is now stored directly on tracking_events.note (JSONB)
 
 
 # =============================================================================
@@ -354,10 +392,10 @@ def validate_stage_data(stage_name: str, data: dict) -> dict:
 
 def merge_notes(existing: Optional[dict], updates: dict) -> dict:
     """
-    Deep merge updates into existing notes dict.
+    Merge updates into existing notes dict.
 
-    Handles special 'stages' key by merging per-stage data.
     Updates always win - they overwrite existing data (allowing fixes).
+    Note: Stage-specific data is now stored directly on tracking_events.note (JSONB).
 
     Args:
         existing: Current notes dict from database (or None)
@@ -369,51 +407,10 @@ def merge_notes(existing: Optional[dict], updates: dict) -> dict:
     result = dict(existing) if existing else {}
 
     for key, value in updates.items():
-        if key == "stages" and value is not None:
-            # Deep merge stages
-            if "stages" not in result:
-                result["stages"] = {}
-            for stage_name, stage_data in value.items():
-                # Validate stage data if schema exists (permissive - allows fixing bad data)
-                if stage_name in STAGE_SCHEMAS and stage_data:
-                    stage_data = validate_stage_data(stage_name, stage_data)
-                result["stages"][stage_name] = stage_data
-        else:
-            # Allow None to explicitly clear a field
-            result[key] = value
+        # Allow None to explicitly clear a field
+        result[key] = value
 
     return result
-
-
-def get_stage_data(notes: Optional[dict], stage_name: str) -> Optional[dict]:
-    """
-    Safely extract and validate stage data from notes.
-
-    Returns validated data if parseable, raw data if not, or None if missing.
-    Useful for reading stage data with graceful fallback.
-
-    Args:
-        notes: Notes dict from database
-        stage_name: Stage key to extract
-
-    Returns:
-        Stage data dict (validated if possible) or None if not present
-    """
-    if not notes or "stages" not in notes:
-        return None
-    stages = notes.get("stages", {})
-    if not stages or stage_name not in stages:
-        return None
-
-    raw_data = stages[stage_name]
-    if not raw_data:
-        return None
-
-    # Try to validate, but return raw data if validation fails
-    parsed = parse_stage_data(stage_name, raw_data)
-    if parsed:
-        return parsed.model_dump(exclude_none=True)
-    return raw_data  # Return raw data as fallback
 
 
 def get_events_for_tracking(db: Session, tracking_id: int, is_rejected: bool = False) -> list[TrackedJobEventInfo]:
@@ -630,6 +627,109 @@ async def get_tracked_ids(
         )
 
     return TrackedIdsResponse(tracked=tracked)
+
+
+# =============================================================================
+# Phase 4D: Calendar Events Endpoint
+# =============================================================================
+
+@router.get("/calendar/events", response_model=CalendarEventsResponse)
+async def get_calendar_events(
+    start: Optional[date] = Query(None, description="Start date (default: start of month -3 months)"),
+    end: Optional[date] = Query(None, description="End date (default: end of month +3 months)"),
+    current_user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Get all events for calendar view.
+
+    Returns events across all tracked jobs within date range.
+    Default range: -3 months to +3 months from today, aligned to month boundaries.
+
+    Dates are always aligned to full months:
+    - start: first day of the month
+    - end: last day of the month
+
+    Frontend tracks which months have been fetched and merges results.
+    """
+    user_id = current_user["user_id"]
+    today = date.today()
+
+    # Default to ±3 months if not specified, aligned to month boundaries
+    if start is None:
+        start_month = today - relativedelta(months=3)
+        start = date(start_month.year, start_month.month, 1)  # First day of month
+    else:
+        # Align provided start to first day of month
+        start = date(start.year, start.month, 1)
+
+    if end is None:
+        end_month = today + relativedelta(months=3)
+        # Last day of month
+        next_month = end_month + relativedelta(months=1)
+        end = date(next_month.year, next_month.month, 1) - relativedelta(days=1)
+    else:
+        # Align provided end to last day of month
+        next_month = end + relativedelta(months=1)
+        end = date(next_month.year, next_month.month, 1) - relativedelta(days=1)
+
+    # Query events with job info
+    events = (
+        db.query(TrackingEvent)
+        .join(JobTracking, TrackingEvent.tracking_id == JobTracking.id)
+        .join(Job, JobTracking.job_id == Job.id)
+        .filter(JobTracking.user_id == user_id)
+        .filter(TrackingEvent.event_date >= start)
+        .filter(TrackingEvent.event_date <= end)
+        .options(
+            joinedload(TrackingEvent.tracking).joinedload(JobTracking.job)
+        )
+        .order_by(TrackingEvent.event_date, TrackingEvent.event_time)
+        .all()
+    )
+
+    # Build response
+    event_list = []
+    for event in events:
+        tracking = event.tracking
+        job = tracking.job
+
+        # Get company logo URL
+        company_lower = job.company.lower() if job.company else ""
+        company_meta = COMPANY_METADATA.get(company_lower, {})
+        logo_url = company_meta.get("logo_url") if company_meta else None
+
+        event_type_str = event.event_type.value if hasattr(event.event_type, 'value') else event.event_type
+
+        event_list.append(CalendarEventInfo(
+            id=event.id,
+            tracking_id=event.tracking_id,
+            event_type=event_type_str,
+            event_date=event.event_date,
+            event_time=event.event_time,
+            location=event.location,
+            note=event.note,  # JSONB: stage-specific data stored directly on event
+            job=CalendarEventJobInfo(
+                title=job.title,
+                company=job.company,
+                company_logo_url=logo_url,
+            ),
+        ))
+
+    # Generate list of months covered by this query
+    months_list = []
+    current = date(start.year, start.month, 1)
+    while current <= end:
+        months_list.append(current.strftime("%Y-%m"))
+        current = current + relativedelta(months=1)
+
+    logger.info(f"Fetched {len(event_list)} calendar events for user {user_id} ({start} to {end}, months: {months_list})")
+
+    return CalendarEventsResponse(
+        events=event_list,
+        range=CalendarDateRange(start=start, end=end),
+        months=months_list,
+    )
 
 
 @router.post("", response_model=TrackJobResponse)
@@ -1429,5 +1529,3 @@ async def get_resume_download_url(
     logger.info(f"Generated download URL for user {user_id}, tracking {tracking_id}")
 
     return ResumeDownloadUrlResponse(url=url)
-
-

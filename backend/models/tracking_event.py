@@ -1,10 +1,13 @@
 from datetime import datetime, timezone, date, time
 from enum import Enum
-from typing import Optional
+from typing import Optional, TYPE_CHECKING
 from sqlalchemy import Integer, Text, DateTime, Date, Time, ForeignKey
-from sqlalchemy.dialects.postgresql import ENUM as PgEnum
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.dialects.postgresql import ENUM as PgEnum, JSONB
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 from models import Base
+
+if TYPE_CHECKING:
+    from models.job_tracking import JobTracking
 
 
 class EventType(str, Enum):
@@ -52,6 +55,9 @@ class TrackingEvent(Base):
         nullable=False
     )
 
+    # Relationship to JobTracking for eager loading
+    tracking: Mapped["JobTracking"] = relationship("JobTracking", lazy="select")
+
     event_type: Mapped[EventType] = mapped_column(event_type_enum, nullable=False)
 
     event_date: Mapped[date] = mapped_column(Date, nullable=False)
@@ -60,7 +66,8 @@ class TrackingEvent(Base):
 
     location: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
-    note: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    # JSONB field storing stage-specific data (e.g., {type: "phone", with_person: "xxx", note: "..."})
+    note: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
