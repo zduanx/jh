@@ -11,19 +11,17 @@ import { MdEdit, MdAdd, MdDelete, MdLock } from 'react-icons/md';
  *
  * Props:
  * - stageName: string - stage name (applied, screening, etc.)
- * - event: object | null - event data if completed { id, event_type, event_date, event_time, location, note, is_deletable }
- * - stageData: object | null - stage-specific data from notes.stages[stageName]
+ * - event: object | null - event data if completed { id, event_type, event_date, event_time, location, note (JSONB), is_deletable }
  * - state: 'completed' | 'next' | 'locked'
  * - isRejected: boolean - job is rejected, all cards locked
  * - onAdd: (stageName) => void - callback to add this stage
- * - onEdit: (stageName, event, stageData) => void - callback to edit
+ * - onEdit: (stageName, event) => void - callback to edit
  * - onDelete: (eventId) => void - callback to delete (only for latest event)
  * - disabled: boolean - disable actions when request in progress
  */
 function StageCard({
   stageName,
   event,
-  stageData,
   state,
   isRejected,
   onAdd,
@@ -31,6 +29,8 @@ function StageCard({
   onDelete,
   disabled,
 }) {
+  // event.note is now JSONB containing all stage data
+  const noteData = event?.note || {};
   // Format date for display
   const formatDate = (dateStr) => {
     if (!dateStr) return '';
@@ -48,35 +48,35 @@ function StageCard({
     return `${hour12}:${minutes} ${ampm}`;
   };
 
-  // Get summary text from stage data
+  // Get summary text from event.note (JSONB)
   const getSummary = () => {
-    if (!stageData) return null;
+    if (!noteData || Object.keys(noteData).length === 0) return null;
 
     const summaryParts = [];
 
     // Show type if available (applied, screening, interview)
-    if (stageData.type) {
-      summaryParts.push(stageData.type);
+    if (noteData.type) {
+      summaryParts.push(noteData.type);
     }
 
     // Show round for interview
-    if (stageData.round) {
-      summaryParts.push(stageData.round);
+    if (noteData.round) {
+      summaryParts.push(noteData.round);
     }
 
     // Show with_person for screening
-    if (stageData.with_person) {
-      summaryParts.push(`w/ ${stageData.with_person}`);
+    if (noteData.with_person) {
+      summaryParts.push(`w/ ${noteData.with_person}`);
     }
 
     // Show referrer for referral type
-    if (stageData.type === 'referral' && stageData.referrer_name) {
-      summaryParts.push(`via ${stageData.referrer_name}`);
+    if (noteData.type === 'referral' && noteData.referrer_name) {
+      summaryParts.push(`via ${noteData.referrer_name}`);
     }
 
     // Show amount for offer
-    if (stageData.amount) {
-      summaryParts.push(stageData.amount);
+    if (noteData.amount) {
+      summaryParts.push(noteData.amount);
     }
 
     return summaryParts.length > 0 ? summaryParts.join(' - ') : null;
@@ -90,7 +90,7 @@ function StageCard({
 
   const handleEdit = () => {
     if (!disabled && onEdit) {
-      onEdit(stageName, event, stageData);
+      onEdit(stageName, event);
     }
   };
 
@@ -155,7 +155,8 @@ function StageCard({
           )}
         </div>
         {summary && <div className="trk-stage-card-summary">{summary}</div>}
-        {event?.note && <div className="trk-stage-card-note">{event.note}</div>}
+        {event?.location && <div className="trk-stage-card-location">{event.location}</div>}
+        {noteData.note && <div className="trk-stage-card-note">{noteData.note}</div>}
       </div>
       {!isRejected && (
         <div className="trk-stage-card-actions">

@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import TrackedJobCard from './TrackedJobCard';
+import CalendarView from './CalendarView';
 import './TrackPage.css';
 
 const API_URL = process.env.REACT_APP_API_URL || 'http://localhost:8000';
@@ -225,13 +226,23 @@ function TrackPage() {
   // Handler for updating tracking metadata (used by JobMetadataInputs)
   const handleUpdateTracking = async (trackingId, updates) => {
     await updateTracking(trackingId, updates);
-    // Update local state to reflect changes
+    // Update local state to reflect changes (deep merge for stages)
     setTrackedJobs((prev) =>
-      prev.map((t) =>
-        t.id === trackingId
-          ? { ...t, notes: { ...t.notes, ...updates.notes } }
-          : t
-      )
+      prev.map((t) => {
+        if (t.id !== trackingId) return t;
+
+        // Deep merge notes, especially stages
+        const existingNotes = t.notes || {};
+        const newNotes = updates.notes || {};
+        const mergedNotes = { ...existingNotes, ...newNotes };
+
+        // If both have stages, merge them instead of replacing
+        if (existingNotes.stages && newNotes.stages) {
+          mergedNotes.stages = { ...existingNotes.stages, ...newNotes.stages };
+        }
+
+        return { ...t, notes: mergedNotes };
+      })
     );
   };
 
@@ -239,7 +250,7 @@ function TrackPage() {
   const handleCreateEvent = async (trackingId, eventData) => {
     const newEvent = await createEvent(trackingId, eventData);
 
-    // Update local state
+    // Update local state - note is now JSONB on the event itself
     setTrackedJobs((prev) =>
       prev.map((t) => {
         if (t.id !== trackingId) return t;
@@ -252,7 +263,7 @@ function TrackPage() {
           event_date: newEvent.event_date,
           event_time: newEvent.event_time,
           location: newEvent.location,
-          note: newEvent.note,
+          note: newEvent.note, // JSONB containing all stage data
           is_deletable: true,
         });
 
@@ -271,7 +282,7 @@ function TrackPage() {
   const handleUpdateEvent = async (trackingId, eventId, eventData) => {
     const updatedEvent = await updateEvent(trackingId, eventId, eventData);
 
-    // Update local state
+    // Update local state - note is now JSONB on the event itself
     setTrackedJobs((prev) =>
       prev.map((t) => {
         if (t.id !== trackingId) return t;
@@ -283,7 +294,7 @@ function TrackPage() {
                 event_date: updatedEvent.event_date,
                 event_time: updatedEvent.event_time,
                 location: updatedEvent.location,
-                note: updatedEvent.note,
+                note: updatedEvent.note, // JSONB containing all stage data
                 is_deletable: updatedEvent.is_deletable,
               }
             : e
@@ -437,13 +448,7 @@ function TrackPage() {
   // Render content based on tab
   const renderContent = () => {
     if (activeTab === 'calendar') {
-      return (
-        <div className="trk-calendar-placeholder">
-          <div className="trk-calendar-placeholder-icon">📅</div>
-          <h3>Calendar View</h3>
-          <p>Coming soon - Schedule interviews and track deadlines</p>
-        </div>
-      );
+      return <CalendarView />;
     }
 
     // Manage tab
@@ -573,7 +578,6 @@ function TrackPage() {
         <button
           className={`trk-tab ${activeTab === 'calendar' ? 'active' : ''}`}
           onClick={() => setActiveTab('calendar')}
-          disabled
         >
           Calendar
         </button>

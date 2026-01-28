@@ -47,7 +47,6 @@ function TrackedJobCard({
     isOpen: false,
     stageName: null,
     event: null,
-    stageData: null,
   });
 
   // Reject modal state
@@ -82,11 +81,6 @@ function TrackedJobCard({
   events.forEach((e) => {
     eventsByType[e.event_type] = e;
   });
-
-  // Get stage data from notes
-  const getStageData = (stageName) => {
-    return notes?.stages?.[stageName] || null;
-  };
 
   // Determine stage state
   const getStageState = (stageName) => {
@@ -131,12 +125,11 @@ function TrackedJobCard({
   const handleStageClick = (stageName) => {
     const state = getStageState(stageName);
     if (state === 'completed') {
-      // Open edit form
+      // Open edit form - event.note is JSONB containing all stage data
       setFormModal({
         isOpen: true,
         stageName,
         event: eventsByType[stageName],
-        stageData: getStageData(stageName),
       });
     } else if (state === 'next') {
       // Open add form
@@ -144,7 +137,6 @@ function TrackedJobCard({
         isOpen: true,
         stageName,
         event: null,
-        stageData: null,
       });
     }
   };
@@ -155,17 +147,15 @@ function TrackedJobCard({
       isOpen: true,
       stageName,
       event: null,
-      stageData: null,
     });
   };
 
   // Handle stage card edit
-  const handleStageEdit = (stageName, event, stageData) => {
+  const handleStageEdit = (stageName, event) => {
     setFormModal({
       isOpen: true,
       stageName,
       event,
-      stageData,
     });
   };
 
@@ -176,20 +166,8 @@ function TrackedJobCard({
     }
   };
 
-  // Handle form save
-  const handleFormSave = async (stageName, eventData, stageData, existingEventId) => {
-    // Save stage data to notes
-    if (stageData && Object.keys(stageData).length > 0) {
-      const notesUpdate = {
-        stages: {
-          ...(notes?.stages || {}),
-          [stageName]: stageData,
-        },
-      };
-      await onUpdateTracking(id, { notes: notesUpdate });
-    }
-
-    // Create or update event
+  // Handle form save - eventData.note is now JSONB containing all stage data
+  const handleFormSave = async (stageName, eventData, existingEventId) => {
     if (existingEventId) {
       // Update existing event
       if (onUpdateEvent) {
@@ -224,7 +202,7 @@ function TrackedJobCard({
 
   // Close form modal
   const closeFormModal = () => {
-    setFormModal({ isOpen: false, stageName: null, event: null, stageData: null });
+    setFormModal({ isOpen: false, stageName: null, event: null });
   };
 
   return (
@@ -367,7 +345,6 @@ function TrackedJobCard({
                     key={stageName}
                     stageName={stageName}
                     event={eventsByType[stageName]}
-                    stageData={getStageData(stageName)}
                     state={getStageState(stageName)}
                     isRejected={isRejected}
                     onAdd={handleStageAdd}
@@ -384,7 +361,6 @@ function TrackedJobCard({
                     key={stageName}
                     stageName={stageName}
                     event={eventsByType[stageName]}
-                    stageData={getStageData(stageName)}
                     state={getStageState(stageName)}
                     isRejected={isRejected}
                     onAdd={handleStageAdd}
@@ -403,7 +379,6 @@ function TrackedJobCard({
       <StageCardForm
         stageName={formModal.stageName}
         event={formModal.event}
-        stageData={formModal.stageData}
         isOpen={formModal.isOpen}
         onClose={closeFormModal}
         onSave={handleFormSave}

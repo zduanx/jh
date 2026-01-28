@@ -1183,6 +1183,12 @@
   margin-bottom: 2px;
 }
 
+.trk-stage-card-location {
+  color: #64748b;
+  font-size: 10px;
+  margin-bottom: 2px;
+}
+
 .trk-stage-card-note {
   color: #94a3b8;
   font-size: 10px;

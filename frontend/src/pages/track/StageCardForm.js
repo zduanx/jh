@@ -6,17 +6,15 @@ import { STAGE_FIELDS } from '../../types/trackingSchema';
  *
  * Props:
  * - stageName: string - stage being edited
- * - event: object | null - existing event (null if adding new)
- * - stageData: object | null - existing stage data from notes
+ * - event: object | null - existing event with note as JSONB (null if adding new)
  * - isOpen: boolean - whether modal is open
  * - onClose: () => void - close modal
- * - onSave: (stageName, eventData, stageData) => Promise - save callback
+ * - onSave: (stageName, eventData, existingEventId) => Promise - save callback
  * - disabled: boolean - disable form during save
  */
 function StageCardForm({
   stageName,
   event,
-  stageData,
   isOpen,
   onClose,
   onSave,
@@ -29,18 +27,22 @@ function StageCardForm({
   const [formData, setFormData] = useState({});
   const [eventDate, setEventDate] = useState('');
   const [eventTime, setEventTime] = useState('');
+  const [eventLocation, setEventLocation] = useState('');
   const [eventNote, setEventNote] = useState('');
   const [isSaving, setIsSaving] = useState(false);
 
   // Initialize form when opening
   useEffect(() => {
     if (isOpen) {
-      // Initialize stage data fields
+      // event.note is now JSONB containing all stage data including text note
+      const noteData = event?.note || {};
+
+      // Initialize stage data fields from event.note
       const initialData = {};
       Object.keys(fields).forEach((fieldName) => {
         if (fieldName === 'datetime') return; // Handle separately
-        if (fieldName === 'note') return; // Handle as event note
-        initialData[fieldName] = stageData?.[fieldName] ?? fields[fieldName]?.default ?? '';
+        if (fieldName === 'note') return; // Handle as text note field
+        initialData[fieldName] = noteData[fieldName] ?? fields[fieldName]?.default ?? '';
       });
       setFormData(initialData);
 
@@ -48,7 +50,8 @@ function StageCardForm({
       if (event) {
         setEventDate(event.event_date || '');
         setEventTime(event.event_time?.slice(0, 5) || ''); // HH:MM format
-        setEventNote(event.note || '');
+        setEventLocation(event.location || '');
+        setEventNote(noteData.note || ''); // Text note is inside the JSONB
       } else {
         // Default to today and current time for new events
         const now = new Date();
@@ -57,10 +60,11 @@ function StageCardForm({
         const minutes = String(now.getMinutes()).padStart(2, '0');
         setEventDate(today);
         setEventTime(`${hours}:${minutes}`);
+        setEventLocation('');
         setEventNote('');
       }
     }
-  }, [isOpen, stageName, event, stageData, fields]);
+  }, [isOpen, stageName, event, fields]);
 
   const handleFieldChange = (fieldName, value) => {
     setFormData((prev) => ({ ...prev, [fieldName]: value }));
@@ -72,18 +76,22 @@ function StageCardForm({
 
     setIsSaving(true);
     try {
-      // Build event data
+      // Build note as JSONB containing all stage-specific data including text note
+      const noteData = {
+        ...formData,
+        note: eventNote || null,
+      };
+
+      // Build event data with note as JSONB
       const eventData = {
         event_type: stageName,
         event_date: eventDate,
         event_time: eventTime || null,
-        note: eventNote || null,
+        location: eventLocation || null,
+        note: noteData,
       };
 
-      // Build stage data (excluding datetime and note which are in event)
-      const stageDataToSave = { ...formData };
-
-      await onSave(stageName, eventData, stageDataToSave, event?.id);
+      await onSave(stageName, eventData, event?.id);
       onClose();
     } catch (err) {
       console.error('Failed to save stage:', err);
@@ -132,6 +140,20 @@ function StageCardForm({
               disabled={isSaving}
             />
           </div>
+
+          {/* Location field (optional, not for accepted/declined/rejected) */}
+          {!['accepted', 'declined', 'rejected'].includes(stageName) && (
+            <div className="trk-form-field">
+              <label>Location</label>
+              <input
+                type="text"
+                value={eventLocation}
+                onChange={(e) => setEventLocation(e.target.value)}
+                placeholder="e.g., Video call, Office, Phone"
+                disabled={isSaving}
+              />
+            </div>
+          )}
 
           {/* Stage-specific fields */}
           {Object.entries(fields).map(([fieldName, fieldConfig]) => {

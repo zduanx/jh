@@ -1,0 +1,642 @@
+/* =============================================================================
+   CalendarView - Phase 4D Calendar Tab (Apple Calendar Style)
+   ============================================================================= */
+
+.trk-cal-container {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+/* Loading and Error states */
+.trk-cal-loading,
+.trk-cal-error {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 60px 24px;
+}
+
+.trk-cal-error {
+  background: #fef2f2;
+  border-radius: 12px;
+  border: 1px solid #fecaca;
+}
+
+/* =============================================================================
+   Calendar Grid Wrapper
+   ============================================================================= */
+
+.trk-cal-grid-wrapper {
+  background: white;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  overflow: visible;
+}
+
+/* Calendar Header */
+.trk-cal-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 16px 20px;
+  border-bottom: 1px solid #e2e8f0;
+  background: #f8fafc;
+}
+
+.trk-cal-nav {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.trk-cal-nav-btn {
+  width: 32px;
+  height: 32px;
+  border: 1px solid #e2e8f0;
+  background: white;
+  border-radius: 6px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 18px;
+  color: #64748b;
+  transition: all 0.15s ease;
+}
+
+.trk-cal-nav-btn:hover {
+  background: #f1f5f9;
+  border-color: #cbd5e1;
+  color: #1e293b;
+}
+
+.trk-cal-month-title {
+  font-size: 18px;
+  font-weight: 600;
+  color: #1e293b;
+  margin: 0;
+  margin-left: 12px;
+}
+
+.trk-cal-today-btn {
+  padding: 8px 16px;
+  font-size: 13px;
+  font-weight: 500;
+  color: #3b82f6;
+  background: white;
+  border: 1px solid #3b82f6;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.trk-cal-today-btn:hover {
+  background: #3b82f6;
+  color: white;
+}
+
+.trk-cal-header-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.trk-cal-toggle-btn {
+  width: 32px;
+  height: 32px;
+  border: 1px solid #e2e8f0;
+  background: white;
+  border-radius: 6px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  color: #64748b;
+  transition: all 0.15s ease;
+}
+
+.trk-cal-toggle-btn:hover {
+  background: #f1f5f9;
+  border-color: #cbd5e1;
+  color: #1e293b;
+}
+
+/* Weekday Headers */
+.trk-cal-weekdays {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  background: #f8fafc;
+  border-bottom: 1px solid #e2e8f0;
+}
+
+.trk-cal-weekday {
+  padding: 10px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #64748b;
+  text-transform: uppercase;
+  text-align: center;
+}
+
+/* Calendar Grid */
+.trk-cal-grid {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+}
+
+/* Calendar Cell */
+.trk-cal-cell {
+  min-height: 100px;
+  border-right: 1px solid #e2e8f0;
+  border-bottom: 1px solid #e2e8f0;
+  padding: 4px;
+  background: white;
+  transition: background 0.15s ease;
+}
+
+.trk-cal-cell:nth-child(7n) {
+  border-right: none;
+}
+
+.trk-cal-cell:hover {
+  background: #f8fafc;
+}
+
+.trk-cal-cell.outside {
+  background: #f8fafc;
+}
+
+.trk-cal-cell.outside .trk-cal-cell-date {
+  color: #94a3b8;
+}
+
+.trk-cal-cell.today {
+  background: #eff6ff;
+}
+
+.trk-cal-cell.expanded {
+  min-height: auto;
+  z-index: 10;
+  position: relative;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  border-color: #3b82f6;
+}
+
+/* Cell Header with Date */
+.trk-cal-cell-header {
+  padding: 4px 6px;
+  margin-bottom: 2px;
+}
+
+.trk-cal-cell-date {
+  font-size: 13px;
+  font-weight: 500;
+  color: #475569;
+}
+
+.trk-cal-cell-date.today {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  background: #3b82f6;
+  color: white;
+  border-radius: 50%;
+  font-weight: 600;
+}
+
+/* Events in Cell */
+.trk-cal-cell-events {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 0 2px;
+}
+
+.trk-cal-cell-event {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 6px;
+  background: #f1f5f9;
+  border-radius: 4px;
+  border-left: 3px solid;
+  font-size: 11px;
+  overflow: hidden;
+  cursor: pointer;
+}
+
+.trk-cal-cell-event:hover {
+  background: #e2e8f0;
+}
+
+/* Hover Card (fixed position, controlled by JS) */
+.trk-cal-hover-card {
+  display: none;
+  position: fixed;
+  width: 260px;
+  max-width: 300px;
+  background: white;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.2);
+  padding: 12px;
+  z-index: 1000;
+  pointer-events: none;
+}
+
+.trk-cal-hover-card.visible {
+  display: block;
+}
+
+.trk-cal-hover-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.trk-cal-hover-type {
+  font-size: 11px;
+  font-weight: 600;
+  color: white;
+  padding: 2px 8px;
+  border-radius: 4px;
+  text-transform: capitalize;
+}
+
+.trk-cal-hover-datetime {
+  font-size: 12px;
+  color: #64748b;
+  font-weight: 500;
+}
+
+.trk-cal-hover-company {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  font-weight: 600;
+  color: #1e293b;
+  margin-bottom: 2px;
+}
+
+.trk-cal-hover-logo {
+  width: 20px;
+  height: 20px;
+  border-radius: 4px;
+  object-fit: contain;
+}
+
+.trk-cal-hover-logo-placeholder {
+  width: 20px;
+  height: 20px;
+  border-radius: 4px;
+  background: #e2e8f0;
+  color: #64748b;
+  font-size: 11px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.trk-cal-hover-title {
+  font-size: 13px;
+  color: #64748b;
+  margin-bottom: 8px;
+}
+
+.trk-cal-hover-location {
+  font-size: 12px;
+  color: #64748b;
+  margin-bottom: 4px;
+}
+
+.trk-cal-hover-location::before {
+  content: '📍 ';
+  font-size: 11px;
+}
+
+.trk-cal-hover-note {
+  font-size: 12px;
+  color: #94a3b8;
+  font-style: italic;
+  border-top: 1px solid #e2e8f0;
+  padding-top: 8px;
+  margin-top: 4px;
+  max-height: 60px;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  word-wrap: break-word;
+}
+
+/* Stage Details (shared by hover card and event cards) */
+.trk-cal-stage-details {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 8px 0;
+  padding: 8px;
+  background: #f8fafc;
+  border-radius: 6px;
+  font-size: 12px;
+}
+
+.trk-cal-stage-detail {
+  display: flex;
+  gap: 6px;
+}
+
+.trk-cal-stage-label {
+  color: #64748b;
+  flex-shrink: 0;
+}
+
+.trk-cal-stage-value {
+  color: #1e293b;
+  font-weight: 500;
+}
+
+.trk-cal-cell-event-time {
+  color: #64748b;
+  font-weight: 500;
+  flex-shrink: 0;
+}
+
+.trk-cal-cell-event-title {
+  color: #1e293b;
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.trk-cal-cell-logo {
+  width: 14px;
+  height: 14px;
+  border-radius: 3px;
+  object-fit: contain;
+  flex-shrink: 0;
+}
+
+.trk-cal-cell-logo-placeholder {
+  width: 14px;
+  height: 14px;
+  border-radius: 3px;
+  background: #e2e8f0;
+  color: #64748b;
+  font-size: 9px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.trk-cal-cell-more {
+  font-size: 11px;
+  color: #64748b;
+  padding: 2px 6px;
+  cursor: pointer;
+}
+
+.trk-cal-cell-more:hover {
+  color: #3b82f6;
+}
+
+/* =============================================================================
+   Events Sections (Below Calendar)
+   ============================================================================= */
+
+.trk-cal-events-sections {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 24px;
+}
+
+.trk-cal-events-section {
+  background: white;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  padding: 16px;
+  max-height: 400px;
+  overflow-y: auto;
+}
+
+.trk-cal-section-title {
+  font-size: 16px;
+  font-weight: 600;
+  color: #1e293b;
+  margin: 0 0 16px 0;
+  padding-bottom: 12px;
+  border-bottom: 1px solid #e2e8f0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.trk-cal-section-count {
+  font-size: 12px;
+  font-weight: 500;
+  color: #64748b;
+  background: #f1f5f9;
+  padding: 2px 8px;
+  border-radius: 10px;
+}
+
+.trk-cal-no-events {
+  text-align: center;
+  padding: 24px 16px;
+  color: #64748b;
+}
+
+.trk-cal-no-events p {
+  margin: 0 0 8px 0;
+}
+
+.trk-cal-hint {
+  font-size: 13px;
+  color: #94a3b8;
+}
+
+.trk-cal-events-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+/* Event Card */
+.trk-cal-event-card {
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  padding: 12px;
+  transition: all 0.15s ease;
+}
+
+.trk-cal-event-card:hover {
+  border-color: #cbd5e1;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+}
+
+.trk-cal-event-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+  flex-wrap: wrap;
+}
+
+.trk-cal-event-type {
+  font-size: 11px;
+  font-weight: 600;
+  color: white;
+  padding: 2px 8px;
+  border-radius: 4px;
+  text-transform: capitalize;
+}
+
+.trk-cal-event-datetime {
+  font-size: 13px;
+  font-weight: 500;
+  color: #475569;
+}
+
+.trk-cal-event-job {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.trk-cal-event-company {
+  font-size: 14px;
+  font-weight: 600;
+  color: #1e293b;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.trk-cal-event-logo {
+  width: 20px;
+  height: 20px;
+  border-radius: 4px;
+  object-fit: contain;
+  flex-shrink: 0;
+}
+
+.trk-cal-event-logo-placeholder {
+  width: 20px;
+  height: 20px;
+  border-radius: 4px;
+  background: #e2e8f0;
+  color: #64748b;
+  font-size: 11px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.trk-cal-event-title {
+  font-size: 13px;
+  color: #64748b;
+}
+
+.trk-cal-event-location {
+  font-size: 12px;
+  color: #64748b;
+  margin-top: 6px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.trk-cal-event-location::before {
+  content: '📍';
+  font-size: 11px;
+}
+
+.trk-cal-event-note {
+  font-size: 12px;
+  color: #94a3b8;
+  margin-top: 6px;
+  font-style: italic;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* =============================================================================
+   Responsive
+   ============================================================================= */
+
+@media (max-width: 1024px) {
+  .trk-cal-events-sections {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 768px) {
+  .trk-cal-cell {
+    min-height: 80px;
+  }
+
+  .trk-cal-cell-event {
+    font-size: 10px;
+    padding: 2px 4px;
+  }
+
+  .trk-cal-cell-event-time {
+    display: none;
+  }
+
+  .trk-cal-header {
+    flex-direction: column;
+    gap: 12px;
+    align-items: flex-start;
+  }
+
+  .trk-cal-header-right {
+    width: 100%;
+  }
+
+  .trk-cal-today-btn {
+    flex: 1;
+  }
+
+  .trk-cal-toggle-btn {
+    flex-shrink: 0;
+  }
+}
+
+@media (max-width: 480px) {
+  .trk-cal-cell {
+    min-height: 60px;
+    padding: 2px;
+  }
+
+  .trk-cal-cell-date {
+    font-size: 11px;
+  }
+
+  .trk-cal-cell-events {
+    display: none;
+  }
+
+  .trk-cal-weekday {
+    font-size: 10px;
+    padding: 8px 4px;
+  }
+}
