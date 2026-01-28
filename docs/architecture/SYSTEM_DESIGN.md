@@ -289,13 +289,173 @@ See [ADR-014](./DECISIONS.md#adr-014-use-hybrid-text-search-postgresql-full-text
 
 ---
 
-## Phase 4: Job Tracking (Future)
+## Phase 4: Job Tracking
 
-- Add jobs to tracked list ("cart")
-- Track page with saved jobs
-- Application status tracking (applied, interviewing, etc.)
-- Timeline visualization
-- Analytics dashboard
+**Goals:**
+1. Track interesting jobs from Search page
+2. Manage tracked jobs with archive/delete functionality
+3. Progress through application stages
+4. Calendar view for interview scheduling (Phase 4C)
+
+### Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                         Track Page (React)                                   │
+│  ┌───────────────────────────────────────────────────────────────────────┐  │
+│  │  [Calendar]  [Manage]                                                  │  │
+│  └───────────────────────────────────────────────────────────────────────┘  │
+│  ┌─────────────────────────────────────────────────────────────────────────┐│
+│  │  GOOGLE (3 jobs)                                                        ││
+│  │  ┌─────────────────────────────────────────────────────────────────┐   ││
+│  │  │  Senior Engineer        Seattle    interested    [▼] [📦] [🗑]  │   ││
+│  │  └─────────────────────────────────────────────────────────────────┘   ││
+│  │  ┌─────────────────────────────────────────────────────────────────┐   ││
+│  │  │  Staff Engineer         NYC        applied       [▼] [📦] [🗑]  │   ││
+│  │  └─────────────────────────────────────────────────────────────────┘   ││
+│  │                                                                         ││
+│  │  ARCHIVED (1 job)                                                       ││
+│  │  ┌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┐   ││
+│  │  ┆  Data Scientist         Remote     rejected           [↩]      ┆   ││
+│  │  └╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┘   ││
+│  └─────────────────────────────────────────────────────────────────────────┘│
+└────────────────┬────────────────────────────────────────────────────────────┘
+                 │ HTTPS API calls
+                 ↓
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                      API Gateway + Lambda                                    │
+│                                                                              │
+│  GET    /api/tracked/ids       → Lightweight IDs for Search page cache      │
+│  GET    /api/tracked           → Full list with job details for Track page  │
+│  POST   /api/tracked           → Add job to tracking                        │
+│  PATCH  /api/tracked/{id}      → Update (archive, stage, notes)             │
+│  DELETE /api/tracked/{id}      → Remove from tracking                       │
+└────────────────┬────────────────────────────────────────────────────────────┘
+                 ↓
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                          PostgreSQL (Neon)                                   │
+│  job_tracking: user_id, job_id, stage, is_archived, notes, timestamps       │
+│  UNIQUE(user_id, job_id) - each user tracks a job once                      │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Tracking Stages
+
+```
+interested → applied → screening → interviewing → offer → accepted
+                                                      ↘
+                                                       → rejected
+```
+
+### RESTful API Design
+
+Single resource `/api/tracked` with unified PATCH for updates:
+
+| Method | Endpoint | Purpose |
+|--------|----------|---------|
+| GET | `/api/tracked/ids` | Lightweight IDs for Search page |
+| GET | `/api/tracked` | Full list with job details |
+| POST | `/api/tracked` | Add job to tracking |
+| PATCH | `/api/tracked/{id}` | Update any field (archive, stage, notes) |
+| DELETE | `/api/tracked/{id}` | Remove from tracking |
+
+### Archive vs Delete
+
+| Action | Behavior | When Available |
+|--------|----------|----------------|
+| Archive | Sets `is_archived=true`, preserves data | Any stage |
+| Delete | Removes tracking record | Only "interested" stage |
+
+Delete is restricted to prevent accidental removal of jobs with application progress.
+
+### Database Schema
+
+**job_tracking:**
+- id, user_id, job_id (FK to jobs)
+- stage (ENUM: interested, applied, screening, interview, reference, offer, accepted, declined, rejected)
+- is_archived (BOOLEAN)
+- notes (JSONB) - job metadata only: salary, location, general_note, resume_filename
+- resume_s3_url (TEXT)
+- tracked_at, updated_at
+
+**tracking_events:**
+- id, tracking_id (FK to job_tracking)
+- event_type (ENUM: applied, screening, interview, reference, offer, accepted, declined, rejected)
+- event_date, event_time, location
+- note (JSONB) - stage-specific data: {type, with_person, round, interviewers, amount, note, ...}
+- created_at
+
+Stage data (e.g., screening type=phone, with_person="John") is stored directly on the event's `note` JSONB field, not in job_tracking.notes. This keeps event-specific data with the event and enables efficient calendar queries.
+
+See [ADR-023](./DECISIONS.md#adr-023-separate-events-table-for-calendar-tracking) for calendar events design.
+
+### Expanded Card Layout
+
+```
++------------------------------------------------------------------------------+
+| [Logo] Senior Software Engineer        San Francisco         [▼][📦][🗑]    |
++------------------------------------------------------------------------------+
+|                                                                              |
+|  DESCRIPTION (scrollable)                                                    |
+|  +------------------------------------------------------------------------+  |
+|  | We are looking for a Senior Software Engineer...                       |  |
+|  +------------------------------------------------------------------------+  |
+|                                                                              |
+|  RESUME                                                                      |
+|  [resume.pdf]  [👁 Preview] [⬇ Download] [⬆ Replace]                        |
+|                                                                              |
+|  Salary: [__$150k-180k__]   Location: [__Remote__]   Note: [__fits well__]  |
+|                                                                              |
+|  PROGRESS                                              [Mark Rejected]       |
+|                                                                              |
+|      ●──────────●──────────○──────────○──────────○                           |
+|    applied    screening  interview  reference   offer                        |
+|                                                   +──○ accepted              |
+|   +--------+ +--------+ +--------+ +--------+    +──○ declined               |
+|   |Jan 21  | |Jan 23  | |  [+]   | | locked |                                |
+|   |Referral| |Phone   | |  Add   | |        |  +--------+                    |
+|   |John D. | |w/Sarah | |        | |        |  | locked |                    |
+|   |[Edit]  | |[Edit]  | |        | |        |  |        |                    |
+|   +--------+ +--------+ +--------+ +--------+  +--------+                    |
+|                                                                              |
++------------------------------------------------------------------------------+
+```
+
+### Stage Workflow
+
+```
+interested → applied → screening → interview → reference → offer → accepted
+                                                                ↘→ declined
+(rejected can occur at any stage - locks the card)
+```
+
+### Stage Card States
+
+| State | Appearance | Actions |
+|-------|------------|---------|
+| Completed | Date + summary + [Edit] | Can edit, latest can delete |
+| Next | [+ Add] button | Can add |
+| Locked | Greyed out | None |
+| Rejected | Read-only, greyed | Only "Undo" on rejected event |
+
+### Resume Upload (Direct-to-S3)
+
+```
+Frontend  →  Backend     Frontend  →  S3
+   │            │           │          │
+   │ GET URL    │           │          │
+   │───────────→│           │          │
+   │ presigned  │           │          │
+   │←───────────│           │          │
+   │            │  PUT file directly   │
+   │────────────────────────────────→  │
+   │ POST confirm           │          │
+   │───────────→│           │          │
+```
+
+S3 key: `resumes/{user_id}/{tracking_id}.pdf` (re-upload overwrites)
+
+See [ADR-024](./DECISIONS.md#adr-024-presigned-urls-for-resume-upload-direct-to-s3)
 
 ---
 

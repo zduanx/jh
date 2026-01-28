@@ -1,306 +1,200 @@
-# Phase 4C: Track Page - Full Features
+# Phase 4C: Track Page - Stepper, Stage Cards & Resume
 
-**Status**: 📋 Planning
-**Date**: January 21, 2026
-**Goal**: Complete job tracking with notes, stages, events, resume management, and calendar view
+**Status**: ✅ Completed
+**Date**: January 28, 2026
+**Goal**: Add progress tracking with stage cards, events, and resume upload for tracked jobs
 
 ---
 
 ## Overview
 
-Phase 4C completes the job tracking experience with all planned features. Users can manage their entire job application workflow: track stages, add notes, log events, upload customized resumes, and view upcoming events in a calendar.
+Phase 4C enhances the Track page with a visual progress stepper, per-stage cards with structured data, and resume upload functionality. Users can track their application journey through stages (applied → screening → interview → reference → offer), with each stage storing specific data. The design supports marking jobs as rejected at any point (locks further modifications) and uploading a resume per tracked job.
 
 **Included in this phase**:
-- Edit notes (per job)
-- Stage management with dropdown
-- Events management (add, edit, delete events)
-- Calendar view showing upcoming events across all jobs
-- Resume upload/download per job
-- Sorting and filtering
+- Horizontal progress stepper with 5 stages + terminal branches (accepted/declined)
+- Per-stage mini cards with stage-specific fields
+- Event endpoints (POST, PATCH, DELETE) with auto-rollback
+- Mark rejected functionality (locks card, undo available)
+- Job metadata inputs (salary, location, general note)
+- Resume upload/download via presigned URLs (direct-to-S3)
 
-**Explicitly excluded** (future considerations):
-- Analytics dashboard
-- Email/calendar integration
-- Interview scheduling
-- Reminders/notifications
+**Explicitly excluded** (deferred to Phase 4D):
+- Calendar tab with month view
+- Upcoming events aggregated view
+
+---
+
+## Key Achievements
+
+1. **Database Migration**
+   - Converted `job_tracking.notes` column from TEXT to JSONB for job metadata
+   - Added new stage enum values: `interview`, `reference`, `declined`
+   - Created `tracking_events` table with `event_type` enum
+   - Converted `tracking_events.note` from TEXT to JSONB for stage-specific data
+   - Migrations: `f5c246f90db1_phase4c_notes_jsonb_stage_enum.py`, `465f573218c3_convert_tracking_events_note_to_jsonb.py`
+
+2. **Event-Based Stage Progression**
+   - Separate `tracking_events` table for calendar-friendly queries
+   - Stage auto-updates when events are created
+   - Auto-rollback when latest event is deleted
+   - Reference: [ADR-023](../architecture/DECISIONS.md#adr-023-separate-events-table-for-calendar-tracking)
+
+3. **Resume Upload with Presigned URLs**
+   - Direct-to-S3 upload bypasses Lambda memory/timeout constraints
+   - Three endpoints: GET upload-url, POST confirm, GET download-url
+   - No delete needed - re-upload overwrites
+   - Reference: [ADR-024](../architecture/DECISIONS.md#adr-024-presigned-urls-for-resume-upload-direct-to-s3)
+
+4. **Schema Codegen**
+   - Backend Pydantic schemas → frontend JavaScript for form rendering
+   - Script: `backend/scripts/generate_tracking_schema.py`
+   - Integrated into dev workflow: `jcodegen`, `jready`, `jpushapi`
+
+5. **Frontend Components**
+   - ProgressStepper, StageCard, StageCardForm, JobMetadataInputs
+   - RejectModal with undo capability
+   - ResumeSection with upload/preview/download/replace
 
 ---
 
 ## Database Schema
 
-Uses the two-table design from Phase 4A (see [ADR-023](../architecture/DECISIONS.md#adr-023-separate-events-table-vs-jsonb-for-job-tracking)):
+**tracking_events table**:
+- Stores discrete events (applied, screening, interview, etc.)
+- `event_date`, `event_time`, `location` per event
+- `note` (JSONB) - stage-specific data: {type, with_person, round, interviewers, amount, note, ...}
+- Latest event determines current stage
+- Only latest event is deletable (enables undo/rollback)
 
-- `job_tracking`: Stores tracking metadata (stage, notes, resume)
-- `tracking_events`: Stores individual events (interviews, calls, etc.)
-
-The separate events table enables efficient calendar queries:
-```sql
-SELECT te.*, jt.job_id, j.title, j.company
-FROM tracking_events te
-JOIN job_tracking jt ON te.tracking_id = jt.id
-JOIN jobs j ON jt.job_id = j.id
-WHERE jt.user_id = :user_id
-  AND te.event_date BETWEEN :start AND :end
-ORDER BY te.event_date, te.event_time;
-```
-
----
-
-## Features
-
-### 1. Stage Dropdown
-
-**UI**:
-- Dropdown showing current stage with color indicator
-- On change: API call to update, optimistic UI update
-
-**Stage Colors**:
-| Stage | Color |
-|-------|-------|
-| interested | Gray |
-| applied | Blue |
-| screening | Yellow |
-| interviewing | Orange |
-| offer | Green |
-| accepted | Dark Green |
-| rejected | Red |
-| archived | Muted Gray |
-
-### 2. Notes Management
-
-**UI Options**:
-- Inline edit: Click notes area to edit in place
-- Modal edit: Click edit icon to open modal with textarea
-
-**Behavior**:
-- Auto-save with debounce (500ms) or explicit save button
-- Show "Saving..." indicator
-
-### 3. Events Management
-
-**Add Event Modal**:
-- Event type dropdown (phone_screen, technical, onsite, etc.)
-- Date picker (native `<input type="date">`)
-- Time picker (native `<input type="time">`, optional)
-- Location text field
-- Notes textarea
-
-**Events List**:
-- Chronological list within each tracked job card
-- Edit/delete buttons per event
-- Visual indicator for past vs upcoming events
-
-### 4. Calendar View
-
-**Design Decision**: Start with native date inputs, add `react-day-picker` if calendar UI needed.
-
-**Simple Upcoming Events List** (Phase 4C MVP):
-```
-┌─────────────────────────────────────────────────────────────────┐
-│  Upcoming Events                                                │
-├─────────────────────────────────────────────────────────────────┤
-│  Jan 22, 2026 • 2:00 PM                                        │
-│  Technical Interview - Google Senior Engineer                   │
-│  Location: Zoom                                                 │
-├─────────────────────────────────────────────────────────────────┤
-│  Jan 25, 2026 • 9:00 AM                                        │
-│  Onsite - Amazon Cloud Architect                               │
-│  Location: Seattle HQ                                           │
-└─────────────────────────────────────────────────────────────────┘
-```
-
-**Future Enhancement**: Month calendar view with `react-day-picker`
-
-### 5. Resume Upload/Download
-
-**Upload Flow**:
-1. Click "Upload Resume" button on job card
-2. File picker opens (accept: .pdf, .docx)
-3. File uploads to S3: `resumes/{user_id}/{job_id}/{filename}`
-4. `job_tracking.resume_s3_url` updated
-5. UI shows filename with download/replace/remove options
-
-**Download Flow**:
-1. Click resume filename or download icon
-2. Backend generates presigned S3 URL (1 hour expiry)
-3. Browser downloads file
-
-**UI States**:
-- No resume: [Upload Resume] button
-- Has resume: "resume.pdf" link + [Download] + [Replace] + [Remove]
-
-### 6. Sorting & Filtering
-
-**Sort Options**:
-- Tracked date (newest/oldest)
-- Company name (A-Z)
-- Stage (workflow order)
-- Next event date
-
-**Filter Options**:
-- By stage (multi-select chips)
-- By company (dropdown)
+**job_tracking.notes JSONB structure**:
+- Job metadata only: `salary`, `location`, `general_note`, `resume_filename`
+- Stage-specific data is stored on event.note, not here
 
 ---
 
 ## API Endpoints
 
-### Events CRUD
+**Event Endpoints**:
+- `POST /api/tracked/{id}/events` - Create event (updates stage)
+- `PATCH /api/tracked/{id}/events/{event_id}` - Update event details
+- `DELETE /api/tracked/{id}/events/{event_id}` - Delete latest event (auto-rollback)
 
-**POST /api/tracked/{tracking_id}/events**
-Create new event.
-
-```json
-Request:
-{
-  "event_type": "technical",
-  "event_date": "2026-01-22",
-  "event_time": "14:00",
-  "location": "Zoom",
-  "note": "System design round"
-}
-
-Response:
-{
-  "id": 1,
-  "tracking_id": 5,
-  "event_type": "technical",
-  "event_date": "2026-01-22",
-  "event_time": "14:00",
-  "location": "Zoom",
-  "note": "System design round",
-  "created_at": "2026-01-21T10:00:00Z"
-}
-```
-
-**GET /api/tracked/events?start=2026-01-01&end=2026-01-31**
-Get all events in date range (for calendar).
-
-```json
-Response:
-{
-  "events": [
-    {
-      "id": 1,
-      "event_type": "technical",
-      "event_date": "2026-01-22",
-      "event_time": "14:00",
-      "location": "Zoom",
-      "note": "System design round",
-      "job": {
-        "id": 123,
-        "title": "Senior Engineer",
-        "company": "google"
-      }
-    }
-  ]
-}
-```
-
-**PATCH /api/tracked/events/{event_id}**
-Update event.
-
-**DELETE /api/tracked/events/{event_id}**
-Delete event.
-
-### Tracking Updates
-
-**PATCH /api/tracked/{id}**
-Update tracked job (stage, notes).
-
-```json
-Request:
-{
-  "stage": "applied",
-  "notes": "Applied via website on Jan 21"
-}
-
-Response:
-{
-  "id": 1,
-  "stage": "applied",
-  "notes": "Applied via website on Jan 21",
-  "updated_at": "2026-01-21T12:00:00Z"
-}
-```
-
-### Resume
-
-**POST /api/tracked/{id}/resume**
-Upload resume (multipart/form-data).
-
-```json
-Response:
-{
-  "resume_s3_url": "s3://bucket/resumes/123/456/resume.pdf",
-  "filename": "resume.pdf"
-}
-```
-
-**GET /api/tracked/{id}/resume**
-Get presigned download URL.
-
-```json
-Response:
-{
-  "download_url": "https://s3.amazonaws.com/...",
-  "filename": "resume.pdf",
-  "expires_in": 3600
-}
-```
-
-**DELETE /api/tracked/{id}/resume**
-Remove resume.
+**Resume Endpoints**:
+- `GET /api/tracked/{id}/resume/upload-url` - Get presigned PUT URL
+- `POST /api/tracked/{id}/resume/confirm` - Save S3 key to database
+- `GET /api/tracked/{id}/resume/url` - Get presigned GET URL (preview/download)
 
 ---
 
-## Frontend Components
+## Highlights
 
-### New/Updated Files
+### Permissive Schema Validation
+
+Backend implements permissive parsing for JSONB notes - if data doesn't match schema, returns defaults rather than failing. This allows:
+- Reading old/malformed data gracefully
+- Updates to fix invalid data by overwriting
+
+### Stage Card State Machine
+
+| State | Appearance | Actions |
+|-------|------------|---------|
+| Completed | Date + summary | Edit, Delete (if latest) |
+| Next | [+ Add] button | Add new event |
+| Locked | Greyed out | None |
+| Rejected | Read-only | Only Undo available |
+
+### Resume Upload Flow
+
+1. Frontend validates file (PDF only, max 5MB)
+2. GET presigned URL from backend (5 min expiry)
+3. PUT file directly to S3
+4. POST confirm to save S3 key in database
+
+---
+
+## Testing & Validation
+
+**Manual Testing**:
+- ✅ Create/edit/delete events with stage auto-update
+- ✅ Reject job locks all stage cards
+- ✅ Undo rejection restores previous state
+- ✅ Resume upload/preview/download/replace
+- ✅ Metadata inputs save on blur
+
+**Automated Testing**:
+- Future: Unit tests for event endpoints
+- Future: Integration tests for stage rollback
+
+---
+
+## Metrics
+
+- **New database table**: 1 (tracking_events)
+- **New API endpoints**: 6 (3 event, 3 resume)
+- **New frontend components**: 6 (stepper, card, form, modal, inputs, resume)
+- **Migration files**: 1
+
+---
+
+## Next Steps → Phase 4D
+
+Phase 4D will implement the Calendar view:
+- Calendar tab with month view (react-day-picker)
+- Events from tracking_events table
+- Visual indicators for upcoming interviews/deadlines
+
+---
+
+## File Structure
 
 ```
+backend/
+├── api/
+│   └── tracking_routes.py        # Event + resume endpoints
+├── models/
+│   ├── job_tracking.py           # TrackingStage enum, resume_s3_url
+│   └── tracking_event.py         # TrackingEvent model, EventType enum, note JSONB
+├── scripts/
+│   └── generate_tracking_schema.py  # Pydantic → JS codegen
+└── alembic/versions/
+    ├── f5c246f90db1_phase4c_notes_jsonb_stage_enum.py
+    └── 465f573218c3_convert_tracking_events_note_to_jsonb.py
+
 frontend/src/pages/track/
-├── TrackPage.js              # Main page with sorting/filtering
-├── TrackPage.css             # Enhanced styles
-├── TrackedJobCard.js         # Job card with events, notes, stage
-├── StageDropdown.js          # Stage selector with colors
-├── NotesEditor.js            # Inline or modal notes editing
-├── EventsList.js             # List of events per job
-├── AddEventModal.js          # Modal for adding/editing events
-├── UpcomingEvents.js         # Calendar/list of upcoming events
-└── ResumeUpload.js           # Resume upload/download component
+├── TrackPage.js                  # Event + resume handlers
+├── TrackedJobCard.js             # Expanded layout
+├── ProgressStepper.js            # Horizontal stepper
+├── StageCard.js                  # Per-stage mini card
+├── StageCardForm.js              # Edit form modal
+├── JobMetadataInputs.js          # Salary/location/note
+├── RejectModal.js                # Rejection confirmation
+└── ResumeSection.js              # Upload/preview/download
 ```
 
----
-
-## Implementation Order
-
-1. **Stage dropdown**: Simple, high impact
-2. **Notes editing**: Inline with auto-save
-3. **Events CRUD**: Add/edit/delete events
-4. **Upcoming events list**: Simple date-sorted list
-5. **Sorting & filtering**: Client-side initially
-6. **Resume upload**: S3 integration
-7. **Resume download**: Presigned URLs
-8. **Calendar view**: If time permits, add react-day-picker
+**Key Files**:
+- [tracking_routes.py](../../backend/api/tracking_routes.py) - All tracking API endpoints
+- [TrackedJobCard.js](../../frontend/src/pages/track/TrackedJobCard.js) - Main card component
 
 ---
 
-## Open Questions (Resolved)
+## Key Learnings
 
-| Question | Decision |
-|----------|----------|
-| Notes editing: inline vs modal? | Start with inline, auto-save |
-| Calendar library? | Start with native inputs, add react-day-picker later if needed |
-| Events storage: JSONB vs table? | Separate table per [ADR-023](../architecture/DECISIONS.md#adr-023-separate-events-table-vs-jsonb-for-job-tracking) |
+### Presigned URL Pattern
+
+Direct-to-S3 uploads via presigned URLs bypass Lambda constraints (memory, timeout, API Gateway 10MB limit). Trade-off: 3 endpoints instead of 1, but enables unlimited file sizes.
+
+**Reference**: [ADR-024](../architecture/DECISIONS.md#adr-024-presigned-urls-for-resume-upload-direct-to-s3)
+
+### Event-Based vs JSONB-Only Tracking
+
+Using a separate events table (instead of just JSONB) enables efficient calendar queries by date range. JSONB still used for metadata that doesn't need date-based queries.
+
+**Reference**: [ADR-023](../architecture/DECISIONS.md#adr-023-separate-events-table-for-calendar-tracking)
 
 ---
 
-## Next Steps → Phase 5 (Future)
+## References
 
-Potential Phase 5 features:
-- Analytics dashboard (applications per week, response rates)
-- Month calendar view with react-day-picker
-- Export to CSV/spreadsheet
-- Email tracking integration
-- Reminders and notifications
+**External Documentation**:
+- [AWS S3 Presigned URLs](https://docs.aws.amazon.com/AmazonS3/latest/userguide/using-presigned-url.html) - Direct upload pattern
+- [PostgreSQL JSONB](https://www.postgresql.org/docs/current/datatype-json.html) - Structured notes storage

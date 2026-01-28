@@ -1,71 +1,116 @@
 # Job Hunt Tracker
 
-A full-stack job application tracking system built with React and FastAPI.
+A full-stack job application tracking system built with React and FastAPI, deployed on AWS Lambda and Vercel.
 
-**Status**: Phase 2 In Progress 🚧
-
----
-
-## 🚀 For AI Assistants: Resume Session
-
-**Start here**: [docs/SESSION_GUIDE.md](docs/SESSION_GUIDE.md)
-
-This guide contains:
-- Project current status
-- Quick links to all documentation
-- Codebase structure
-- Environment variables
-- AI assistant behavior preferences
+**Status**: All Phases Complete
 
 ---
 
-## Project Overview
+## Features
 
-**Purpose:** Track job applications across multiple companies with automated web scraping.
+- **Google OAuth Authentication** - Secure login with JWT tokens and email whitelist
+- **Job Ingestion Pipeline** - Automated crawling of company career pages with SimHash deduplication
+- **Hybrid Search** - Full-text and fuzzy search across job titles and descriptions
+- **Application Tracking** - Track jobs through stages (interested, applied, screening, interview, offer)
+- **Calendar View** - Visual overview of upcoming interviews and application events
+- **Resume Management** - Direct-to-S3 upload with presigned URLs
+- **Real-time Progress** - Server-Sent Events (SSE) for ingestion status updates
 
-**Tech Stack:**
-- **Frontend:** React (Vercel) ✅ Deployed
-- **Backend:** FastAPI (AWS Lambda + API Gateway) ✅ Deployed
-- **Auth:** Google OAuth + JWT ✅ Working
-- **URL Sourcing:** 6 company extractors ✅ Working
-- **Phase 2:** SQS Queues, S3 Storage, Web Crawling, Parsing 🚧 In Progress
-- **Future:** PostgreSQL/Neon, WebSocket, Application Tracking
+---
 
-**Goals:**
-1. Build practical job hunting tool
-2. Practice system design skills
-3. Learn AI-assisted development
-4. Deploy to production
+## Tech Stack
+
+### Frontend
+- React 19 with React Router
+- Google OAuth (@react-oauth/google)
+- Hosted on Vercel (global CDN)
+
+### Backend
+- FastAPI (Python 3.13)
+- SQLAlchemy + Alembic (ORM + migrations)
+- Mangum (Lambda adapter)
+- Hosted on AWS Lambda + API Gateway
+
+### Infrastructure
+- **Database**: PostgreSQL (Neon - serverless)
+- **Queue**: AWS SQS FIFO (rate-limited crawling)
+- **Storage**: AWS S3 (raw HTML, resumes)
+- **Real-time**: Server-Sent Events (SSE)
+
+---
+
+## Architecture
+
+```
+┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
+│   React App     │────▶│  API Gateway    │────▶│  AWS Lambda     │
+│   (Vercel)      │     │  + Lambda       │     │  Workers        │
+└─────────────────┘     └─────────────────┘     └─────────────────┘
+                               │                        │
+                               ▼                        ▼
+                        ┌─────────────────┐     ┌─────────────────┐
+                        │   PostgreSQL    │     │   AWS SQS       │
+                        │   (Neon)        │     │   + S3          │
+                        └─────────────────┘     └─────────────────┘
+```
 
 ---
 
 ## Quick Start
 
 ### Prerequisites
-- Node.js 18+ and npm
-- Python 3.13
+
+- Python 3.13+
+- Node.js 18+
+- AWS CLI configured
 - Google OAuth credentials
-- AWS account (for deployment)
 
 ### Local Development
 
-**Backend:**
-```bash
-cd backend
-python -m venv venv
-source venv/bin/activate  # Windows: venv\Scripts\activate
-pip install -r requirements.txt
-cp .env.example .env  # Add your secrets
-uvicorn main:app --reload
-```
+1. **Clone and setup environment files**
+   ```bash
+   # Backend
+   cp backend/.env.example backend/.env.local
 
-**Frontend:**
-```bash
-cd frontend
-npm install
-cp .env.example .env  # Add your config
-npm start
-```
+   # Frontend
+   cp frontend/.env.example frontend/.env.local
+   ```
+
+2. **Load development shortcuts**
+   ```bash
+   source dev.sh
+   jh-help  # See all available commands
+   ```
+
+3. **Start backend (Terminal 1)**
+   ```bash
+   source dev.sh
+   jh-start-be
+   ```
+
+4. **Start frontend (Terminal 2)**
+   ```bash
+   source dev.sh
+   jh-start-fe
+   ```
+
+5. **Access the application**
+   - Frontend: http://localhost:3000
+   - Backend API: http://localhost:8000
+   - API Docs: http://localhost:8000/docs
+
+### Dev Shortcuts Reference
+
+| Command | Description |
+|---------|-------------|
+| `jh-start-be` | Start backend server |
+| `jh-start-fe` | Start frontend server |
+| `jh-start-be-bg` | Start backend in background |
+| `jh-start-fe-bg` | Start frontend in background |
+| `jh-kill-all` | Stop all services |
+| `jh-status` | Check what's running |
+| `jh-be` | Navigate to backend directory |
+| `jh-fe` | Navigate to frontend directory |
 
 ---
 
@@ -73,197 +118,132 @@ npm start
 
 ```
 jh/
-├── docs/                  # All project documentation
-│   ├── SESSION_GUIDE.md   # 👈 START HERE (AI assistant entry point)
-│   ├── architecture/      # Architecture decisions and system design
-│   ├── deployment/        # Deployment guides
-│   ├── learning/          # Learning notes
-│   └── logs/              # Development logs and summaries
-│
-├── backend/               # FastAPI backend (AWS Lambda)
-│   ├── main.py            # Lambda handler
-│   ├── template.yaml      # CloudFormation/SAM
-│   ├── auth/              # Authentication module
-│   ├── sourcing/          # URL sourcing API
-│   └── extractors/        # Job URL extractors (6 companies)
-│       ├── enums.py       # Company enum
-│       ├── registry.py    # Extractor registry
-│       ├── base_extractor.py  # Abstract base class
-│       ├── config.py      # Configuration models
-│       └── {company}.py   # Google, Amazon, Anthropic, TikTok, Roblox, Netflix
-│
-├── frontend/              # React frontend (Vercel)
-│   └── src/               # React components
-│
-└── trials/                # Experimental code + API snapshots
+├── backend/
+│   ├── main.py              # FastAPI app + Lambda handler
+│   ├── template.yaml        # AWS SAM infrastructure
+│   ├── requirements.txt     # Python dependencies
+│   ├── api/                 # API routes
+│   ├── auth/                # Authentication logic
+│   ├── config/              # Settings (Pydantic)
+│   ├── models/              # SQLAlchemy models
+│   ├── extractors/          # Company career page extractors
+│   └── alembic/             # Database migrations
+├── frontend/
+│   ├── src/
+│   │   ├── App.js           # Main app + routing
+│   │   ├── pages/           # Page components
+│   │   └── components/      # Shared components
+│   └── package.json
+├── docs/
+│   ├── architecture/        # System design, API specs, ADRs
+│   ├── deployment/          # Deployment guides
+│   ├── learning/            # Tech learning notes
+│   └── logs/                # Phase summaries
+└── dev.sh                   # Development shortcuts
 ```
 
 ---
 
-## Documentation
+## API Overview
 
-### Architecture Docs
-- **[Architecture Decisions](docs/architecture/DECISIONS.md)** - All major tech decisions with reasoning
-- **[System Design](docs/architecture/SYSTEM_DESIGN.md)** - Overall architecture and future plans
-- **[API Design](docs/architecture/API_DESIGN.md)** - API endpoints and contracts
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/health` | GET | Health check |
+| `/auth/google` | POST | Google OAuth login |
+| `/api/user` | GET | Get current user |
+| `/api/ingestion/dry-run` | POST | Preview job extraction |
+| `/api/ingestion/start` | POST | Start ingestion run |
+| `/api/ingestion/progress/{id}` | GET | SSE progress stream |
+| `/api/jobs` | GET | List/search jobs |
+| `/api/tracked` | GET/POST | Tracked jobs management |
+| `/api/tracked/{id}` | PATCH/DELETE | Update/remove tracking |
+| `/api/tracked/calendar/events` | GET | Calendar events |
 
-### Learning Notes
-Start with **[docs/learning/README.md](docs/learning/README.md)** for quick topic lookup.
-
-**Topics covered:**
-- OAuth, JWT, authentication strategies
-- AWS services (EC2, Lambda, API Gateway)
-- FastAPI vs Django, REST vs GraphQL
-- React, routing, protected routes
-- Security best practices (HTTPS, token storage, vulnerabilities)
-
----
-
-## Current Status
-
-**Phase 1 - Authentication & Deployment** ✅ COMPLETE
-- [x] FastAPI backend with Google OAuth + JWT
-- [x] React frontend with protected routes
-- [x] Email whitelist access control
-- [x] Deploy to AWS Lambda + API Gateway (HTTPS)
-- [x] Deploy to Vercel (HTTPS)
-- [x] Full Phase 1 Summary: [docs/logs/PHASE_1_SUMMARY.md](docs/logs/PHASE_1_SUMMARY.md)
-
-**Phase 2 - Job URL Sourcing & Crawling Pipeline** 🚧 IN PROGRESS
-
-*Phase 2A: URL Generation (Completed)*
-- [x] Base extractor architecture (single class per company)
-- [x] 6 company extractors (Google, Amazon, Anthropic, TikTok, Roblox, Netflix)
-- [x] Title filtering with include/exclude patterns
-- [x] FastAPI endpoint: POST /api/sourcing (dry_run mode)
-- [x] Location field standardization (city, state)
-- [x] Company enum + registry with no lazy loading
-
-*Phase 2B: Crawling & Parsing (Next)*
-- [ ] Add `crawl_job(url)` methods to extractors
-- [ ] JobCrawlerLambda (crawling service)
-- [ ] SQS Queue A (URLs to crawl) + Queue B (IDs to parse)
-- [ ] S3 bucket for raw HTML storage
-- [ ] Database setup (Neon/RDS/DynamoDB - TBD)
-- [ ] Database schema (jobs, user_settings tables)
-- [ ] SourceURLLambda updates (SQS sending when dry_run=false)
-- [ ] Settings API (POST/GET /api/settings)
-- [ ] Companies API (GET /api/companies)
-- [ ] Queue status API (GET /api/queue/status)
-- [ ] Add `parse_job(html)` methods to extractors
-- [ ] JobParserLambda (parsing service)
-
-*Pending Decisions (See [DECISIONS.md](docs/architecture/DECISIONS.md#phase-2-pending-decisions))*
-- Database choice (PostgreSQL vs Neon vs DynamoDB)
-- Settings storage strategy
-- Crawling rate limits per company
-- Error handling (SQS DLQ, retry logic)
-- S3 cleanup policy
-- WebSocket vs polling for real-time updates
-
-**Phase 3 - Search & Application Tracking** (Planned)
-- Search API with filtering
-- Personal job tracker (add to list, CRUD operations)
-- Application status workflow
-
-**Phase 4 - Analytics & Enhancements** (Planned)
-- Timeline visualization
-- Analytics dashboard
-- Email notifications
-
-See [SYSTEM_DESIGN.md](docs/architecture/SYSTEM_DESIGN.md) for detailed Phase 2 architecture.
-
----
-
-## Commands
-
-### Backend
-```bash
-# Run development server
-uvicorn main:app --reload
-
-# Run tests (coming soon)
-pytest
-
-# Format code
-black .
-```
-
-### Frontend
-```bash
-# Run development server
-npm start
-
-# Build for production
-npm run build
-
-# Run tests (coming soon)
-npm test
-```
-
----
-
-## Environment Variables
-
-### Backend (.env)
-```bash
-GOOGLE_CLIENT_ID=your-client-id
-GOOGLE_CLIENT_SECRET=your-client-secret
-SECRET_KEY=your-jwt-secret-key-32-chars-minimum
-ALGORITHM=HS256
-ACCESS_TOKEN_EXPIRE_MINUTES=1440
-ALLOWED_ORIGINS=http://localhost:3000,https://your-app.vercel.app
-ALLOWED_EMAILS=your-email@gmail.com
-```
-
-### Frontend (.env)
-```bash
-REACT_APP_GOOGLE_CLIENT_ID=your-client-id
-REACT_APP_API_URL=http://localhost:8000  # Development
-# REACT_APP_API_URL=https://abc123.execute-api.us-east-1.amazonaws.com/prod  # Production
-```
-
-See [docs/deployment/ENVIRONMENT_SETUP.md](docs/deployment/ENVIRONMENT_SETUP.md) for complete details.
+See [API_DESIGN.md](docs/architecture/API_DESIGN.md) for complete documentation.
 
 ---
 
 ## Deployment
 
-### Backend (AWS Lambda + API Gateway)
-See [docs/deployment/AWS_LAMBDA_DEPLOYMENT.md](docs/deployment/AWS_LAMBDA_DEPLOYMENT.md)
+### Backend (AWS Lambda)
 
-**Quick Deploy:**
 ```bash
 cd backend
 sam build && sam deploy
 ```
 
-### Frontend (Vercel)
-See [docs/deployment/VERCEL_DEPLOYMENT.md](docs/deployment/VERCEL_DEPLOYMENT.md)
+See [AWS_LAMBDA_DEPLOYMENT.md](docs/deployment/AWS_LAMBDA_DEPLOYMENT.md) for detailed guide.
 
-**Quick Deploy:**
+### Frontend (Vercel)
+
+Push to GitHub for automatic deployment, or:
+
 ```bash
 cd frontend
 vercel --prod
 ```
 
+See [VERCEL_DEPLOYMENT.md](docs/deployment/VERCEL_DEPLOYMENT.md) for detailed guide.
+
 ---
 
-## Learning Resources
+## Documentation
 
-All concepts discussed during development are documented in `docs/learning/`:
+| Document | Description |
+|----------|-------------|
+| [SYSTEM_DESIGN.md](docs/architecture/SYSTEM_DESIGN.md) | High-level architecture |
+| [API_DESIGN.md](docs/architecture/API_DESIGN.md) | API endpoint specifications |
+| [DECISIONS.md](docs/architecture/DECISIONS.md) | Architecture Decision Records (ADRs) |
+| [LOCAL_DEVELOPMENT.md](docs/deployment/LOCAL_DEVELOPMENT.md) | Local setup guide |
+| [ENV_VARIABLES.md](docs/deployment/ENV_VARIABLES.md) | Environment configuration |
 
-- **"What is OAuth?"** → [authentication.md](docs/learning/authentication.md#what-is-oauth)
-- **"EC2 or Lambda?"** → [aws.md](docs/learning/aws.md#ec2-vs-lambda)
-- **"JWT vs Sessions?"** → [authentication.md](docs/learning/authentication.md#jwt-vs-sessions)
-- **"FastAPI vs Django?"** → [backend.md](docs/learning/backend.md#fastapi-vs-django)
-- **"Is JWT secure?"** → [security.md](docs/learning/security.md#jwt-security)
+---
+
+## Key Design Decisions
+
+| ADR | Decision | Why |
+|-----|----------|-----|
+| ADR-004 | AWS Lambda over EC2 | Serverless, permanent free tier |
+| ADR-012 | Neon over RDS | Serverless PostgreSQL, instant setup |
+| ADR-014 | Hybrid text search | Full-text + pg_trgm fuzzy matching |
+| ADR-016 | SSE over WebSocket | Simpler, built-in auto-reconnect |
+| ADR-017 | SimHash deduplication | Fuzzy content matching for unchanged pages |
+| ADR-020 | SQS FIFO + MessageGroupId | Per-company rate limiting |
+| ADR-024 | Presigned URLs for uploads | Bypass Lambda memory/timeout limits |
+
+See [DECISIONS.md](docs/architecture/DECISIONS.md) for all 24 ADRs.
+
+---
+
+## Development Phases
+
+| Phase | Description | Status |
+|-------|-------------|--------|
+| 1 | Authentication & AWS/Vercel deployment | Complete |
+| 2 | Job ingestion pipeline (crawling, extraction, SSE) | Complete |
+| 3 | Search page with fuzzy search | Complete |
+| 4 | Job tracking, events, resume upload, calendar | Complete |
+
+Phase summaries: [docs/logs/](docs/logs/)
+
+---
+
+## Cost
+
+Running entirely on free tier:
+
+| Service | Free Tier |
+|---------|-----------|
+| AWS Lambda | 1M requests/month |
+| Neon PostgreSQL | 0.5 GB storage |
+| Vercel | Unlimited static hosting |
+| **Total** | **$0/month** |
 
 ---
 
 ## License
 
-MIT
+Private project for learning purposes.
 
 ---
 

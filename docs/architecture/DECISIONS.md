@@ -1941,3 +1941,167 @@ CREATE INDEX idx_tracking_events_date ON tracking_events(event_date);
 ### Related
 - Phase 4A: Job tracking database design
 - Phase 4C: Calendar view implementation
+
+---
+
+## ADR-024: Presigned URLs for Resume Upload (Direct-to-S3)
+
+**Date:** 2026-01-28
+**Status:** Accepted
+**Phase:** 4D
+
+### Context
+
+Phase 4D adds resume upload functionality for tracked jobs. We need to decide how files flow from the browser to S3 storage.
+
+### Decision
+
+Use **presigned URLs for direct-to-S3 upload** instead of proxying files through the backend.
+
+### Alternatives Considered
+
+**Option A: File through backend (multipart form)**
+```
+Frontend  →  Backend (FastAPI)  →  S3
+   │              │                 │
+   │   POST file  │                 │
+   │─────────────→│   put_object    │
+   │              │────────────────→│
+   │   response   │                 │
+   │←─────────────│←────────────────│
+```
+
+**Option B: Presigned URL (direct-to-S3)** (chosen)
+```
+Frontend  →  Backend     Frontend  →  S3
+   │            │           │          │
+   │ GET URL    │           │          │
+   │───────────→│           │          │
+   │ presigned  │           │          │
+   │←───────────│           │          │
+   │            │  PUT file directly   │
+   │────────────────────────────────→  │
+   │ POST confirm           │          │
+   │───────────→│           │          │
+```
+
+### Reasoning
+
+| Factor | File Through Backend | Presigned URL |
+|--------|---------------------|---------------|
+| Lambda memory usage | High (holds file in memory) | None (file bypasses Lambda) |
+| Lambda timeout risk | Yes (30s limit, 15-min max) | No (upload doesn't involve Lambda) |
+| Network hops | 2 (browser→Lambda→S3) | 1 (browser→S3) |
+| Upload speed | Slower (extra hop) | Faster (direct) |
+| API Gateway payload | Limited (10MB) | N/A (bypassed) |
+| Code complexity | Lower (single endpoint) | Higher (3 endpoints) |
+
+**Key constraints:**
+1. **API Gateway payload limit**: 10MB max for synchronous requests
+2. **Lambda memory**: Files held in memory during upload
+3. **Lambda timeout**: 30s for API Gateway integration (15-min max for async)
+
+Presigned URLs avoid all these constraints by having the browser upload directly to S3.
+
+### Implementation
+
+**Endpoints:**
+
+| Endpoint | Purpose |
+|----------|---------|
+| `GET /resume/upload-url` | Generate presigned PUT URL (5 min expiry) |
+| `POST /resume/confirm` | Save S3 key + filename to database |
+| `GET /resume/url` | Generate presigned GET URL for download/preview |
+
+**Upload flow:**
+```javascript
+// 1. Get presigned URL from backend
+const { upload_url, s3_key } = await fetch(`/api/tracked/${id}/resume/upload-url`);
+
+// 2. Upload file directly to S3
+await fetch(upload_url, {
+  method: 'PUT',
+  headers: { 'Content-Type': 'application/pdf' },
+  body: file,
+});
+
+// 3. Confirm upload with backend (saves to DB)
+await fetch(`/api/tracked/${id}/resume/confirm`, {
+  method: 'POST',
+  body: JSON.stringify({ s3_key, filename: file.name }),
+});
+```
+
+**S3 key structure:**
+```
+s3://jobhunt-resume-content-{account_id}/
+  └── resumes/
+      └── {user_id}/
+          └── {tracking_id}.pdf
+```
+
+Simple key with no timestamp - re-uploading overwrites the existing file.
+
+**Security:**
+- Presigned URL expires in 5 minutes
+- S3 key is validated against expected pattern (`resumes/{user_id}/{tracking_id}.pdf`)
+- User can only upload to their own tracking records (verified by JWT)
+- Presigned URL is scoped to specific bucket/key with `put_object` permission only
+
+### Presigned URL Generation
+
+```python
+# No network call - SDK signs locally using AWS credentials
+upload_url = s3_client.generate_presigned_url(
+    "put_object",
+    Params={
+        "Bucket": RESUME_BUCKET,
+        "Key": s3_key,
+        "ContentType": "application/pdf",
+    },
+    ExpiresIn=300,  # 5 minutes
+)
+```
+
+The presigned URL embeds:
+- Bucket and key (where to upload)
+- Expiration time
+- AWS signature (proves backend authorized this upload)
+- Content-Type restriction
+
+### Download/Preview
+
+Download and preview use the same endpoint with a query parameter:
+
+```python
+# Preview (inline in browser)
+GET /resume/url
+
+# Download (forces save dialog)
+GET /resume/url?download=true
+```
+
+The `download=true` parameter adds `Content-Disposition: attachment` to the presigned URL, which tells the browser to download rather than display the file.
+
+### Consequences
+
+**Positive:**
+- Bypasses Lambda memory and timeout constraints
+- Bypasses API Gateway 10MB payload limit
+- Faster uploads (single network hop)
+- Scales to large files without infrastructure changes
+
+**Negative:**
+- Three endpoints instead of one
+- Frontend must handle multi-step upload flow
+- CORS configuration required on S3 bucket
+
+**Mitigations:**
+- Frontend upload logic is straightforward (3 fetch calls)
+- S3 CORS is configured in CloudFormation template
+- Error handling at each step with rollback (if S3 upload fails, don't call confirm)
+
+### Related
+- Phase 4D: Resume management
+- [ADR-004](./DECISIONS.md#adr-004-deploy-backend-to-aws-lambda--api-gateway): Lambda deployment (timeout constraints)
+- [ADR-012](./DECISIONS.md#adr-012-use-neon-for-postgresql-hosting): Neon for metadata storage

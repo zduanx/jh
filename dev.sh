@@ -166,7 +166,7 @@ jready() {
     ISSUES=0
 
     # 1. Check Python venv
-    echo -e "${BLUE}[1/7] Backend virtual environment...${NC}"
+    echo -e "${BLUE}[1/8] Backend virtual environment...${NC}"
     if [ -d "$JH_ROOT/backend/venv" ]; then
         echo -e "${GREEN}  ✓ Virtual environment exists${NC}"
     else
@@ -176,7 +176,7 @@ jready() {
     fi
 
     # 2. Check Python dependencies
-    echo -e "${BLUE}[2/7] Backend dependencies...${NC}"
+    echo -e "${BLUE}[2/8] Backend dependencies...${NC}"
     if [ -d "$JH_ROOT/backend/venv" ]; then
         cd "$JH_ROOT/backend" || return 1
         source venv/bin/activate
@@ -206,7 +206,7 @@ jready() {
     fi
 
     # 3. Check backend .env.local
-    echo -e "${BLUE}[3/7] Backend environment config...${NC}"
+    echo -e "${BLUE}[3/8] Backend environment config...${NC}"
     if [ -f "$JH_ROOT/backend/.env.local" ]; then
         echo -e "${GREEN}  ✓ backend/.env.local exists${NC}"
         # Check for required variables using BACKEND_CHECK keys
@@ -229,7 +229,7 @@ jready() {
     fi
 
     # 4. Check frontend node_modules
-    echo -e "${BLUE}[4/7] Frontend dependencies...${NC}"
+    echo -e "${BLUE}[4/8] Frontend dependencies...${NC}"
     if [ -d "$JH_ROOT/frontend/node_modules" ]; then
         echo -e "${GREEN}  ✓ node_modules exists${NC}"
     else
@@ -239,7 +239,7 @@ jready() {
     fi
 
     # 5. Check frontend .env.local
-    echo -e "${BLUE}[5/7] Frontend environment config...${NC}"
+    echo -e "${BLUE}[5/8] Frontend environment config...${NC}"
     if [ -f "$JH_ROOT/frontend/.env.local" ]; then
         echo -e "${GREEN}  ✓ frontend/.env.local exists${NC}"
         # Check for required variables using FRONTEND_CHECK keys
@@ -262,7 +262,7 @@ jready() {
     fi
 
     # 6. Check database connectivity (test both local/test and prod databases)
-    echo -e "${BLUE}[6/7] Database connectivity...${NC}"
+    echo -e "${BLUE}[6/8] Database connectivity...${NC}"
     if [ -f "$JH_ROOT/backend/.env.local" ] && [ -d "$JH_ROOT/backend/venv" ]; then
         cd "$JH_ROOT/backend" || return 1
         source venv/bin/activate
@@ -348,8 +348,34 @@ print('|'.join(results))
         echo -e "${YELLOW}  ⊘ Skipped (dependencies not ready)${NC}"
     fi
 
-    # 7. Check port availability
-    echo -e "${BLUE}[7/7] Port availability...${NC}"
+    # 7. Run codegen to ensure frontend schemas are up to date
+    echo -e "${BLUE}[7/8] Frontend schema codegen...${NC}"
+    if [ -d "$JH_ROOT/backend/venv" ]; then
+        cd "$JH_ROOT/backend" || return 1
+        source venv/bin/activate
+
+        CODEGEN_OUTPUT=$(python3 scripts/generate_tracking_schema.py 2>&1)
+        CODEGEN_EXIT=$?
+
+        deactivate 2>/dev/null || true
+        cd "$JH_ROOT" || return 1
+
+        if [ $CODEGEN_EXIT -eq 0 ]; then
+            echo -e "${GREEN}  ✓ Frontend schemas up to date${NC}"
+        elif [ $CODEGEN_EXIT -eq 1 ]; then
+            echo -e "${YELLOW}  ⚠ Frontend schemas updated (commit the changes)${NC}"
+            echo "$CODEGEN_OUTPUT" | grep -E "^\s+" | sed 's/^/  /'
+        else
+            echo -e "${RED}  ✗ Codegen failed${NC}"
+            echo "$CODEGEN_OUTPUT" | sed 's/^/    /'
+            ISSUES=$((ISSUES + 1))
+        fi
+    else
+        echo -e "${YELLOW}  ⊘ Skipped (venv not found)${NC}"
+    fi
+
+    # 8. Check port availability
+    echo -e "${BLUE}[8/8] Port availability...${NC}"
     PORT_ISSUES=0
     if lsof -ti:8000 > /dev/null 2>&1; then
         echo -e "${YELLOW}  ⚠ Port 8000 (backend) already in use${NC}"
@@ -736,6 +762,41 @@ jenvcheck() {
     echo ""
 }
 
+# ==============================================================================
+# CODEGEN COMMANDS
+# ==============================================================================
+
+# Generate frontend schema from backend Pydantic models
+jcodegen() {
+    echo -e "${BLUE}=== Generating Frontend Schemas ===${NC}"
+    echo ""
+
+    cd "$JH_ROOT/backend" || return 1
+    source venv/bin/activate
+
+    # Run tracking schema generator
+    echo -e "${BLUE}[1/1] Tracking schema (backend -> frontend)...${NC}"
+    python3 scripts/generate_tracking_schema.py
+    CODEGEN_EXIT=$?
+
+    deactivate 2>/dev/null || true
+    cd "$JH_ROOT" || return 1
+
+    if [ $CODEGEN_EXIT -eq 0 ]; then
+        echo ""
+        echo -e "${GREEN}✓ Schema generation complete (no changes)${NC}"
+        return 0
+    elif [ $CODEGEN_EXIT -eq 1 ]; then
+        echo ""
+        echo -e "${GREEN}✓ Schema generation complete (files updated)${NC}"
+        return 0
+    else
+        echo ""
+        echo -e "${RED}✗ Schema generation failed${NC}"
+        return 1
+    fi
+}
+
 # Help
 jhelp() {
     echo -e "${BLUE}=== Job Hunter Development Shortcuts ===${NC}"
@@ -756,6 +817,9 @@ jhelp() {
     echo "  jdbpush            - Apply migrations to test + prod databases"
     echo "  jdbstatus          - Show current migration status"
     echo ""
+    echo -e "${GREEN}Codegen:${NC}"
+    echo "  jcodegen           - Generate frontend schemas from backend models"
+    echo ""
     echo -e "${GREEN}Deployment:${NC}"
     echo "  jpushapi           - Deploy backend to AWS Lambda (SAM)"
     echo "  jpushvercel        - Deploy frontend to Vercel (git CI/CD)"
@@ -766,7 +830,7 @@ jhelp() {
     echo "  js3url <s3_url>    - Generate presigned URL for S3 object"
     echo ""
     echo -e "${GREEN}Utilities:${NC}"
-    echo "  jready             - Check all prerequisites"
+    echo "  jready             - Check all prerequisites + run codegen"
     echo "  jstatus            - Check what's running"
     echo "  jhelp              - Show this help"
     echo ""
@@ -1123,9 +1187,32 @@ jpushapi() {
 
     cd "$JH_ROOT/backend" || return 1
 
-    # Step 2: Check Lambda environment variables
+    # Step 2: Run codegen to ensure frontend schemas are synced
     echo ""
-    echo -e "${BLUE}[2/7] Checking Lambda environment variables...${NC}"
+    echo -e "${BLUE}[2/8] Running codegen (backend -> frontend schemas)...${NC}"
+    source venv/bin/activate
+
+    python3 scripts/generate_tracking_schema.py
+    CODEGEN_EXIT=$?
+
+    deactivate 2>/dev/null || true
+
+    if [ $CODEGEN_EXIT -eq 1 ]; then
+        echo -e "${YELLOW}  Frontend schemas were updated${NC}"
+        echo -e "${YELLOW}  These changes will be committed with the deployment${NC}"
+        # Add frontend changes to git
+        cd "$JH_ROOT" || return 1
+        git add frontend/src/types/
+        cd "$JH_ROOT/backend" || return 1
+    elif [ $CODEGEN_EXIT -gt 1 ]; then
+        echo -e "${RED}  ✗ Codegen failed${NC}"
+        cd "$JH_ROOT" || return 1
+        return 1
+    fi
+
+    # Step 3: Check Lambda environment variables
+    echo ""
+    echo -e "${BLUE}[3/8] Checking Lambda environment variables...${NC}"
     LAMBDA_VARS=$(aws lambda get-function --function-name JobHuntTrackerAPI --query 'Configuration.Environment.Variables' 2>/dev/null)
 
     if [ $? -eq 0 ]; then
@@ -1172,9 +1259,9 @@ jpushapi() {
         echo -e "${BLUE}Will create Lambda with values from .env.local PROD_VALUE${NC}"
     fi
 
-    # Step 3: Generate template.yaml and samconfig.toml
+    # Step 4: Generate template.yaml and samconfig.toml
     echo ""
-    echo -e "${BLUE}[3/7] Generating deployment configuration...${NC}"
+    echo -e "${BLUE}[4/8] Generating deployment configuration...${NC}"
 
     # Generate template.yaml (script prints status and returns exit code)
     python3 scripts/generate_template.py
@@ -1228,9 +1315,9 @@ jpushapi() {
         cd "$JH_ROOT/backend" || return 1
     fi
 
-    # Step 4: Confirm deployment
+    # Step 5: Confirm deployment
     echo ""
-    echo -e "${BLUE}[4/7] Deploy confirmation:${NC}"
+    echo -e "${BLUE}[5/8] Deploy confirmation:${NC}"
     echo -n -e "${YELLOW}Deploy backend to AWS Lambda? [y/n]: ${NC}"
     read DEPLOY_CHOICE
 
@@ -1240,9 +1327,9 @@ jpushapi() {
         return 1
     fi
 
-    # Step 5: Build with SAM
+    # Step 6: Build with SAM
     echo ""
-    echo -e "${BLUE}[5/7] Building with SAM...${NC}"
+    echo -e "${BLUE}[6/8] Building with SAM...${NC}"
 
     # Clean up dev files that SAM doesn't exclude (hardcoded EXCLUDED_FILES doesn't include these)
     if [ -f "server.log" ]; then
@@ -1258,9 +1345,9 @@ jpushapi() {
     fi
     echo -e "${GREEN}  ✓ Build successful${NC}"
 
-    # Step 6: Deploy with SAM (uses samconfig.toml)
+    # Step 7: Deploy with SAM (uses samconfig.toml)
     echo ""
-    echo -e "${BLUE}[6/7] Deploying to AWS...${NC}"
+    echo -e "${BLUE}[7/8] Deploying to AWS...${NC}"
     sam deploy
     if [ $? -ne 0 ]; then
         echo -e "${RED}✗ SAM deploy failed${NC}"
@@ -1269,9 +1356,9 @@ jpushapi() {
     fi
     echo -e "${GREEN}  ✓ Deploy successful${NC}"
 
-    # Step 7: Verify deployment
+    # Step 8: Verify deployment
     echo ""
-    echo -e "${BLUE}[7/7] Verifying deployment...${NC}"
+    echo -e "${BLUE}[8/8] Verifying deployment...${NC}"
 
     # Get API Gateway URL
     API_URL=$(aws cloudformation describe-stacks --stack-name jh-backend-stack --query 'Stacks[0].Outputs[?OutputKey==`ApiUrl`].OutputValue' --output text 2>/dev/null)

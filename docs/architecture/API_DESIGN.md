@@ -254,6 +254,179 @@ Extracts job URLs for all enabled companies without full crawl. Returns per-comp
 
 ---
 
+### 10. Get Tracked Job IDs (Phase 4A)
+
+**Endpoint:** `GET /api/tracked/ids`
+**Authentication:** Required (JWT)
+
+Returns all tracked job IDs for the current user (lightweight endpoint for Search page).
+
+**Success Response:** `200 OK`
+```json
+{
+  "tracked": {
+    "123": { "tracking_id": 5, "stage": "interested" },
+    "456": { "tracking_id": 8, "stage": "applied" }
+  }
+}
+```
+
+---
+
+### 11. Add Job to Tracking (Phase 4A)
+
+**Endpoint:** `POST /api/tracked`
+**Authentication:** Required (JWT)
+**Content-Type:** `application/json`
+
+**Request Body:**
+```json
+{
+  "job_id": 123
+}
+```
+
+**Success Response:** `200 OK`
+```json
+{
+  "tracking_id": 5,
+  "job_id": 123,
+  "stage": "interested",
+  "tracked_at": "2026-01-22T10:00:00Z"
+}
+```
+
+**Error Responses:**
+
+`404 Not Found` - Job doesn't exist
+```json
+{
+  "detail": "Job not found"
+}
+```
+
+`409 Conflict` - Already tracked
+```json
+{
+  "detail": "Job already tracked"
+}
+```
+
+---
+
+### 12. Remove Job from Tracking (Phase 4A)
+
+**Endpoint:** `DELETE /api/tracked/{tracking_id}`
+**Authentication:** Required (JWT)
+
+**Success Response:** `200 OK`
+```json
+{
+  "success": true
+}
+```
+
+**Error Responses:**
+
+`404 Not Found` - Tracking record doesn't exist or doesn't belong to user
+```json
+{
+  "detail": "Tracking record not found"
+}
+```
+
+`400 Bad Request` - Cannot delete if stage is not "interested"
+```json
+{
+  "detail": "Cannot remove job that has progressed past 'interested' stage"
+}
+```
+
+---
+
+### 13. List Tracked Jobs (Phase 4B)
+
+**Endpoint:** `GET /api/tracked`
+**Authentication:** Required (JWT)
+
+Returns all tracked jobs with full job details for the Track page.
+
+**Success Response:** `200 OK`
+```json
+{
+  "tracked_jobs": [
+    {
+      "id": 1,
+      "job_id": 123,
+      "stage": "interested",
+      "is_archived": false,
+      "notes": null,
+      "tracked_at": "2026-01-22T10:00:00Z",
+      "job": {
+        "id": 123,
+        "title": "Senior Software Engineer",
+        "company": "google",
+        "company_logo_url": "https://www.google.com/s2/favicons?domain=google.com&sz=128",
+        "location": "Seattle, WA",
+        "description": "Build scalable distributed systems...",
+        "url": "https://careers.google.com/jobs/..."
+      }
+    }
+  ],
+  "total": 1
+}
+```
+
+---
+
+### 14. Update Tracked Job (Phase 4B/4C)
+
+**Endpoint:** `PATCH /api/tracked/{tracking_id}`
+**Authentication:** Required (JWT)
+**Content-Type:** `application/json`
+
+Update one or more fields on a tracked job. All fields are optional - only include what you want to change.
+
+**Request Body:**
+```json
+{
+  "is_archived": true,        // Phase 4B: toggle archive status
+  "stage": "applied",         // Phase 4C: update stage
+  "notes": "Had a referral"   // Phase 4C: update notes
+}
+```
+
+**Success Response:** `200 OK`
+```json
+{
+  "id": 1,
+  "job_id": 123,
+  "stage": "applied",
+  "is_archived": true,
+  "notes": "Had a referral",
+  "tracked_at": "2026-01-22T10:00:00Z",
+  "updated_at": "2026-01-22T15:30:00Z"
+}
+```
+
+**Error Responses:**
+
+`404 Not Found` - Tracking record doesn't exist or doesn't belong to user
+```json
+{
+  "detail": "Tracking record not found"
+}
+```
+
+`422 Unprocessable Entity` - Invalid stage value
+```json
+{
+  "detail": "Invalid stage. Must be one of: interested, applied, screening, interviewing, offer, accepted, rejected"
+}
+```
+
+---
+
 ## Error Handling
 
 All errors follow this format:
