@@ -1,0 +1,1378 @@
+/* =============================================================================
+   TrackPage - All classes prefixed with 'trk-' to avoid conflicts
+   ============================================================================= */
+
+/* Page Layout */
+.trk-page {
+  padding: 24px;
+  max-width: 1200px;
+  margin: 0 auto;
+}
+
+.trk-header {
+  margin-bottom: 24px;
+}
+
+.trk-header h1 {
+  font-size: 28px;
+  font-weight: 600;
+  color: #1e293b;
+  margin: 0 0 8px 0;
+}
+
+.trk-header p {
+  color: #64748b;
+  margin: 0;
+  font-size: 14px;
+}
+
+/* Tabs */
+.trk-tabs {
+  display: flex;
+  gap: 4px;
+  border-bottom: 1px solid #e2e8f0;
+  margin-bottom: 24px;
+}
+
+.trk-tab {
+  padding: 12px 24px;
+  background: none;
+  border: none;
+  font-size: 14px;
+  font-weight: 500;
+  color: #64748b;
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  transition: all 0.2s ease;
+  margin-bottom: -1px;
+}
+
+.trk-tab:hover {
+  color: #3b82f6;
+}
+
+.trk-tab.active {
+  color: #3b82f6;
+  border-bottom-color: #3b82f6;
+}
+
+.trk-tab:disabled {
+  color: #94a3b8;
+  cursor: not-allowed;
+}
+
+/* Tab Content */
+.trk-content {
+  min-height: 400px;
+}
+
+/* Calendar Placeholder */
+.trk-calendar-placeholder {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 60px 24px;
+  background: #f8fafc;
+  border-radius: 12px;
+  border: 2px dashed #e2e8f0;
+}
+
+.trk-calendar-placeholder-icon {
+  font-size: 48px;
+  margin-bottom: 16px;
+}
+
+.trk-calendar-placeholder h3 {
+  color: #1e293b;
+  margin: 0 0 8px 0;
+}
+
+.trk-calendar-placeholder p {
+  color: #64748b;
+  margin: 0;
+  font-size: 14px;
+}
+
+/* Empty State */
+.trk-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 60px 24px;
+  background: #f8fafc;
+  border-radius: 12px;
+}
+
+.trk-empty-icon {
+  font-size: 48px;
+  margin-bottom: 16px;
+}
+
+.trk-empty h3 {
+  color: #1e293b;
+  margin: 0 0 8px 0;
+}
+
+.trk-empty p {
+  color: #64748b;
+  margin: 0;
+  font-size: 14px;
+}
+
+/* Loading State */
+.trk-loading {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 60px 24px;
+}
+
+.trk-spinner {
+  width: 40px;
+  height: 40px;
+  border: 3px solid #e2e8f0;
+  border-top-color: #3b82f6;
+  border-radius: 50%;
+  animation: trk-spin 0.8s linear infinite;
+}
+
+@keyframes trk-spin {
+  to { transform: rotate(360deg); }
+}
+
+.trk-loading p {
+  margin-top: 16px;
+  color: #64748b;
+  font-size: 14px;
+}
+
+/* Error State */
+.trk-error {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 60px 24px;
+  background: #fef2f2;
+  border-radius: 12px;
+  border: 1px solid #fecaca;
+}
+
+.trk-error-icon {
+  font-size: 48px;
+  margin-bottom: 16px;
+}
+
+.trk-error h3 {
+  color: #991b1b;
+  margin: 0 0 8px 0;
+}
+
+.trk-error p {
+  color: #b91c1c;
+  margin: 0 0 16px 0;
+  font-size: 14px;
+}
+
+.trk-retry-btn {
+  padding: 10px 20px;
+  background: #ef4444;
+  color: white;
+  border: none;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.2s ease;
+}
+
+.trk-retry-btn:hover {
+  background: #dc2626;
+}
+
+/* Company Section */
+.trk-company-section {
+  margin-bottom: 32px;
+}
+
+.trk-company-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 12px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid #e2e8f0;
+}
+
+.trk-company-icon {
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  background: linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 600;
+  color: white;
+  font-size: 13px;
+  text-transform: uppercase;
+  flex-shrink: 0;
+  overflow: hidden;
+}
+
+.trk-company-icon img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  background: white;
+  border-radius: 6px;
+}
+
+.trk-company-name {
+  font-size: 16px;
+  font-weight: 600;
+  color: #1e293b;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.trk-company-count {
+  font-size: 13px;
+  color: #64748b;
+  font-weight: 400;
+}
+
+/* Archived Section */
+.trk-archived-section {
+  margin-top: 40px;
+  padding-top: 24px;
+  border-top: 2px dashed #e2e8f0;
+}
+
+.trk-archived-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.trk-archived-header h3 {
+  font-size: 14px;
+  font-weight: 500;
+  color: #94a3b8;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin: 0;
+}
+
+/* Archived company section - muted styling */
+.trk-company-section.archived .trk-company-icon {
+  background: linear-gradient(135deg, #94a3b8 0%, #64748b 100%);
+}
+
+.trk-company-section.archived .trk-company-name {
+  color: #94a3b8;
+}
+
+.trk-company-section.archived .trk-company-count {
+  color: #94a3b8;
+}
+
+.trk-company-section.archived .trk-company-header {
+  border-bottom-style: dashed;
+  border-bottom-color: #cbd5e1;
+}
+
+/* Job Card */
+.trk-card {
+  background: white;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  margin-bottom: 8px;
+  overflow: hidden;
+  transition: box-shadow 0.2s ease, border-color 0.2s ease;
+}
+
+.trk-card:hover {
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+}
+
+/* Archived Card Styling */
+.trk-card.archived {
+  border-style: dashed;
+  border-color: #cbd5e1;
+  background: #f8fafc;
+}
+
+.trk-card.archived .trk-card-title {
+  color: #94a3b8;
+}
+
+.trk-card.archived .trk-card-location,
+.trk-card.archived .trk-card-stage {
+  color: #94a3b8;
+}
+
+/* Card Header (always visible) */
+.trk-card-header {
+  display: flex;
+  align-items: center;
+  padding: 14px 16px;
+  gap: 12px;
+}
+
+.trk-card-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.trk-card-logo {
+  width: 24px;
+  height: 24px;
+  border-radius: 4px;
+  background: linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  overflow: hidden;
+}
+
+.trk-card-logo img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  background: white;
+  border-radius: 4px;
+}
+
+.trk-card-logo span {
+  font-size: 11px;
+  font-weight: 600;
+  color: white;
+  text-transform: uppercase;
+}
+
+/* Archived card logo - muted */
+.trk-card.archived .trk-card-logo {
+  background: linear-gradient(135deg, #94a3b8 0%, #64748b 100%);
+}
+
+.trk-card-title {
+  font-size: 14px;
+  font-weight: 500;
+  color: #1e293b;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex: 1;
+  min-width: 0;
+}
+
+.trk-card-title a {
+  color: inherit;
+  text-decoration: none;
+}
+
+.trk-card-title a:hover {
+  color: #3b82f6;
+  text-decoration: underline;
+}
+
+.trk-card-location {
+  font-size: 13px;
+  color: #64748b;
+  white-space: nowrap;
+  min-width: 120px;
+}
+
+.trk-card-stage {
+  font-size: 12px;
+  font-weight: 500;
+  padding: 4px 10px;
+  border-radius: 12px;
+  white-space: nowrap;
+  min-width: 80px;
+  text-align: center;
+}
+
+/* Stage Colors */
+.trk-card-stage.interested { background: #dbeafe; color: #1d4ed8; }
+.trk-card-stage.applied { background: #e0e7ff; color: #4338ca; }
+.trk-card-stage.screening { background: #fef3c7; color: #b45309; }
+.trk-card-stage.interview { background: #fed7aa; color: #c2410c; }
+.trk-card-stage.reference { background: #fce7f3; color: #be185d; }
+.trk-card-stage.offer { background: #d1fae5; color: #047857; }
+.trk-card-stage.accepted { background: #a7f3d0; color: #065f46; }
+.trk-card-stage.declined { background: #e2e8f0; color: #475569; }
+.trk-card-stage.rejected { background: #fecaca; color: #b91c1c; }
+
+/* Card Actions */
+.trk-card-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.trk-action-btn {
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  color: #64748b;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.trk-action-btn:hover {
+  background: #f1f5f9;
+  color: #1e293b;
+}
+
+.trk-action-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Specific action button colors */
+.trk-action-btn.expand:hover {
+  color: #3b82f6;
+}
+
+.trk-action-btn.archive:hover {
+  color: #f59e0b;
+  background: #fef3c7;
+}
+
+.trk-action-btn.unarchive:hover {
+  color: #10b981;
+  background: #d1fae5;
+}
+
+.trk-action-btn.delete:hover {
+  color: #ef4444;
+  background: #fee2e2;
+}
+
+/* Card Body (expanded content) */
+.trk-card-body {
+  padding: 0 16px 16px 16px;
+  border-top: 1px solid #f1f5f9;
+}
+
+.trk-card-description {
+  margin-top: 12px;
+}
+
+.trk-card-description h4 {
+  font-size: 12px;
+  font-weight: 600;
+  color: #64748b;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin: 0 0 8px 0;
+}
+
+.trk-card-description p {
+  font-size: 13px;
+  color: #475569;
+  line-height: 1.6;
+  margin: 0;
+  max-height: 225px;
+  overflow-y: scroll;
+  white-space: pre-wrap;
+  padding: 12px;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+}
+
+.trk-card-notes {
+  margin-top: 16px;
+  padding: 12px;
+  background: #f8fafc;
+  border-radius: 8px;
+}
+
+.trk-card-notes h4 {
+  font-size: 12px;
+  font-weight: 600;
+  color: #64748b;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin: 0 0 8px 0;
+}
+
+.trk-card-notes p {
+  font-size: 13px;
+  color: #475569;
+  line-height: 1.5;
+  margin: 0;
+  font-style: italic;
+}
+
+/* Confirmation Modal */
+.trk-modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 2000;
+  backdrop-filter: blur(2px);
+}
+
+.trk-modal {
+  background: white;
+  padding: 24px;
+  border-radius: 12px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.2);
+  max-width: 400px;
+  width: 90%;
+  animation: trk-modal-in 0.2s ease-out;
+}
+
+@keyframes trk-modal-in {
+  from {
+    transform: translateY(-20px);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+.trk-modal h3 {
+  font-size: 18px;
+  font-weight: 600;
+  color: #1e293b;
+  margin: 0 0 8px 0;
+}
+
+.trk-modal p {
+  font-size: 14px;
+  color: #64748b;
+  margin: 0 0 20px 0;
+  line-height: 1.5;
+}
+
+.trk-modal-actions {
+  display: flex;
+  gap: 12px;
+  justify-content: flex-end;
+}
+
+.trk-modal-btn {
+  padding: 10px 20px;
+  border-radius: 8px;
+  border: none;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.trk-modal-btn.cancel {
+  background: #f1f5f9;
+  color: #475569;
+}
+
+.trk-modal-btn.cancel:hover {
+  background: #e2e8f0;
+}
+
+.trk-modal-btn.confirm {
+  background: #3b82f6;
+  color: white;
+}
+
+.trk-modal-btn.confirm:hover {
+  background: #2563eb;
+}
+
+.trk-modal-btn.confirm.danger {
+  background: #ef4444;
+}
+
+.trk-modal-btn.confirm.danger:hover {
+  background: #dc2626;
+}
+
+.trk-modal-btn.confirm.warning {
+  background: #f59e0b;
+}
+
+.trk-modal-btn.confirm.warning:hover {
+  background: #d97706;
+}
+
+/* =============================================================================
+   Resume Section (Phase 4C)
+   ============================================================================= */
+
+.trk-resume-section {
+  padding: 12px 0;
+  border-bottom: 1px solid #f1f5f9;
+}
+
+.trk-resume-header h4 {
+  font-size: 12px;
+  font-weight: 600;
+  color: #64748b;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin: 0 0 8px 0;
+}
+
+.trk-resume-content {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.trk-resume-filename {
+  font-size: 13px;
+  color: #1e293b;
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.trk-resume-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.trk-resume-btn {
+  width: 32px;
+  height: 32px;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.15s ease;
+}
+
+.trk-resume-btn.preview {
+  background: #eff6ff;
+  color: #3b82f6;
+}
+
+.trk-resume-btn.preview:hover {
+  background: #dbeafe;
+}
+
+.trk-resume-btn.download {
+  background: #f0fdf4;
+  color: #16a34a;
+}
+
+.trk-resume-btn.download:hover {
+  background: #dcfce7;
+}
+
+.trk-resume-btn.delete {
+  background: #fef2f2;
+  color: #dc2626;
+}
+
+.trk-resume-btn.delete:hover {
+  background: #fee2e2;
+}
+
+.trk-resume-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.trk-resume-upload-btn {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
+  font-size: 13px;
+  font-weight: 500;
+  color: #3b82f6;
+  background: #eff6ff;
+  border: 1px dashed #93c5fd;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.trk-resume-upload-btn:hover {
+  background: #dbeafe;
+  border-color: #3b82f6;
+}
+
+.trk-resume-upload-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* =============================================================================
+   Job Metadata Inputs (Phase 4C)
+   ============================================================================= */
+
+.trk-metadata {
+  padding: 16px 0;
+  border-bottom: 1px solid #f1f5f9;
+  position: relative;
+}
+
+.trk-metadata-row {
+  display: flex;
+  gap: 16px;
+  margin-bottom: 12px;
+}
+
+.trk-metadata-field {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.trk-metadata-field label,
+.trk-metadata-note label {
+  font-size: 11px;
+  font-weight: 600;
+  color: #64748b;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.trk-metadata-field input {
+  padding: 8px 12px;
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+  font-size: 13px;
+  color: #1e293b;
+  background: #f8fafc;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.trk-metadata-field input:focus {
+  outline: none;
+  border-color: #3b82f6;
+  background: white;
+}
+
+.trk-metadata-field input:disabled {
+  background: #f1f5f9;
+  color: #94a3b8;
+  cursor: not-allowed;
+}
+
+.trk-metadata-field input::placeholder {
+  color: #94a3b8;
+}
+
+.trk-metadata-note {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.trk-metadata-note textarea {
+  padding: 8px 12px;
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+  font-size: 13px;
+  color: #1e293b;
+  background: #f8fafc;
+  resize: vertical;
+  min-height: 48px;
+  font-family: inherit;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.trk-metadata-note textarea:focus {
+  outline: none;
+  border-color: #3b82f6;
+  background: white;
+}
+
+.trk-metadata-note textarea:disabled {
+  background: #f1f5f9;
+  color: #94a3b8;
+  cursor: not-allowed;
+}
+
+.trk-metadata-note textarea::placeholder {
+  color: #94a3b8;
+}
+
+.trk-metadata-saving {
+  position: absolute;
+  top: 16px;
+  right: 0;
+  font-size: 11px;
+  color: #3b82f6;
+  font-style: italic;
+}
+
+/* =============================================================================
+   Progress Section (Phase 4C)
+   ============================================================================= */
+
+.trk-progress-section {
+  padding: 16px 0;
+}
+
+.trk-progress-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 16px;
+}
+
+.trk-progress-header h4 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  color: #1e293b;
+}
+
+.trk-reject-btn {
+  padding: 6px 12px;
+  font-size: 12px;
+  font-weight: 500;
+  color: #dc2626;
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.trk-reject-btn:hover {
+  background: #fee2e2;
+  border-color: #fca5a5;
+}
+
+.trk-reject-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.trk-rejected-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.trk-rejected-badge {
+  padding: 4px 10px;
+  font-size: 11px;
+  font-weight: 600;
+  color: #b91c1c;
+  background: #fecaca;
+  border-radius: 12px;
+  text-transform: uppercase;
+}
+
+.trk-undo-reject-btn {
+  padding: 4px 10px;
+  font-size: 11px;
+  font-weight: 500;
+  color: #64748b;
+  background: #f1f5f9;
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.trk-undo-reject-btn:hover {
+  background: #e2e8f0;
+  color: #475569;
+}
+
+.trk-undo-reject-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* =============================================================================
+   Progress Stepper (Phase 4C)
+   ============================================================================= */
+
+.trk-stepper {
+  display: flex;
+  align-items: center;
+  margin-bottom: 20px;
+  width: 100%;
+}
+
+.trk-stepper-main {
+  display: flex;
+  align-items: center;
+  flex: 1;
+  min-width: 0;
+}
+
+.trk-stepper-node {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  cursor: pointer;
+  transition: opacity 0.15s ease;
+}
+
+.trk-stepper-node.locked {
+  cursor: default;
+  opacity: 0.4;
+}
+
+.trk-stepper-node:not(.locked):hover .trk-stepper-dot {
+  transform: scale(1.2);
+}
+
+.trk-stepper-dot {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: #e2e8f0;
+  border: 2px solid #cbd5e1;
+  transition: all 0.15s ease;
+}
+
+.trk-stepper-node.completed .trk-stepper-dot {
+  background: #3b82f6;
+  border-color: #3b82f6;
+}
+
+.trk-stepper-node.next .trk-stepper-dot {
+  background: white;
+  border-color: #3b82f6;
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.2);
+}
+
+.trk-stepper-label {
+  margin-top: 6px;
+  font-size: 10px;
+  color: #64748b;
+  text-transform: capitalize;
+}
+
+.trk-stepper-node.completed .trk-stepper-label {
+  color: #3b82f6;
+  font-weight: 500;
+}
+
+.trk-stepper-node.next .trk-stepper-label {
+  color: #3b82f6;
+}
+
+.trk-stepper-line {
+  flex: 1;
+  height: 2px;
+  background: #e2e8f0;
+  margin: 0 8px;
+  margin-bottom: 18px;
+  min-width: 20px;
+}
+
+.trk-stepper-line.locked {
+  background: #f1f5f9;
+}
+
+/* Terminal stages (accepted/declined) - inline continuation */
+.trk-stepper-terminal {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 16px;
+  margin-left: 12px;
+  padding-left: 12px;
+  border-left: 2px solid #e2e8f0;
+  flex-shrink: 0;
+}
+
+.trk-stepper-node.terminal {
+  flex-direction: column;
+  align-items: center;
+  gap: 0;
+}
+
+.trk-stepper-node.terminal .trk-stepper-label {
+  margin-top: 6px;
+  font-size: 10px;
+}
+
+.trk-stepper-node.terminal .trk-stepper-branch-line {
+  display: none;
+}
+
+.trk-stepper-branch-line {
+  width: 12px;
+  height: 2px;
+  background: #e2e8f0;
+}
+
+.trk-stepper-node.terminal.completed .trk-stepper-branch-line {
+  background: #3b82f6;
+}
+
+.trk-stepper-node.terminal.next .trk-stepper-branch-line {
+  background: #93c5fd;
+}
+
+/* =============================================================================
+   Stage Cards (Phase 4C)
+   ============================================================================= */
+
+.trk-stage-cards {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  padding-bottom: 8px;
+}
+
+.trk-stage-cards-terminal {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-left: 8px;
+}
+
+.trk-stage-card {
+  min-width: 100px;
+  max-width: 140px;
+  padding: 10px;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  font-size: 12px;
+  transition: all 0.15s ease;
+}
+
+.trk-stage-card.completed {
+  background: white;
+  border-color: #3b82f6;
+  cursor: pointer;
+}
+
+.trk-stage-card.completed:hover {
+  box-shadow: 0 2px 8px rgba(59, 130, 246, 0.15);
+}
+
+.trk-stage-card.completed.readonly {
+  cursor: default;
+  border-color: #94a3b8;
+  opacity: 0.8;
+}
+
+.trk-stage-card.completed.readonly:hover {
+  box-shadow: none;
+}
+
+.trk-stage-card.next {
+  background: #eff6ff;
+  border-color: #3b82f6;
+  border-style: dashed;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 60px;
+}
+
+.trk-stage-card.next:hover {
+  background: #dbeafe;
+}
+
+.trk-stage-card.locked {
+  background: #f1f5f9;
+  border-color: #e2e8f0;
+  opacity: 0.6;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 60px;
+}
+
+.trk-stage-card-lock {
+  color: #94a3b8;
+  margin-bottom: 4px;
+}
+
+.trk-stage-card-name {
+  font-size: 10px;
+  color: #64748b;
+  text-transform: capitalize;
+}
+
+.trk-stage-card-add {
+  width: 32px;
+  height: 32px;
+  border: none;
+  background: #3b82f6;
+  color: white;
+  border-radius: 50%;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 4px;
+  transition: background 0.15s ease;
+}
+
+.trk-stage-card-add:hover {
+  background: #2563eb;
+}
+
+.trk-stage-card-add:disabled {
+  background: #94a3b8;
+  cursor: not-allowed;
+}
+
+.trk-stage-card-content {
+  flex: 1;
+}
+
+.trk-stage-card-date {
+  font-weight: 600;
+  color: #1e293b;
+  margin-bottom: 2px;
+}
+
+.trk-stage-card-time {
+  font-weight: 400;
+  color: #64748b;
+  margin-left: 4px;
+}
+
+.trk-stage-card-summary {
+  color: #64748b;
+  font-size: 11px;
+  margin-bottom: 2px;
+}
+
+.trk-stage-card-note {
+  color: #94a3b8;
+  font-size: 10px;
+  font-style: italic;
+  word-wrap: break-word;
+  overflow-wrap: break-word;
+}
+
+.trk-stage-card-actions {
+  display: flex;
+  gap: 4px;
+  margin-top: 6px;
+}
+
+.trk-stage-card-btn {
+  width: 24px;
+  height: 24px;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.15s ease;
+}
+
+.trk-stage-card-btn.edit {
+  background: #e0e7ff;
+  color: #4338ca;
+}
+
+.trk-stage-card-btn.edit:hover {
+  background: #c7d2fe;
+}
+
+.trk-stage-card-btn.delete {
+  background: #fee2e2;
+  color: #dc2626;
+}
+
+.trk-stage-card-btn.delete:hover {
+  background: #fecaca;
+}
+
+.trk-stage-card-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* =============================================================================
+   Stage Form Modal (Phase 4C)
+   ============================================================================= */
+
+.trk-stage-form-modal {
+  background: white;
+  border-radius: 12px;
+  padding: 24px;
+  width: 90%;
+  max-width: 400px;
+  box-shadow: 0 20px 40px rgba(0, 0, 0, 0.15);
+}
+
+.trk-stage-form-modal h3 {
+  margin: 0 0 20px;
+  font-size: 18px;
+  color: #1e293b;
+  text-transform: capitalize;
+}
+
+.trk-form-field {
+  margin-bottom: 16px;
+}
+
+.trk-form-field label {
+  display: block;
+  font-size: 12px;
+  font-weight: 600;
+  color: #64748b;
+  margin-bottom: 6px;
+}
+
+.trk-form-field input,
+.trk-form-field select,
+.trk-form-field textarea {
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+  font-size: 14px;
+  color: #1e293b;
+  background: #f8fafc;
+  transition: border-color 0.15s ease, background 0.15s ease;
+  box-sizing: border-box;
+}
+
+.trk-form-field input:focus,
+.trk-form-field select:focus,
+.trk-form-field textarea:focus {
+  outline: none;
+  border-color: #3b82f6;
+  background: white;
+}
+
+.trk-form-field input:disabled,
+.trk-form-field select:disabled,
+.trk-form-field textarea:disabled {
+  background: #f1f5f9;
+  color: #94a3b8;
+  cursor: not-allowed;
+}
+
+.trk-form-field textarea {
+  resize: vertical;
+  min-height: 60px;
+  font-family: inherit;
+}
+
+.trk-form-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 12px;
+  margin-top: 24px;
+}
+
+.trk-form-btn {
+  padding: 10px 20px;
+  font-size: 14px;
+  font-weight: 500;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.trk-form-btn.cancel {
+  background: #f1f5f9;
+  color: #64748b;
+  border: 1px solid #e2e8f0;
+}
+
+.trk-form-btn.cancel:hover {
+  background: #e2e8f0;
+}
+
+.trk-form-btn.save {
+  background: #3b82f6;
+  color: white;
+  border: none;
+}
+
+.trk-form-btn.save:hover {
+  background: #2563eb;
+}
+
+.trk-form-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* =============================================================================
+   Reject Modal (Phase 4C)
+   ============================================================================= */
+
+.reject-modal {
+  max-width: 400px;
+}
+
+.trk-reject-warning {
+  color: #dc2626;
+  font-size: 14px;
+  margin-bottom: 20px;
+}
+
+/* Card rejected state */
+.trk-card.rejected {
+  border-color: #fecaca;
+  background: #fef2f2;
+}
+
+.trk-card.rejected .trk-card-header {
+  background: #fef2f2;
+}
+
+/* Responsive */
+@media (max-width: 768px) {
+  .trk-page {
+    padding: 16px;
+  }
+
+  .trk-card-header {
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  .trk-card-main {
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  .trk-card-location {
+    min-width: auto;
+  }
+
+  .trk-card-stage {
+    min-width: auto;
+  }
+}

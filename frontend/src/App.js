@@ -6,7 +6,7 @@ import LoginPage from './pages/LoginPage';
 import DashboardPage from './pages/DashboardPage';
 import IngestPage from './pages/IngestPage';
 import SearchPage from './pages/SearchPage';
-import TrackPage from './pages/TrackPage';
+import TrackPage from './pages/track/TrackPage';
 import Layout from './components/Layout';
 import ProtectedRoute from './components/ProtectedRoute';
 import './App.css';
