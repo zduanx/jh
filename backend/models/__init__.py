@@ -10,6 +10,7 @@ from models.ingestion_run import IngestionRun, RunStatus
 from models.job import Job, JobStatus
 from models.job_tracking import JobTracking, TrackingStage
 from models.tracking_event import TrackingEvent, EventType
+from models.story import Story
 
 __all__ = [
     "Base",
@@ -18,4 +19,5 @@ __all__ = [
     "Job", "JobStatus",
     "JobTracking", "TrackingStage",
     "TrackingEvent", "EventType",
+    "Story",
 ]
