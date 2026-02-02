@@ -13,3 +13,12 @@ where = ["backend"]
 [tool.pytest.ini_options]
 testpaths = ["backend"]
 pythonpath = ["backend"]
+
+[tool.mypy]
+python_version = "3.13"
+mypy_path = "backend"
+ignore_missing_imports = true
+warn_return_any = true
+warn_unused_ignores = true
+show_error_codes = true
+check_untyped_defs = true

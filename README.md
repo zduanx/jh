@@ -15,6 +15,7 @@ A full-stack job application tracking system built with React and FastAPI, deplo
 - **Calendar View** - Visual overview of upcoming interviews and application events
 - **Resume Management** - Direct-to-S3 upload with presigned URLs
 - **Real-time Progress** - Server-Sent Events (SSE) for ingestion status updates
+- **Behavioral Interview Stories** - STAR format stories for interview preparation
 
 ---
 
@@ -158,6 +159,8 @@ jh/
 | `/api/tracked` | GET/POST | Tracked jobs management |
 | `/api/tracked/{id}` | PATCH/DELETE | Update/remove tracking |
 | `/api/tracked/calendar/events` | GET | Calendar events |
+| `/api/stories` | GET/POST | List/create stories |
+| `/api/stories/{id}` | GET/PATCH/DELETE | Story CRUD |
 
 See [API_DESIGN.md](docs/architecture/API_DESIGN.md) for complete documentation.
 
@@ -223,6 +226,7 @@ See [DECISIONS.md](docs/architecture/DECISIONS.md) for all 24 ADRs.
 | 2 | Job ingestion pipeline (crawling, extraction, SSE) | Complete |
 | 3 | Search page with fuzzy search | Complete |
 | 4 | Job tracking, events, resume upload, calendar | Complete |
+| 5 | Behavioral interview stories (STAR format) | Complete |
 
 Phase summaries: [docs/logs/](docs/logs/)
 

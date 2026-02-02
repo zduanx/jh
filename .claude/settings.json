@@ -1,0 +1,15 @@
+{
+  "hooks": {
+    "postToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "if [[ \"$CLAUDE_FILE_PATHS\" == *.py ]]; then cd /Users/duan/coding/jh && mypy --config-file pyproject.toml \"$CLAUDE_FILE_PATHS\" 2>&1 | head -20; fi"
+          }
+        ]
+      }
+    ]
+  }
+}

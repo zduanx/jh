@@ -459,6 +459,95 @@ See [ADR-024](./DECISIONS.md#adr-024-presigned-urls-for-resume-upload-direct-to-
 
 ---
 
+## Phase 5: Stories (Behavioral Interview Prep)
+
+**Goals:**
+1. Store behavioral interview stories using STAR format
+2. Tag and categorize stories by question type
+3. Quick navigation between questions
+
+### Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                         Stories Page (React)                                 │
+│  ┌───────────────────────────────────────────────────────────────────────┐  │
+│  │  Stories                                                               │  │
+│  │  Behavioral interview preparation with STAR format                    │  │
+│  └───────────────────────────────────────────────────────────────────────┘  │
+│  ┌─────────────────┬─────────────────────────────────────────────────────┐  │
+│  │  QUESTIONS      │  STORY CARDS                                        │  │
+│  │  (280px)        │  (flex 1)                                           │  │
+│  │  ┌───────────┐  │  ┌─────────────────────────────────────────────┐    │  │
+│  │  │ Tell me   │  │  │ Question: [Tell me about a time...     ] [×]│    │  │
+│  │  │ about a   │  │  │ Type: [Leadership ▼]  Tags: [team] [+]      │    │  │
+│  │  │ time when │  │  │                                              │    │  │
+│  │  │ you led   │  │  │ ┌────────────────────────────────────────┐  │    │  │
+│  │  │ a project │  │  │ │ Overview (read-only)                   │  │    │  │
+│  │  │ [leader.] │  │  │ │ I was leading a team of 5...           │  │    │  │
+│  │  ├───────────┤  │  │ │ My responsibility was to ensure...     │  │    │  │
+│  │  │ Describe  │◀─┼──┼─│ I started by analyzing...              │  │    │  │
+│  │  │ a time    │  │  │ │ We delivered on time and under...      │  │    │  │
+│  │  │ you had   │  │  │ └────────────────────────────────────────┘  │    │  │
+│  │  │ conflict  │  │  │                                              │    │  │
+│  │  │ [conflict]│  │  │ Situation: [editable textarea]               │    │  │
+│  │  ├───────────┤  │  │ Task: [editable textarea]                    │    │  │
+│  │  │ What is   │  │  │ Action: [editable textarea]                  │    │  │
+│  │  │ your      │  │  │ Result: [editable textarea]                  │    │  │
+│  │  │ greatest  │  │  │                                              │    │  │
+│  │  │ weakness? │  │  │                         [Cancel] [Save]      │    │  │
+│  │  └───────────┘  │  └─────────────────────────────────────────────┘    │  │
+│  │                 │                                                      │  │
+│  │  [+ New Story]  │  ┌─────────────────────────────────────────────┐    │  │
+│  │                 │  │ STORY CARD #2 ...                           │    │  │
+│  │  [5 stories]    │  └─────────────────────────────────────────────┘    │  │
+│  └─────────────────┴─────────────────────────────────────────────────────┘  │
+└────────────────┬────────────────────────────────────────────────────────────┘
+                 │ HTTPS API calls
+                 ↓
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                      API Gateway + Lambda                                    │
+│                                                                              │
+│  GET    /api/stories           → List all stories (optional: ?type, ?tag)   │
+│  GET    /api/stories/{id}      → Get single story                           │
+│  POST   /api/stories           → Create new story                           │
+│  PATCH  /api/stories/{id}      → Update story fields                        │
+│  DELETE /api/stories/{id}      → Delete story                               │
+└────────────────┬────────────────────────────────────────────────────────────┘
+                 ↓
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                          PostgreSQL (Neon)                                   │
+│  stories: user_id, question, type, tags[], STAR fields, timestamps          │
+│  Indexes: user_id, type, GIN on tags[]                                      │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Database Schema
+
+**stories:**
+- id, user_id (FK to users)
+- question (TEXT) - the behavioral question
+- type (TEXT) - category (leadership, conflict, teamwork, etc.)
+- tags (TEXT[]) - PostgreSQL array for flexible tagging
+- situation, task, action, result (TEXT) - STAR format fields
+- created_at, updated_at
+
+### UI Behavior
+
+- **Left panel**: Question list with full text wrapping, click scrolls to card
+- **Right panel**: Scrollable story cards with smooth scroll behavior
+- **Overview**: Read-only, concatenates STAR fields with newlines
+- **Tags**: Enter or Space creates token, × removes
+- **Dirty state**: Cancel/Save buttons appear when changes detected
+- **Delete**: Confirmation modal required
+
+### Question Types
+
+- leadership, conflict, teamwork, problem-solving
+- failure, success, communication, time-management
+
+---
+
 ## Key Design Decisions
 
 All architectural decisions documented in [DECISIONS.md](./DECISIONS.md):
