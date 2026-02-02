@@ -7,6 +7,7 @@ import DashboardPage from './pages/DashboardPage';
 import IngestPage from './pages/IngestPage';
 import SearchPage from './pages/SearchPage';
 import TrackPage from './pages/track/TrackPage';
+import StoriesPage from './pages/stories/StoriesPage';
 import Layout from './components/Layout';
 import ProtectedRoute from './components/ProtectedRoute';
 import './App.css';
@@ -68,6 +69,16 @@ function App() {
                 <ProtectedRoute>
                   <Layout>
                     <TrackPage />
+                  </Layout>
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/stories"
+              element={
+                <ProtectedRoute>
+                  <Layout>
+                    <StoriesPage />
                   </Layout>
                 </ProtectedRoute>
               }

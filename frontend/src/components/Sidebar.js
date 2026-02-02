@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { NavLink } from 'react-router-dom';
-import { MdDashboard, MdCloudDownload, MdSearch, MdChecklist, MdLogout, MdChevronLeft, MdChevronRight } from 'react-icons/md';
+import { MdDashboard, MdCloudDownload, MdSearch, MdChecklist, MdMenuBook, MdLogout, MdChevronLeft, MdChevronRight } from 'react-icons/md';
 import { useUser } from '../context/UserContext';
 import Logo from './Logo';
 import './Sidebar.css';
@@ -37,6 +37,7 @@ function Sidebar({ onToggle }) {
     { path: '/ingest', icon: MdCloudDownload, label: 'Ingest' },
     { path: '/search', icon: MdSearch, label: 'Search' },
     { path: '/track', icon: MdChecklist, label: 'Track' },
+    { path: '/stories', icon: MdMenuBook, label: 'Stories' },
   ];
 
   return (

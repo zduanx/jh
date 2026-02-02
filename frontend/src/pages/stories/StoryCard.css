@@ -1,0 +1,336 @@
+/* =============================================================================
+   StoryCard - All classes prefixed with 'stc-' to avoid conflicts
+   ============================================================================= */
+
+.stc-card {
+  background: white;
+  border-radius: 12px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+  padding: 24px;
+  margin-bottom: 16px;
+  border: 2px solid transparent;
+  transition: border-color 0.2s ease;
+}
+
+.stc-card.active {
+  border-color: #3b82f6;
+}
+
+/* Header */
+.stc-header {
+  display: flex;
+  gap: 12px;
+  margin-bottom: 16px;
+  align-items: flex-start;
+}
+
+.stc-question-field {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.stc-question-field label {
+  font-size: 14px;
+  font-weight: 600;
+  color: #1e293b;
+  white-space: nowrap;
+}
+
+.stc-question-input {
+  flex: 1;
+  padding: 10px 12px;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  font-size: 15px;
+  font-weight: 500;
+  color: #1e293b;
+  box-sizing: border-box;
+}
+
+.stc-question-input:focus {
+  outline: none;
+  border-color: #3b82f6;
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+}
+
+.stc-delete-btn {
+  width: 32px;
+  height: 32px;
+  background: none;
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+  color: #94a3b8;
+  font-size: 20px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  flex-shrink: 0;
+}
+
+.stc-delete-btn:hover {
+  background: #fef2f2;
+  border-color: #ef4444;
+  color: #ef4444;
+}
+
+/* Meta - Type and Tags */
+.stc-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  margin-bottom: 20px;
+}
+
+.stc-type-row,
+.stc-tags-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.stc-type-row label,
+.stc-tags-row label {
+  font-size: 13px;
+  font-weight: 500;
+  color: #64748b;
+}
+
+.stc-type-row select {
+  padding: 6px 12px;
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+  font-size: 13px;
+  color: #1e293b;
+  background: white;
+  cursor: pointer;
+}
+
+.stc-type-row select:focus {
+  outline: none;
+  border-color: #3b82f6;
+}
+
+/* Tags */
+.stc-tags-container {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+
+.stc-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px;
+  background: #eff6ff;
+  color: #3b82f6;
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.stc-tag button {
+  background: none;
+  border: none;
+  color: #3b82f6;
+  font-size: 14px;
+  cursor: pointer;
+  padding: 0;
+  line-height: 1;
+  opacity: 0.7;
+}
+
+.stc-tag button:hover {
+  opacity: 1;
+}
+
+.stc-tag-input {
+  border: none;
+  outline: none;
+  font-size: 13px;
+  padding: 4px;
+  min-width: 80px;
+  background: transparent;
+}
+
+.stc-tag-input::placeholder {
+  color: #94a3b8;
+}
+
+/* Overview */
+.stc-overview {
+  margin-bottom: 20px;
+  padding: 16px;
+  background: #f8fafc;
+  border-radius: 8px;
+  border: 1px solid #e2e8f0;
+}
+
+.stc-overview label {
+  display: block;
+  font-size: 12px;
+  font-weight: 600;
+  color: #64748b;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 8px;
+}
+
+.stc-overview-content {
+  font-size: 14px;
+  color: #475569;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+/* STAR Fields */
+.stc-star-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.stc-field label {
+  display: block;
+  font-size: 13px;
+  font-weight: 600;
+  color: #1e293b;
+  margin-bottom: 6px;
+}
+
+.stc-field textarea {
+  width: 100%;
+  padding: 12px;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  font-size: 14px;
+  color: #1e293b;
+  resize: vertical;
+  line-height: 1.5;
+  font-family: inherit;
+  box-sizing: border-box;
+}
+
+.stc-field textarea:focus {
+  outline: none;
+  border-color: #3b82f6;
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+}
+
+.stc-field textarea::placeholder {
+  color: #94a3b8;
+}
+
+/* Action Buttons */
+.stc-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 12px;
+  margin-top: 20px;
+  padding-top: 16px;
+  border-top: 1px solid #e2e8f0;
+}
+
+.stc-cancel-btn {
+  padding: 8px 16px;
+  background: white;
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+  font-size: 14px;
+  font-weight: 500;
+  color: #64748b;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.stc-cancel-btn:hover {
+  background: #f8fafc;
+  border-color: #cbd5e1;
+}
+
+.stc-cancel-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.stc-save-btn {
+  padding: 8px 20px;
+  background: #3b82f6;
+  border: none;
+  border-radius: 6px;
+  font-size: 14px;
+  font-weight: 500;
+  color: white;
+  cursor: pointer;
+  transition: background 0.2s ease;
+}
+
+.stc-save-btn:hover {
+  background: #2563eb;
+}
+
+.stc-save-btn:disabled {
+  background: #94a3b8;
+  cursor: not-allowed;
+}
+
+/* Delete Confirmation Modal */
+.stc-modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+
+.stc-modal {
+  background: white;
+  border-radius: 12px;
+  padding: 24px;
+  max-width: 400px;
+  width: 90%;
+  box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1);
+}
+
+.stc-modal h3 {
+  margin: 0 0 8px 0;
+  color: #1e293b;
+  font-size: 18px;
+}
+
+.stc-modal p {
+  margin: 0 0 20px 0;
+  color: #64748b;
+  font-size: 14px;
+}
+
+.stc-modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 12px;
+}
+
+.stc-delete-confirm-btn {
+  padding: 8px 16px;
+  background: #ef4444;
+  border: none;
+  border-radius: 6px;
+  font-size: 14px;
+  font-weight: 500;
+  color: white;
+  cursor: pointer;
+  transition: background 0.2s ease;
+}
+
+.stc-delete-confirm-btn:hover {
+  background: #dc2626;
+}
