@@ -380,6 +380,7 @@ def generate_template_yaml(sam_config, env_metadata, static_env_vars):
         "          - GET",
         "          - POST",
         "          - PUT",
+        "          - PATCH",
         "          - DELETE",
         "          - OPTIONS",
         "        AllowCredentials: true",
