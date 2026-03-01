@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 
 /**
  * JobMetadataInputs - Editable metadata fields for a tracked job.
@@ -77,6 +77,20 @@ function JobMetadataInputs({ trackingId, notes, onUpdate, disabled, isRejected }
     setIsDirty(true);
   };
 
+  const noteRef = useRef(null);
+
+  // Auto-resize textarea to fit content
+  const autoResize = useCallback(() => {
+    const el = noteRef.current;
+    if (!el) return;
+    el.style.height = 'auto';
+    el.style.height = el.scrollHeight + 'px';
+  }, []);
+
+  useEffect(() => {
+    autoResize();
+  }, [generalNote, autoResize]);
+
   const isDisabled = disabled || isSaving || isRejected;
 
   return (
@@ -110,6 +124,7 @@ function JobMetadataInputs({ trackingId, notes, onUpdate, disabled, isRejected }
       <div className="trk-metadata-note">
         <label htmlFor={`note-${trackingId}`}>Note</label>
         <textarea
+          ref={noteRef}
           id={`note-${trackingId}`}
           value={generalNote}
           onChange={handleNoteChange}

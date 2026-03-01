@@ -799,8 +799,9 @@
   font-size: 13px;
   color: #1e293b;
   background: #f8fafc;
-  resize: vertical;
+  resize: none;
   min-height: 48px;
+  overflow: hidden;
   font-family: inherit;
   transition: border-color 0.15s ease, background 0.15s ease;
 }
