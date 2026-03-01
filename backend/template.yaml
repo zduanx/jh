@@ -69,6 +69,15 @@ Resources:
             FunctionName: !Ref IngestionWorker
         - S3CrudPolicy:
             BucketName: !Ref ResumeContentBucket
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action:
+                - logs:FilterLogEvents
+              Resource:
+                - !Sub arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/IngestionWorker:*
+                - !Sub arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/CrawlerWorker:*
+                - !Sub arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/ExtractorWorker:*
       Environment:
         Variables:
           WORKER_FUNCTION_NAME: !Ref IngestionWorker

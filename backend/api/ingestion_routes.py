@@ -662,6 +662,9 @@ async def _progress_generator(run_id: int, user_id: int):
                 yield f"event: status\ndata: {run.status}\n\n"
 
             elif run.status == RunStatus.INGESTING:
+                # Emit status so frontend knows we're ingesting
+                yield f"event: status\ndata: {run.status}\n\n"
+
                 # Poll jobs table for real-time updates
                 jobs = db.query(Job).filter(Job.run_id == run_id).all()
                 logger.info(f"SSE poll run {run_id}: {len(jobs)} jobs, sent_all_jobs={sent_all_jobs}")
