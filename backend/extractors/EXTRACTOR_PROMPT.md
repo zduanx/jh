@@ -193,16 +193,16 @@ Parsing strategy:
 
 ## Registry Integration
 
-After creating the extractor, add it to two files:
+After creating the extractor, add the company to three places:
 
-**`extractors/enums.py`:**
+**1. `extractors/enums.py`:**
 ```python
 class Company(str, Enum):
     {COMPANY_UPPER} = "{company}"
     # ... other companies
 ```
 
-**`extractors/registry.py`:**
+**2. `extractors/registry.py`:**
 ```python
 from .{company} import {Company}Extractor
 
@@ -211,6 +211,17 @@ COMPANY_REGISTRY = {
     # ... other extractors
 }
 ```
+
+**3. Company icon — add to `COMPANY_METADATA` in `api/constants.py`:**
+
+```python
+COMPANY_METADATA = {
+    # ... other companies
+    "{company}": {"display_name": "{Company}", "logo_url": "https://www.google.com/s2/favicons?domain={company}.com&sz=128"},
+}
+```
+
+Uses Google's favicon service. Adjust the domain if the company's website differs from `{company}.com`.
 
 ---
 
@@ -445,6 +456,7 @@ asyncio.run(main())
 - [ ] `extract_raw_info()` parses description and requirements from raw HTML
 - [ ] Hardcoded filters are documented in docstring
 - [ ] Added to `registry.py` and `enums.py`
+- [ ] Added company icon to `COMPANY_METADATA` in `api/constants.py`
 
 ### Validation
 - [ ] Step 1 passed: source URLs extracted successfully

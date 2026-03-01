@@ -40,7 +40,7 @@ from db.session import get_db
 from models.job import Job
 from models.job_tracking import JobTracking, TrackingStage, STAGE_ORDER
 from models.tracking_event import TrackingEvent, EventType
-from api.ingestion_routes import COMPANY_METADATA
+from api.constants import COMPANY_METADATA
 
 logger = logging.getLogger(__name__)
 

@@ -38,6 +38,9 @@ class OpenAIExtractor(BaseJobExtractor[TitleFilters]):
     """
     Extract job URLs from OpenAI careers (Ashby platform)
 
+    Hardcoded filters:
+        - Country: United States only (address.postalAddress.addressCountry)
+
     Example:
         extractor = OpenAIExtractor(config=TitleFilters())
         urls = extractor.extract_source_urls_metadata()
@@ -56,6 +59,9 @@ class OpenAIExtractor(BaseJobExtractor[TitleFilters]):
         headers = super().get_headers()
         headers['Accept'] = 'application/json'
         return headers
+
+    # Hardcoded filters
+    COUNTRY = 'United States'
 
     async def _fetch_all_jobs(self) -> List[Dict[str, Any]]:
         """
@@ -80,6 +86,11 @@ class OpenAIExtractor(BaseJobExtractor[TitleFilters]):
 
             standardized_jobs = []
             for job in jobs:
+                # Filter: US jobs only
+                country = (job.get('address') or {}).get('postalAddress', {}).get('addressCountry', '')
+                if country != self.COUNTRY:
+                    continue
+
                 # Put jobUrl into response_data so base class uses it for URL building
                 job_data = dict(job)
                 job_data['url'] = job.get('jobUrl', '')
