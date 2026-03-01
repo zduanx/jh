@@ -27,6 +27,7 @@ from .anthropic import AnthropicExtractor
 from .tiktok import TikTokExtractor
 from .roblox import RobloxExtractor
 from .netflix import NetflixExtractor
+from .openai import OpenAIExtractor
 
 
 # Company to Extractor mapping
@@ -37,6 +38,7 @@ COMPANY_REGISTRY: Dict[Company, Type[BaseJobExtractor]] = {
     Company.TIKTOK: TikTokExtractor,
     Company.ROBLOX: RobloxExtractor,
     Company.NETFLIX: NetflixExtractor,
+    Company.OPENAI: OpenAIExtractor,
 }
 
 

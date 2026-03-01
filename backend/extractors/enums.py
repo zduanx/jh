@@ -20,3 +20,4 @@ class Company(str, Enum):
     TIKTOK = "tiktok"
     ROBLOX = "roblox"
     NETFLIX = "netflix"
+    OPENAI = "openai"
