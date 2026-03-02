@@ -45,6 +45,7 @@ from models.job import Job
 from sourcing.extractor_utils import run_extractors_async
 
 logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
 
 router = APIRouter()
 
@@ -635,11 +636,13 @@ async def _progress_generator(run_id: int, user_id: int):
     db = SessionLocal()
     try:
         while True:
-            # TEMP: Force close after 30s to simulate AWS API Gateway timeout
-            # API Gateway terminates connections abruptly - no chance to send data
-            if time.time() - start_time > 30:
-                logger.info(f"SSE forcing close after 30s for run {run_id} (simulating API Gateway timeout)")
-                raise Exception("Simulated API Gateway 29s timeout")
+            # Force close before Lambda timeout (30s) so Mangum can return
+            # the buffered SSE events. API Gateway + Mangum buffers the entire
+            # StreamingResponse and returns it at once when the generator ends.
+            # Must finish well before the 30s Lambda timeout to avoid 503.
+            if time.time() - start_time > 25:
+                logger.info(f"SSE closing after 25s for run {run_id} (before Lambda timeout)")
+                break
             # Expire all cached objects so next query fetches fresh data
             # This is the standard SQLAlchemy pattern for long-running sessions
             db.expire_all()
