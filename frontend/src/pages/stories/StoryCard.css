@@ -183,8 +183,6 @@
   color: #475569;
   line-height: 1.6;
   white-space: pre-wrap;
-  max-height: 200px;
-  overflow-y: auto;
 }
 
 /* STAR Fields */
@@ -194,12 +192,56 @@
   gap: 16px;
 }
 
+.stc-field-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  cursor: pointer;
+  padding: 4px 0;
+  user-select: none;
+  color: #64748b;
+}
+
+.stc-field-header:hover {
+  color: #3b82f6;
+}
+
+.stc-field-header label {
+  cursor: pointer;
+}
+
 .stc-field label {
   display: block;
   font-size: 13px;
   font-weight: 600;
   color: #1e293b;
-  margin-bottom: 6px;
+  margin-bottom: 0;
+}
+
+.stc-star-edit {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  margin-top: 8px;
+}
+
+.stc-star-preview {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.stc-field-preview {
+  font-size: 14px;
+  color: #475569;
+  line-height: 1.6;
+  white-space: pre-wrap;
+}
+
+.stc-field-preview-label {
+  font-weight: 600;
+  color: #1e293b;
 }
 
 .stc-field textarea {

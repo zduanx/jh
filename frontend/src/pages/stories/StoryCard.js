@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { MdExpandMore, MdExpandLess } from 'react-icons/md';
 import './StoryCard.css';
 
 /**
@@ -25,6 +26,9 @@ function StoryCard({ story, isActive, onUpdate, onDelete }) {
     action: story.action || '',
     result: story.result || '',
   });
+
+  // STAR section expand state (collapsed by default)
+  const [starExpanded, setStarExpanded] = useState(false);
 
   // Tag input state
   const [tagInput, setTagInput] = useState('');
@@ -65,6 +69,11 @@ function StoryCard({ story, isActive, onUpdate, onDelete }) {
       formData.result,
     ].filter(Boolean);
     return parts.join('\n\n');
+  };
+
+  // Toggle STAR section expand/collapse
+  const toggleStar = () => {
+    setStarExpanded(prev => !prev);
   };
 
   // Handle field change
@@ -166,6 +175,7 @@ function StoryCard({ story, isActive, onUpdate, onDelete }) {
             <option value="success">Success</option>
             <option value="communication">Communication</option>
             <option value="time-management">Time Management</option>
+            <option value="other">Other</option>
           </select>
         </div>
 
@@ -200,47 +210,32 @@ function StoryCard({ story, isActive, onUpdate, onDelete }) {
         </div>
       )}
 
-      {/* STAR Fields */}
+      {/* STAR Fields - Collapsible as a whole */}
       <div className="stc-star-fields">
-        <div className="stc-field">
-          <label>Situation</label>
-          <textarea
-            value={formData.situation}
-            onChange={(e) => handleChange('situation', e.target.value)}
-            placeholder="Describe the context and background..."
-            rows={3}
-          />
+        <div className="stc-field-header" onClick={toggleStar}>
+          <label>STAR</label>
+          {starExpanded ? <MdExpandLess size={20} /> : <MdExpandMore size={20} />}
         </div>
-
-        <div className="stc-field">
-          <label>Task</label>
-          <textarea
-            value={formData.task}
-            onChange={(e) => handleChange('task', e.target.value)}
-            placeholder="What was your responsibility?"
-            rows={3}
-          />
-        </div>
-
-        <div className="stc-field">
-          <label>Action</label>
-          <textarea
-            value={formData.action}
-            onChange={(e) => handleChange('action', e.target.value)}
-            placeholder="What steps did you take?"
-            rows={4}
-          />
-        </div>
-
-        <div className="stc-field">
-          <label>Result</label>
-          <textarea
-            value={formData.result}
-            onChange={(e) => handleChange('result', e.target.value)}
-            placeholder="What was the outcome?"
-            rows={3}
-          />
-        </div>
+        {starExpanded && (
+          <div className="stc-star-edit">
+            {[
+              { key: 'situation', label: 'Situation', placeholder: 'Describe the context and background...', rows: 3 },
+              { key: 'task', label: 'Task', placeholder: 'What was your responsibility?', rows: 3 },
+              { key: 'action', label: 'Action', placeholder: 'What steps did you take?', rows: 4 },
+              { key: 'result', label: 'Result', placeholder: 'What was the outcome?', rows: 3 },
+            ].map(({ key, label, placeholder, rows }) => (
+              <div key={key} className="stc-field">
+                <label>{label}</label>
+                <textarea
+                  value={formData[key]}
+                  onChange={(e) => handleChange(key, e.target.value)}
+                  placeholder={placeholder}
+                  rows={rows}
+                />
+              </div>
+            ))}
+          </div>
+        )}
       </div>
 
       {/* Action Buttons */}
