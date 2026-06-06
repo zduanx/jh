@@ -1,0 +1,16 @@
+{
+  "name": "jh-chat",
+  "version": "0.1.0",
+  "description": "Job Hunt chat service (Node.js). Phase 6: streaming runtime + mock AI behind a seam.",
+  "type": "module",
+  "main": "local.js",
+  "scripts": {
+    "start": "node local.js"
+  },
+  "dependencies": {
+    "jsonwebtoken": "^9.0.2"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

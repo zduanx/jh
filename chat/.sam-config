@@ -1,0 +1,35 @@
+# ============================================================================
+# AWS SAM DEPLOYMENT CONFIGURATION METADATA - CHAT (Node.js)
+# ============================================================================
+# Pure deployment metadata (no secrets). Committed to git.
+#
+# Parsed by chat/scripts/generate_template.py + generate_samconfig.py to produce
+# chat/template.yaml and chat/samconfig.toml. Called automatically by jpushchat.
+#
+# Secret env vars (Phase 6B Redis, Phase 7 API key) go in chat/.env.local as
+# comments with _PARAM_NAME / _PROD_VALUE metadata (mirrors backend). None in 6A.
+# ============================================================================
+
+# CloudFormation Stack Configuration
+CFN_STACK_NAME=jh-chat-stack
+CFN_REGION=us-east-1
+CFN_CAPABILITIES=CAPABILITY_IAM
+
+# Chat Lambda (Node.js) — streaming via Function URL
+CHAT_FUNCTION_NAME=JobHuntChat
+CHAT_FUNCTION_DESCRIPTION=Streaming chat service (Node.js) for Job Hunt Tracker
+CHAT_HANDLER=handler.handler
+CHAT_RUNTIME=nodejs22.x
+CHAT_TIMEOUT=300
+CHAT_MEMORY=256
+CHAT_CODE_URI=.
+
+# Function URL Configuration
+CHAT_FUNCTION_URL_AUTH=NONE
+CHAT_FUNCTION_URL_INVOKE_MODE=RESPONSE_STREAM
+
+# CORS for the Function URL (browser cross-origin from the frontend)
+CHAT_CORS_ALLOW_ORIGINS=http://localhost:3000,https://zduan-job.vercel.app
+
+# Static (non-secret) env vars set on the Lambda (ENV_VAR_ prefix)
+ENV_VAR_ALGORITHM=HS256
