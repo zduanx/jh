@@ -15,6 +15,7 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { streamTurn } from './streamTurn.js';
 import { extractBearer, verifyToken } from './auth.js';
+import { getSession } from './redis.js';
 
 // Load .env.local for local dev (Lambda does NOT use this — its env comes from
 // the SAM template / deploy). Uses Node's built-in env-file loader (no deps).
@@ -55,18 +56,36 @@ const server = http.createServer(async (req, res) => {
     return sendJson(res, 200, { status: 'healthy', service: 'jh-chat' });
   }
 
+  // Debug/introspection: return the stored session blob for the authenticated
+  // user. Uses the SAME production path (verify JWT → uid → getSession from Redis)
+  // so it reflects exactly what the chat turn reads/writes.
+  // GET /session?session_id=...
+  if (method === 'GET' && url.startsWith('/session')) {
+    let uid;
+    try {
+      uid = verifyToken(extractBearer(req.headers)).user_id;
+    } catch (e) {
+      return sendJson(res, 401, { detail: 'Not authenticated' });
+    }
+    const sessionId = new URL(url, `http://localhost:${PORT}`).searchParams.get('session_id') || 'no-session';
+    const session = await getSession(uid, sessionId);
+    return sendJson(res, 200, { uid, session_id: sessionId, session });
+  }
+
   // Chat — streams the turn as SSE by consuming the generateResponse seam.
   if (method === 'POST' && url === '/chat') {
     // Auth: verify JWT before streaming (return 401 before status is locked to 200).
+    let uid;
     try {
-      verifyToken(extractBearer(req.headers));
+      const payload = verifyToken(extractBearer(req.headers));
+      uid = payload.user_id;
     } catch (e) {
       return sendJson(res, 401, { detail: 'Not authenticated' });
     }
 
     const body = await readBody(req);
     const sessionId = body.session_id ?? 'no-session';
-    const history = []; // Phase 6B: load from Redis. For now, no history.
+    const userMessage = body.message ?? '';
 
     res.writeHead(200, {
       'Content-Type': 'text/event-stream',
@@ -86,10 +105,11 @@ const server = http.createServer(async (req, res) => {
       }
     });
 
-    // Shared turn-streaming logic (budget, abort, error handling).
+    // Shared turn logic: read history (Redis) → generate → save (budget/abort/error).
     await streamTurn((frame) => res.write(frame), {
+      uid,
       sessionId,
-      history,
+      userMessage,
       isAborted: () => aborted,
     });
     res.end();

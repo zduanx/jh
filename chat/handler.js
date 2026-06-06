@@ -20,14 +20,17 @@
 import { streamTurn } from './streamTurn.js';
 import { sseFrame } from './sse.js';
 import { extractBearer, verifyToken } from './auth.js';
+import { getSession } from './redis.js';
 
 /* global awslambda */
 export const handler = awslambda.streamifyResponse(async (event, responseStream, _context) => {
   // --- Auth: verify JWT BEFORE streaming, so we can return a real 401 status.
   // (Once the stream starts, status is locked to 200 — see API_DESIGN.md §15.)
   const headers = event.headers || {};
+  let uid;
   try {
-    verifyToken(extractBearer(headers));
+    const payload = verifyToken(extractBearer(headers));
+    uid = payload.user_id;
   } catch (e) {
     const errStream = awslambda.HttpResponseStream.from(responseStream, {
       statusCode: 401,
@@ -35,6 +38,23 @@ export const handler = awslambda.streamifyResponse(async (event, responseStream,
     });
     errStream.write(JSON.stringify({ detail: 'Not authenticated' }));
     errStream.end();
+    return;
+  }
+
+  // Debug/introspection: GET /session?session_id=... → the stored Redis blob.
+  // Same production path (JWT → uid → getSession). Function URL puts the path in
+  // event.rawPath and query in event.rawQueryString / queryStringParameters.
+  const rawPath = event.rawPath || event.requestContext?.http?.path || '';
+  const method = event.requestContext?.http?.method || 'POST';
+  if (method === 'GET' && rawPath.endsWith('/session')) {
+    const sessionId = event.queryStringParameters?.session_id || 'no-session';
+    const session = await getSession(uid, sessionId);
+    const out = awslambda.HttpResponseStream.from(responseStream, {
+      statusCode: 200,
+      headers: { 'Content-Type': 'application/json' },
+    });
+    out.write(JSON.stringify({ uid, session_id: sessionId, session }));
+    out.end();
     return;
   }
 
@@ -51,7 +71,7 @@ export const handler = awslambda.streamifyResponse(async (event, responseStream,
   }
 
   const sessionId = body.session_id ?? 'no-session';
-  const history = []; // Phase 6B: load from Redis.
+  const userMessage = body.message ?? '';
 
   // Set SSE response metadata (status + headers) before streaming.
   responseStream = awslambda.HttpResponseStream.from(responseStream, {
@@ -74,8 +94,9 @@ export const handler = awslambda.streamifyResponse(async (event, responseStream,
 
   try {
     await streamTurn((frame) => responseStream.write(frame), {
+      uid,
       sessionId,
-      history,
+      userMessage,
       isAborted: () => aborted,
     });
   } catch (err) {

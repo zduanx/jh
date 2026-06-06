@@ -18,6 +18,14 @@ Parameters:
     Type: String
     Description: Secret key for JWT signing (shared with backend)
     NoEcho: true
+  UpstashRedisRestUrl:
+    Type: String
+    Description: Upstash Redis REST endpoint
+    NoEcho: false
+  UpstashRedisRestToken:
+    Type: String
+    Description: Upstash Redis REST auth token
+    NoEcho: true
 
 Resources:
   ChatFunction:
@@ -44,6 +52,8 @@ Resources:
         Variables:
           ALGORITHM: HS256
           SECRET_KEY: !Ref JWTSecretKey
+          UPSTASH_REDIS_REST_URL: !Ref UpstashRedisRestUrl
+          UPSTASH_REDIS_REST_TOKEN: !Ref UpstashRedisRestToken
 
 Outputs:
   ChatFunctionUrl:
