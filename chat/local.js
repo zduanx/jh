@@ -13,7 +13,7 @@ import http from 'node:http';
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
-import { streamTurn } from './streamTurn.js';
+import { runTurn, adaptNodeRes } from './sseTransport.js';
 import { extractBearer, verifyToken } from './auth.js';
 import { getSession } from './redis.js';
 
@@ -93,26 +93,8 @@ const server = http.createServer(async (req, res) => {
       Connection: 'keep-alive',
     });
 
-    // If the client disconnects, stop producing (ADR-028: interruption aborts).
-    // Use res.on('close') — the response socket closing is the reliable
-    // disconnect signal for a streaming response (req 'close' does not fire
-    // dependably once the request body has been consumed).
-    let aborted = false;
-    res.on('close', () => {
-      if (!res.writableEnded) {
-        aborted = true;
-        console.log(`chat: client disconnected, aborting turn for ${sessionId}`);
-      }
-    });
-
-    // Shared turn logic: read history (Redis) → generate → save (budget/abort/error).
-    await streamTurn((frame) => res.write(frame), {
-      uid,
-      sessionId,
-      userMessage,
-      isAborted: () => aborted,
-    });
-    res.end();
+    // Shared turn runner over an adapted stream — identical to handler.js.
+    await runTurn(adaptNodeRes(res), { uid, sessionId, userMessage });
     return;
   }
 

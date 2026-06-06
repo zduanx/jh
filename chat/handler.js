@@ -17,8 +17,7 @@
  * deploy, while local.js covers local dev.
  */
 
-import { streamTurn } from './streamTurn.js';
-import { sseFrame } from './sse.js';
+import { runTurn } from './sseTransport.js';
 import { extractBearer, verifyToken } from './auth.js';
 import { getSession } from './redis.js';
 
@@ -82,33 +81,6 @@ export const handler = awslambda.streamifyResponse(async (event, responseStream,
     },
   });
 
-  // Client-disconnect abort (ADR-028): the response stream errors/closes when
-  // the client goes away.
-  let aborted = false;
-  responseStream.on('error', () => {
-    aborted = true;
-  });
-  responseStream.on('close', () => {
-    aborted = true;
-  });
-
-  try {
-    await streamTurn((frame) => responseStream.write(frame), {
-      uid,
-      sessionId,
-      userMessage,
-      isAborted: () => aborted,
-    });
-  } catch (err) {
-    console.error('chat handler error', err);
-    if (!aborted) {
-      try {
-        responseStream.write(sseFrame('error', 'internal error'));
-      } catch {
-        /* stream already gone */
-      }
-    }
-  } finally {
-    responseStream.end();
-  }
+  // Shared turn runner — responseStream already matches StreamLike. Identical to local.js.
+  await runTurn(responseStream, { uid, sessionId, userMessage });
 });
