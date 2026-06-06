@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import './SearchPage.css';
 import CompanyCard from './CompanyCard';
 import JobDetails from './JobDetails';
+import ChatWidget from '../../components/chat/ChatWidget';
 
 function SearchPage() {
   const [companies, setCompanies] = useState([]);
@@ -540,6 +541,9 @@ function SearchPage() {
       <div className="search-footer">
         Total: {totalReady} ready {totalReady === 1 ? 'job' : 'jobs'}
       </div>
+
+      {/* Phase 6C: floating chat assistant */}
+      <ChatWidget />
     </div>
   );
 }
