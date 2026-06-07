@@ -16,17 +16,26 @@
  */
 
 import { Redis } from '@upstash/redis';
+import { summarizeConversation } from './summarize.js';
 
 const TTL_SECONDS = 3600; // 1h, sliding (re-set on every write)
 // Block/batch summarization (NOT per-turn sliding):
 // - let messages accumulate up to SUMMARIZE_AT (high-water mark)
 // - then compress the oldest block down to RECENT_KEEP (low-water mark) in ONE batch.
-// This keeps summarization (a Phase 7 LLM call) infrequent — once every
+// This keeps summarization (the 7D LLM call) infrequent — once every
 // (SUMMARIZE_AT - RECENT_KEEP) messages — instead of every turn, which would be
 // costly AND defeat prompt caching (per-turn summary mutation invalidates the
-// cached prefix). See the context-engineering discussion / Phase 7 notes.
-const RECENT_KEEP = 20; // messages kept verbatim after a compaction (~10 exchanges)
-const SUMMARIZE_AT = 30; // only compact when the count reaches this high-water mark
+// cached prefix).
+//
+// Trigger is MESSAGE-COUNT based, NOT token based (7D decision). "Messages" here
+// include tool_use + tool_result blocks the agent injects, so 20 messages ≈ ~5–7
+// real exchanges. Estimated input at 20 msgs: ~3K tokens typical, ~6K worst case
+// (a full resume ≈ 1.4K tokens sits in the window) — vs a 200K context window, so
+// ~2–3%. No truncation risk → count is a sufficient proxy; token accounting would
+// be plumbing for no benefit at these sizes. (Upgrade path if ever needed: a cheap
+// char/4 estimate, or surface usage.input_tokens from callModel.)
+const RECENT_KEEP = 10; // messages kept verbatim after a compaction (~2–3 exchanges)
+const SUMMARIZE_AT = 20; // compact when the count reaches this high-water mark
 
 let _client = null;
 function client() {
@@ -78,11 +87,19 @@ async function appendMessage(uid, sessionId, message) {
 
   // Block compaction: only when we REACH the high-water mark, compress the oldest
   // block down to RECENT_KEEP in one batch. Between triggers we just append — so
-  // summarization (Phase 7 LLM call) runs once every (SUMMARIZE_AT - RECENT_KEEP)
+  // summarization (the 7D LLM call) runs once every (SUMMARIZE_AT - RECENT_KEEP)
   // messages, not every turn, and the cached prefix stays stable between triggers.
   if (session.messages.length >= SUMMARIZE_AT) {
     const overflow = session.messages.splice(0, session.messages.length - RECENT_KEEP);
-    session.summary = summarizeOverflow(session.summary, overflow);
+    // Inline await (7D decision A): summarization is infrequent (~every 10 msgs)
+    // and must complete before we persist the trimmed session. If it fails, keep
+    // the existing summary (overflow is dropped, not lost-with-error) — better a
+    // slightly thinner summary than a broken turn.
+    try {
+      session.summary = await summarizeOverflow(session.summary, overflow);
+    } catch (err) {
+      console.error('chat: summarizeOverflow failed, keeping prior summary', err);
+    }
   }
 
   // Write + refresh sliding TTL in one command.
@@ -119,13 +136,15 @@ export function buildContext(session) {
 }
 
 /**
- * STUB (Phase 7): compress overflow messages into the rolling summary via an LLM call.
- * In 6B we don't summarize — overflow is simply dropped, summary stays "".
- * Bypass on empty input so Phase 7's LLM call is never made with nothing to summarize.
+ * Compress an overflow block into the rolling summary via an LLM call (7D).
+ * Delegates to summarize.js (cheap, non-streaming model). Bypasses the call on
+ * empty input so we never summarize nothing.
+ *
+ * @returns {Promise<string>} the updated rolling summary
  */
-export function summarizeOverflow(existingSummary, overflowMessages) {
+export async function summarizeOverflow(existingSummary, overflowMessages) {
   if (!overflowMessages || overflowMessages.length === 0) return existingSummary;
-  return existingSummary; // Phase 7: LLM summarization of overflowMessages folded in.
+  return summarizeConversation(existingSummary, overflowMessages);
 }
 
 /** Health check used by jready. */

@@ -29,6 +29,22 @@ import Anthropic from '@anthropic-ai/sdk';
 const MODEL = process.env.ANTHROPIC_MODEL || 'claude-sonnet-4-6';
 const MAX_TOKENS = Number(process.env.ANTHROPIC_MAX_TOKENS || 2048);
 
+// Same opt-in gate as agentLoop (jbenode -d / -dd → AGENT_DEBUG=1|2). When on,
+// log each call's token usage incl. prompt-cache fields, so cache hits are visible.
+const DEBUG = process.env.AGENT_DEBUG === '1' || process.env.AGENT_DEBUG === '2';
+function logUsage(u) {
+  if (!DEBUG || !u) return;
+  // cache_read_input_tokens > 0 on turn 2+ means the prompt prefix was cached.
+  // (Will be 0 while the prefix is below Anthropic's ~1024-token cache minimum.)
+  console.log(
+    '[agent] usage:',
+    `in=${u.input_tokens ?? 0}`,
+    `out=${u.output_tokens ?? 0}`,
+    `cache_write=${u.cache_creation_input_tokens ?? 0}`,
+    `cache_read=${u.cache_read_input_tokens ?? 0}`,
+  );
+}
+
 let _client = null;
 function client() {
   if (!_client) {
@@ -84,6 +100,8 @@ export async function callModel({ system, messages, tools }, opts = {}) {
   // textDeltas that stream live. agentLoop awaits stopReason (a promise) at the
   // top of each branch.
   const finalPromise = stream.finalMessage();
+  // Log token usage (incl. prompt-cache fields) once the call completes.
+  finalPromise.then((m) => logUsage(m.usage)).catch(() => {});
 
   return {
     get stopReason() {

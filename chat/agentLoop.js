@@ -102,10 +102,9 @@ export async function* runAgent({
     dumpMessages(`iter ${iter} messages → model`, convo);
     const turn = await callModel({ system, messages: convo, tools: tools.schemas });
 
-    // Drain text deltas LIVE first, yielding tokens as they arrive (true
-    // streaming). A tool-use turn produces no/empty text, so this yields nothing
-    // and we fall through to the tool branch; a final-answer turn streams here.
-    // We buffer what we streamed so the no-stream fallback below doesn't double-emit.
+    // Drain text deltas LIVE, yielding tokens as they arrive (true streaming).
+    // A tool-use turn usually produces no/empty text → yields nothing and we fall
+    // through to the tool branch; a final-answer turn streams here.
     let streamedAny = false;
     if (turn.textDeltas) {
       for await (const delta of turn.textDeltas) {
