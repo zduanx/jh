@@ -24,6 +24,7 @@ from sqlalchemy.orm import Session
 
 from auth.dependencies import get_current_user
 from db.session import get_db
+from db.jobs_service import search_jobs_by_vector
 from models.resume import Resume
 from utils.pdf_text import extract_pdf_text
 from utils.embeddings import vectorize_text
@@ -231,3 +232,37 @@ async def delete_resume(
     db.commit()
     logger.info(f"resume deleted for user {user_id}")
     return {"success": True}
+
+
+@router.get("/match")
+async def match_jobs(
+    top_k: int = 10,
+    current_user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Phase 7A (Step 5): semantic match — top-K jobs most similar to the user's
+    resume (RAG retrieval, proven in plain code before LLM/MCP). Cosine distance
+    via pgvector; smaller distance = closer match.
+    """
+    user_id = current_user["user_id"]
+    resume = db.query(Resume).filter(Resume.user_id == user_id).first()
+    if not resume or resume.embedding is None:
+        raise HTTPException(status_code=404, detail="No embedded resume — upload one first")
+
+    query_vec = [float(x) for x in resume.embedding]
+    results = search_jobs_by_vector(db, user_id, query_vec, top_k=top_k)
+    return {
+        "top_k": top_k,
+        "matches": [
+            {
+                "job_id": job.id,
+                "company": job.company,
+                "title": job.title,
+                "location": job.location,
+                "distance": round(dist, 4),       # cosine distance (0 = identical)
+                "similarity": round(1 - dist, 4),  # convenience: higher = closer
+            }
+            for job, dist in results
+        ],
+    }

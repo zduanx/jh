@@ -373,3 +373,36 @@ def get_jobs_with_search(
             jobs_by_company[job.company].append(job)
 
     return jobs_by_company, search_query
+
+
+def search_jobs_by_vector(
+    db: Session,
+    user_id: int,
+    query_embedding: list[float],
+    top_k: int = 10,
+) -> list[tuple[Job, float]]:
+    """
+    Phase 7A (Step 5): semantic top-K retrieval — RAG's "R".
+
+    Returns the user's jobs most similar to `query_embedding` (e.g. the resume
+    vector), nearest first, as (Job, distance) pairs. Cosine distance via
+    pgvector's `<=>` operator (smaller = more similar). Scoped to the user,
+    READY jobs with a non-null embedding. The HNSW index makes this fast.
+
+    The vector *filters* 700 → top_k in the DB; the LLM (later) reasons over the
+    top_k. See ADR-032 / vectors-rag-eval.md.
+    """
+    # Job.embedding.cosine_distance(...) renders pgvector's <=> operator.
+    distance = Job.embedding.cosine_distance(query_embedding).label("distance")
+    rows = (
+        db.query(Job, distance)
+        .filter(
+            Job.user_id == user_id,
+            Job.status == JobStatus.READY,
+            Job.embedding.isnot(None),
+        )
+        .order_by(distance)
+        .limit(top_k)
+        .all()
+    )
+    return [(job, float(dist)) for job, dist in rows]
