@@ -55,7 +55,14 @@ export async function streamTurn(write, { uid, sessionId, userMessage, isAborted
   let timedOut = false;
 
   try {
-    for await (const event of generateResponse(sessionId, history)) {
+    // Pass uid + the current userMessage into the seam. The mock ignored both
+    // (it echoed history.length); the real agent (7C) NEEDS them: uid → injected
+    // as user_id into every MCP tool call (ADR-033); userMessage → the actual
+    // question sent to Claude. userMessage is NOT in `history` (history was built
+    // before saveUserMessage, to avoid duplicating the question), so it must be
+    // passed explicitly. Options object so later phases can add fields without
+    // changing the signature.
+    for await (const event of generateResponse(sessionId, history, { uid, userMessage })) {
       if (isAborted()) break;
       if (Date.now() > deadline) {
         timedOut = true;
