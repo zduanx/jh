@@ -3,6 +3,7 @@ import './SearchPage.css';
 import CompanyCard from './CompanyCard';
 import JobDetails from './JobDetails';
 import ChatWidget from '../../components/chat/ChatWidget';
+import ProfileResume from '../../components/chat/ProfileResume';
 
 function SearchPage() {
   const [companies, setCompanies] = useState([]);
@@ -460,6 +461,9 @@ function SearchPage() {
         <h1>Search Jobs</h1>
         <p>Browse and search your extracted job postings</p>
       </div>
+
+      {/* Phase 7A: profile resume for the chat assistant */}
+      <ProfileResume />
 
       {/* Top Bar - Search + Sync All */}
       <div className="search-top-bar">
