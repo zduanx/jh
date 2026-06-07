@@ -39,7 +39,10 @@ export async function streamTurn(write, { uid, sessionId, userMessage, isAborted
   const deadline = Date.now() + TURN_BUDGET_MS;
 
   // READ: load prior history and build context BEFORE this turn's user message
-  // (so the model doesn't see the current question duplicated).
+  // (so the model doesn't see the current question duplicated). Emit a step first
+  // so the user gets immediate feedback while Redis is read (the agent's own
+  // "thinking…" step comes next, inside runAgent).
+  write(sseFrame('step', 'loading conversation'));
   const session = await getSession(uid, sessionId);
   const history = buildContext(session);
 

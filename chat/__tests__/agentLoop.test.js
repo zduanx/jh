@@ -64,8 +64,10 @@ test('single tool call then final answer: terminates, streams answer, emits done
   const events = await collect(runAgent({ callModel, tools, system: 's', messages: [] }));
 
   const types = events.map((e) => e.type);
-  assert.deepEqual(types, ['step', 'token', 'token', 'done']);
-  assert.equal(events[0].data, 'using search_jobs_semantic');
+  // First step is the start-of-turn 'thinking'; then the tool-call step.
+  assert.deepEqual(types, ['step', 'step', 'token', 'token', 'done']);
+  assert.equal(events[0].data, 'thinking');
+  assert.equal(events[1].data, 'using search_jobs_semantic');
   assert.equal(events.filter((e) => e.type === 'token').map((e) => e.data).join(''), 'Your top match is SRE.');
   assert.equal(tools.calls.length, 1);
   assert.deepEqual(tools.calls[0], { name: 'search_jobs_semantic', args: { user_id: 5 } });
@@ -132,7 +134,7 @@ test('a tool error becomes a tool_result (model can recover), not a crash', asyn
 
   const events = await collect(runAgent({ callModel, tools, system: 's', messages: [] }));
   // Loop did NOT throw; it recovered to a final answer.
-  assert.deepEqual(events.map((e) => e.type), ['step', 'token', 'done']);
+  assert.deepEqual(events.map((e) => e.type), ['step', 'step', 'token', 'done']); // thinking + tool step
   // The error was passed back as a tool_result.
   const tr = seenMessages[1].at(-1).content.find((c) => c.type === 'tool_result');
   assert.match(tr.content, /db down/);
@@ -143,7 +145,7 @@ test('immediate final answer (no tools) streams and finishes', async () => {
   const callModel = async () => ({ stopReason: 'end_turn', content: [], textDeltas: deltas('hi ', 'there') });
 
   const events = await collect(runAgent({ callModel, tools, system: 's', messages: [] }));
-  assert.deepEqual(events.map((e) => e.type), ['token', 'token', 'done']);
+  assert.deepEqual(events.map((e) => e.type), ['step', 'token', 'token', 'done']); // thinking step, then answer
   assert.equal(tools.calls.length, 0, 'no tools called');
 });
 
@@ -154,8 +156,8 @@ test('end_turn with text blocks but no stream falls back to content text', async
     content: [{ type: 'text', text: 'block answer' }],
   });
   const events = await collect(runAgent({ callModel, tools, system: 's', messages: [] }));
-  assert.deepEqual(events.map((e) => e.type), ['token', 'done']);
-  assert.equal(events[0].data, 'block answer');
+  assert.deepEqual(events.map((e) => e.type), ['step', 'token', 'done']); // thinking step, then answer
+  assert.equal(events.find((e) => e.type === 'token').data, 'block answer');
 });
 
 test('abort stops the loop before the next model call', async () => {
@@ -177,4 +179,12 @@ test('abort stops the loop before the next model call', async () => {
 
 test('DEFAULT_MAX_ITERATIONS is a sane positive number', () => {
   assert.ok(DEFAULT_MAX_ITERATIONS >= 4 && DEFAULT_MAX_ITERATIONS <= 20);
+});
+
+test('emits a "thinking" step first, before any model call', async () => {
+  const tools = fakeTools();
+  const callModel = async () => ({ stopReason: 'end_turn', content: [], textDeltas: deltas('hi') });
+  const events = await collect(runAgent({ callModel, tools, system: 's', messages: [] }));
+  assert.equal(events[0].type, 'step');
+  assert.equal(events[0].data, 'thinking');
 });

@@ -92,6 +92,11 @@ export async function* runAgent({
   log(`turn start: ${convo.length} msg(s), ${tools.schemas.length} tool(s), maxIter=${maxIterations}`);
   log(`  last user msg: ${preview(convo.at(-1)?.content)}`);
 
+  // Immediate feedback before the (possibly 1–2s) first model call — covers the
+  // blank pause between submit and the first streamed token. Tool-call steps
+  // ("using X") still fire later as tools run.
+  yield { type: 'step', data: 'thinking' };
+
   for (let iter = 0; iter < maxIterations; iter++) {
     if (isAborted()) {
       log(`iter ${iter}: aborted before model call`);
