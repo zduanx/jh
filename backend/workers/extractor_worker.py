@@ -52,6 +52,7 @@ from extractors.config import TitleFilters
 from models.ingestion_run import RunStatus
 from models.job import Job, JobStatus
 from utils.worker_logging import ExtractorLogContext
+from utils.embeddings import vectorize_text
 from workers.types import ExtractMessage
 
 logger = logging.getLogger()
@@ -102,17 +103,40 @@ def get_job_by_id(db: Session, job_id: int) -> Optional[Job]:
     return db.query(Job).filter(Job.id == job_id).first()
 
 
+def _build_job_embedding_text(job: Job, description: str, requirements: str) -> str:
+    """Compose the text we embed for a job — what the job 'is', for semantic match."""
+    parts = [
+        job.title or "",
+        job.location or "",
+        description or "",
+        requirements or "",
+    ]
+    return "\n".join(p for p in parts if p).strip()
+
+
 def update_job_extracted(
     db: Session,
     job: Job,
     description: str,
     requirements: str,
 ) -> None:
-    """Update job with extracted data and mark as ready."""
+    """Update job with extracted data, embed it (Phase 7A), and mark as ready."""
     job.status = JobStatus.READY
     job.description = description
     job.requirements = requirements
     job.updated_at = datetime.now(timezone.utc)
+
+    # Phase 7A: embed the job for semantic matching. Best-effort — an embedding
+    # failure must NOT fail extraction (the job still becomes READY; embedding
+    # can be repopulated by re-extracting). Voyage returns numpy float32; pgvector
+    # accepts it directly on write (only JSON serialization needs float()).
+    text = _build_job_embedding_text(job, description, requirements)
+    if text:
+        try:
+            job.embedding = vectorize_text(text)
+        except Exception:
+            logger.exception(f"job {job.id}: embedding failed (continuing; not embedded)")
+
     db.commit()
 
 

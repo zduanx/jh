@@ -15,6 +15,7 @@ Globals:
         GOOGLE_CLIENT_ID: !Ref GoogleClientId
         SECRET_KEY: !Ref JWTSecretKey
         TEST_DATABASE_URL: !Ref TestDatabaseUrl
+        VOYAGE_API_KEY: !Ref VoyageApiKey
         ACCESS_TOKEN_EXPIRE_MINUTES: 1440
         ALGORITHM: HS256
         GOOGLE_CLIENT_SECRET: optional-for-token-validation
@@ -50,6 +51,11 @@ Parameters:
   TestDatabaseUrl:
     Type: String
     Description: PostgreSQL test database connection URL (for testing SQS/Lambda)
+    NoEcho: true
+
+  VoyageApiKey:
+    Type: String
+    Description: Voyage AI API key for embeddings
     NoEcho: true
 
 Resources:

@@ -2,7 +2,11 @@ from datetime import datetime, timezone
 from sqlalchemy import BigInteger, Integer, String, Text, DateTime, ForeignKey
 from sqlalchemy.dialects.postgresql import TSVECTOR
 from sqlalchemy.orm import Mapped, mapped_column
+from pgvector.sqlalchemy import Vector
 from models import Base
+
+# Phase 7A: embedding dimension — must match the Voyage model (voyage-3 = 1024). ADR-032.
+EMBEDDING_DIM = 1024
 
 
 class JobStatus:
@@ -61,6 +65,10 @@ class Job(Base):
     # Phase 3C: Full-text search vector (auto-updated by trigger)
     # Contains weighted tsvector: title (A) + description (B)
     search_vector: Mapped[str] = mapped_column(TSVECTOR, nullable=True)
+
+    # Phase 7A: semantic embedding (Voyage voyage-3, 1024-dim) for RAG job matching.
+    # Populated at extraction; nullable until embedded. See ADR-032.
+    embedding: Mapped[list[float]] = mapped_column(Vector(EMBEDDING_DIM), nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),

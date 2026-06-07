@@ -31,6 +31,9 @@ class Settings(BaseSettings):
     DATABASE_URL: str  # PostgreSQL connection string (production)
     TEST_DATABASE_URL: str = ""  # PostgreSQL connection string (test/dev branch) - Optional
 
+    # Voyage AI embeddings (Phase 7A, ADR-032)
+    VOYAGE_API_KEY: str = ""  # Optional until embedding features are used
+
     class Config:
         # Prioritize .env.local for local development, fallback to .env
         # Use absolute paths to avoid working directory issues
