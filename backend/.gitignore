@@ -48,5 +48,6 @@ htmlcov/
 .DS_Store
 Thumbs.db
 
-# Dev script logs (from jbe-bg)
+# Dev script logs (from jbe-bg / jbemcp-bg)
 server.log
+mcp_server.log
