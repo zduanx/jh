@@ -17,10 +17,12 @@ browsers; this endpoint is called server-to-server.
 
 import os
 
-# Lambda re-runs the ASGI lifespan per invocation; FastMCP's stateful session
-# manager only allows one .run() per instance → use stateless mode on Lambda.
+# Stateless mode: each request independent (right for Lambda + our stateless tools).
 # Must be set BEFORE importing server (FastMCP reads it at construction).
 os.environ.setdefault("MCP_STATELESS", "1")
+
+import asyncio
+import threading
 
 from mangum import Mangum
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -44,10 +46,44 @@ class ServiceAuthMiddleware(BaseHTTPMiddleware):
         return await call_next(request)
 
 
-# FastMCP's streamable-http ASGI app (Starlette). Add the auth gate in front.
+# --- The Lambda lifespan problem ---
+# FastMCP's streamable-http app has a lifespan that calls session_manager.run().
+# Mangum runs the ASGI lifespan PER invocation, but .run() may only be called once
+# per instance. On a warm container (object reused), the 2nd invocation re-runs the
+# lifespan → RuntimeError → 502.
+#
+# Fix: start the session manager ONCE at module load (cold start) on a dedicated
+# background event loop that lives for the whole container, and tell Mangum
+# lifespan="off" so it NEVER re-runs the lifespan per invocation. Warm invocations
+# reuse the already-running session manager.
+
 app = mcp.streamable_http_app()
 app.add_middleware(ServiceAuthMiddleware)
 
-# Mangum adapts ASGI → Lambda. lifespan="auto" runs FastMCP's session-manager
-# lifespan (required for streamable-http).
-handler = Mangum(app, lifespan="auto")
+# Background loop + thread that keeps the session manager's run() context alive
+# for the lifetime of the (warm) Lambda container.
+_bg_loop = asyncio.new_event_loop()
+_session_started = threading.Event()
+
+
+def _run_session_manager():
+    asyncio.set_event_loop(_bg_loop)
+
+    async def _start():
+        # Enter the session manager's run() context and hold it open forever
+        # (until the container is reclaimed).
+        async with mcp.session_manager.run():
+            _session_started.set()
+            await asyncio.Event().wait()  # block forever, keeping run() active
+
+    _bg_loop.run_until_complete(_start())
+
+
+# Start once at cold start.
+_bg_thread = threading.Thread(target=_run_session_manager, daemon=True)
+_bg_thread.start()
+_session_started.wait(timeout=10)  # ensure the manager is up before serving
+
+# Mangum with lifespan OFF — we manage the session manager ourselves (above),
+# so Mangum must NOT re-run the app lifespan per invocation.
+handler = Mangum(app, lifespan="off")

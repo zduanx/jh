@@ -42,12 +42,23 @@ _MCP_PORT = int(os.environ.get("MCP_PORT", "8001"))
 # is independent), which is FastMCP's intended serverless mode. Set MCP_STATELESS=1
 # (the Lambda handler does this). Local persistent servers leave it stateful.
 _STATELESS = os.environ.get("MCP_STATELESS", "0") == "1"
+
+# FastMCP enables DNS-rebinding protection by default, allowing only localhost
+# hosts — which 421-rejects requests to a Lambda Function URL host. We disable it
+# because access is gated by our own service-token auth (see handler.py), and the
+# Function URL host is dynamic. Only relax this on Lambda (stateless mode).
+_transport_security = None
+if _STATELESS:
+    from mcp.server.transport_security import TransportSecuritySettings
+    _transport_security = TransportSecuritySettings(enable_dns_rebinding_protection=False)
+
 mcp = FastMCP(
     "job-hunt",
     host="127.0.0.1",
     port=_MCP_PORT,
     stateless_http=_STATELESS,
     json_response=_STATELESS,
+    transport_security=_transport_security,
 )
 
 
