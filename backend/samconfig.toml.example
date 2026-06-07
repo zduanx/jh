@@ -23,5 +23,5 @@ stack_name = "jh-backend-stack"
 resolve_s3 = true
 region = "us-east-1"
 capabilities = "CAPABILITY_IAM"
-parameter_overrides = "AllowedEmails=\"YOUR_EMAIL\" AllowedOrigins=\"YOUR_ALLOWED_ORIGINS\" DatabaseUrl=\"YOUR_DATABASE_URL\" GoogleClientId=\"YOUR_GOOGLE_CLIENT_ID\" JWTSecretKey=\"YOUR_JWT_SECRET_KEY\" TestDatabaseUrl=\"YOUR_TEST_DATABASE_URL\""
+parameter_overrides = "AllowedEmails=\"YOUR_EMAIL\" AllowedOrigins=\"YOUR_ALLOWED_ORIGINS\" DatabaseUrl=\"YOUR_DATABASE_URL\" GoogleClientId=\"YOUR_GOOGLE_CLIENT_ID\" JWTSecretKey=\"YOUR_JWT_SECRET_KEY\" McpServiceToken=\"YOUR_MCP_SERVICE_TOKEN\" TestDatabaseUrl=\"YOUR_TEST_DATABASE_URL\" VoyageApiKey=\"YOUR_VOYAGE_API_KEY\""
 confirm_changeset = false

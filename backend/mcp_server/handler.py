@@ -17,6 +17,11 @@ browsers; this endpoint is called server-to-server.
 
 import os
 
+# Lambda re-runs the ASGI lifespan per invocation; FastMCP's stateful session
+# manager only allows one .run() per instance → use stateless mode on Lambda.
+# Must be set BEFORE importing server (FastMCP reads it at construction).
+os.environ.setdefault("MCP_STATELESS", "1")
+
 from mangum import Mangum
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse

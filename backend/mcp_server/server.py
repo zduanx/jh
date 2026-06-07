@@ -36,7 +36,19 @@ from utils.embeddings import vectorize_text
 
 # Port for the HTTP transport (default 8001 — 8000 is FastAPI). Override with MCP_PORT.
 _MCP_PORT = int(os.environ.get("MCP_PORT", "8001"))
-mcp = FastMCP("job-hunt", host="127.0.0.1", port=_MCP_PORT)
+# On Lambda, Mangum re-runs the ASGI lifespan per invocation, but FastMCP's
+# streamable-http session manager can only .run() once per instance. So on
+# Lambda we use stateless_http=True (no persistent session manager — each request
+# is independent), which is FastMCP's intended serverless mode. Set MCP_STATELESS=1
+# (the Lambda handler does this). Local persistent servers leave it stateful.
+_STATELESS = os.environ.get("MCP_STATELESS", "0") == "1"
+mcp = FastMCP(
+    "job-hunt",
+    host="127.0.0.1",
+    port=_MCP_PORT,
+    stateless_http=_STATELESS,
+    json_response=_STATELESS,
+)
 
 
 def _session():
