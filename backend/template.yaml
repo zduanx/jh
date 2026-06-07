@@ -13,6 +13,7 @@ Globals:
         ALLOWED_ORIGINS: !Ref AllowedOrigins
         DATABASE_URL: !Ref DatabaseUrl
         GOOGLE_CLIENT_ID: !Ref GoogleClientId
+        MCP_SERVICE_TOKEN: !Ref McpServiceToken
         SECRET_KEY: !Ref JWTSecretKey
         TEST_DATABASE_URL: !Ref TestDatabaseUrl
         VOYAGE_API_KEY: !Ref VoyageApiKey
@@ -42,6 +43,11 @@ Parameters:
     Type: String
     Description: Google OAuth Client ID
     NoEcho: false
+
+  McpServiceToken:
+    Type: String
+    Description: Shared service token for MCP server auth
+    NoEcho: true
 
   JWTSecretKey:
     Type: String
@@ -201,6 +207,23 @@ Resources:
             BatchSize: 1
 
   # ==========================================================================
+  # MCP Server Lambda - Phase 7B. FastMCP (streamable-http) via Mangum, behind
+  # a Function URL (HTTP, no API Gateway). Auth: in-handler service token
+  # (MCP_SERVICE_TOKEN). Reuses the backend code/deps/env (it imports db/utils/models).
+  # ==========================================================================
+  McpServer:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: McpServer
+      CodeUri: .
+      Handler: mcp_server.handler.handler
+      Description: MCP server (FastMCP over HTTP) exposing job/resume tools
+      Timeout: 60
+      MemorySize: 512
+      FunctionUrlConfig:
+        AuthType: NONE
+
+  # ==========================================================================
   # S3 Bucket - Raw HTML storage with 30-day lifecycle
   # ==========================================================================
   RawContentBucket:
@@ -258,6 +281,10 @@ Outputs:
   ApiUrl:
     Description: API Gateway endpoint URL
     Value: !Sub "https://${HttpApi}.execute-api.${AWS::Region}.amazonaws.com/prod"
+
+  McpServerUrl:
+    Description: MCP server Function URL (HTTP)
+    Value: !GetAtt McpServerUrl.FunctionUrl
 
   FunctionName:
     Description: API Lambda function name

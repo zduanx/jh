@@ -34,6 +34,9 @@ class Settings(BaseSettings):
     # Voyage AI embeddings (Phase 7A, ADR-032)
     VOYAGE_API_KEY: str = ""  # Optional until embedding features are used
 
+    # MCP server service-to-service auth token (Phase 7B)
+    MCP_SERVICE_TOKEN: str = ""  # Required for the deployed MCP server
+
     class Config:
         # Prioritize .env.local for local development, fallback to .env
         # Use absolute paths to avoid working directory issues
