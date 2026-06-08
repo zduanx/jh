@@ -1,0 +1,7 @@
+# Phase 7E eval harness (Python grading side). Separate from backend/requirements.txt.
+# Install:  pip install -r eval/requirements.txt
+#
+# Hand-rolled LLM-as-judge (no ragas/langchain — ragas 0.4.x had a broken dep chain
+# vs langchain 1.x, and its embeddings metric needs OpenAI we don't use). Just the
+# Anthropic SDK for the judge calls.
+anthropic>=0.40.0

@@ -427,6 +427,93 @@ Update one or more fields on a tracked job. All fields are optional - only inclu
 
 ---
 
+### 15. Chat Turn (Phase 6 — Deployed)
+
+**Endpoint:** `POST <function-url>/chat`
+**Hosting:** AWS **Lambda Function URL** (Node.js, `RESPONSE_STREAM` mode) — **separate from API Gateway**. See [ADR-025](./DECISIONS.md#adr-025-chatbox-runtime--lambda-function-url--nodejs-streaming).
+**Authentication:** Required (JWT, `Authorization: Bearer`) — verified in the Node handler (own CORS + auth, since this bypasses API Gateway).
+**Status:** ✅ Deployed (Phase 6, `jh-chat-stack`). The response is **mocked** through 6B; Phase 7 produces the same events from the real AI agent (the mock sits behind a stable `generateResponse(sessionId, history)` seam).
+
+Streams a chat turn. The backend records the user message + assistant response in Redis (keyed by `session_id`, ephemeral with TTL — see [ADR-027](./DECISIONS.md#adr-027-chat-state-store--ephemeral-redis-upstash)), and streams events back over SSE. Designed to support turns **longer than 30s** (the API Gateway integration cap), which is why it runs on a Function URL rather than the main API.
+
+**Request Body:**
+```json
+{
+  "session_id": "tab-uuid-abc123",
+  "message": "which job fits best?"
+}
+```
+
+**Success Response:** `200 OK`, `Content-Type: text/event-stream` (streamed incrementally)
+
+**SSE Event Types:**
+
+| Event | When | Data |
+|-------|------|------|
+| `thinking` | during the turn | short status string (e.g. `"thinking…"`; mock: `"loaded 2 prior messages"`) |
+| `intermediate` | during the turn (optional) | structured step object (e.g. `{"step": "searching jobs"}`) |
+| `token` | final answer | a token/word chunk of the answer text |
+| `done` | turn complete | `{ "session_id": "..." }` |
+| `error` | on failure | error string |
+
+**Example stream:**
+```
+event: thinking
+data: loaded 2 prior messages for session tab-uuid-abc123
+
+event: intermediate
+data: {"step": "thinking step 1"}
+
+event: token
+data: The
+
+event: token
+data:  Netflix
+
+event: done
+data: {"session_id": "tab-uuid-abc123"}
+```
+
+**Notes:**
+- One SSE request per turn; the connection closes when the turn completes. Turns are **sequential** (input locked while streaming). Interruption: aborts locally (socket close); on Lambda the disconnect is **not propagated** (turn runs to completion, billed fully — documented limitation, see [learning/lambda-streaming-disconnect.md](../learning/lambda-streaming-disconnect.md)). Partial output is final, no resume. [ADR-028](./DECISIONS.md#adr-028-chat-turn-lifecycle--sequential-turns-interruption-aborts).
+- The same event protocol is honored by the Phase 6 mock and the Phase 7 real agent (the mock sits behind a stable `generateResponse(sessionId, history)` seam).
+- Storage: per-message JSON blob in Redis keyed `chat:{uid}:{sessionId}` ([ADR-031](./DECISIONS.md#adr-031-conversation-storage-in-redis--per-message-entries-in-a-single-json-blob)).
+
+**Error Response:** `401 Unauthorized` (missing/invalid JWT) — returned before the stream begins.
+
+---
+
+### 16. Chat Session (debug / history)
+
+**Endpoint:** `GET <function-url>/session?session_id=...`
+**Hosting:** Same Lambda Function URL as `/chat`.
+**Authentication:** Required (JWT, `Authorization: Bearer`) — same production path (verify JWT → `uid` → read Redis).
+**Status:** ✅ Deployed (Phase 6).
+
+Returns the stored conversation blob for the authenticated user + session. Used by the frontend for **history-on-open/refresh**, the **🐛 debug** button, and the CLI `jchat-test --debug`.
+
+**Success Response:** `200 OK`
+```json
+{
+  "uid": 1,
+  "session_id": "tab-uuid-abc123",
+  "session": {
+    "message_count": 4,
+    "summary": "",
+    "messages": [
+      {"role": "user", "content": "...", "ts": 0, "interrupted": false},
+      {"role": "assistant", "content": "...", "ts": 0, "interrupted": false}
+    ],
+    "created_at": 0,
+    "updated_at": 0
+  }
+}
+```
+
+**Error Response:** `401 Unauthorized` (missing/invalid JWT).
+
+---
+
 ## Error Handling
 
 All errors follow this format:

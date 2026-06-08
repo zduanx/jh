@@ -32,6 +32,7 @@ fi
 if [ -f "$JH_ROOT/frontend/.env.local" ]; then
     FRONTEND_GOOGLE_CLIENT_ID_PROD=$(grep "^# REACT_APP_GOOGLE_CLIENT_ID_PROD_VALUE=" "$JH_ROOT/frontend/.env.local" | cut -d= -f2- | tr -d '\n' | tr -d '\r')
     FRONTEND_API_URL_PROD=$(grep "^# REACT_APP_API_URL_PROD_VALUE=" "$JH_ROOT/frontend/.env.local" | cut -d= -f2- | tr -d '\n' | tr -d '\r')
+    FRONTEND_CHAT_URL_PROD=$(grep "^# REACT_APP_CHAT_URL_PROD_VALUE=" "$JH_ROOT/frontend/.env.local" | cut -d= -f2- | tr -d '\n' | tr -d '\r')
 fi
 
 # Global associative arrays for deployment checks (zsh syntax)
@@ -47,6 +48,7 @@ typeset -A BACKEND_CHECK=(
 typeset -A FRONTEND_CHECK=(
     ["REACT_APP_GOOGLE_CLIENT_ID"]="$FRONTEND_GOOGLE_CLIENT_ID_PROD"
     ["REACT_APP_API_URL"]="$FRONTEND_API_URL_PROD"
+    ["REACT_APP_CHAT_URL"]="$FRONTEND_CHAT_URL_PROD"
 )
 
 # Database URLs to check in jready
@@ -109,10 +111,364 @@ jkill-fe() {
     lsof -ti:3000 | xargs kill -9 2>/dev/null && echo -e "${GREEN}✓ Frontend stopped${NC}" || echo -e "${RED}No frontend process found on port 3000${NC}"
 }
 
+# Chat (Node.js) shortcuts - Phase 6
+# Pass -d / --debug to enable verbose [agent] loop tracing (AGENT_DEBUG=1).
+# Off by default so prod-shaped runs stay quiet; opt in for local debugging.
+# Agent debug levels: -d/--debug = compact trace (1); -dd = ALSO dump the full
+# message list sent to the model (2). Off by default (prod stays quiet).
+_jbenode_debug_level() {
+    case "$1" in
+        -dd|--debug-messages) echo 2 ;;
+        -d|--debug) echo 1 ;;
+        *) echo 0 ;;
+    esac
+}
+
+jbenode() {
+    local agent_debug; agent_debug=$(_jbenode_debug_level "$1")
+    cd "$JH_ROOT" || return 1
+    echo -e "${BLUE}Starting chat (Node) server on port 8100$([ "$agent_debug" != 0 ] && echo " [agent debug=$agent_debug]")...${NC}"
+    cd "$JH_ROOT/chat" || return 1
+    AGENT_DEBUG="$agent_debug" node local.js
+}
+
+jbenode-bg() {
+    local agent_debug; agent_debug=$(_jbenode_debug_level "$1")
+    cd "$JH_ROOT" || return 1
+    echo -e "${BLUE}Starting chat (Node) server in background$([ "$agent_debug" != 0 ] && echo " [agent debug=$agent_debug]")...${NC}"
+    cd "$JH_ROOT/chat" || return 1
+    AGENT_DEBUG="$agent_debug" nohup node local.js > "$JH_ROOT/chat/server.log" 2>&1 &
+    echo -e "${GREEN}✓ Chat server started in background (PID: $!)${NC}"
+    echo -e "${BLUE}Logs: tail -f $JH_ROOT/chat/server.log${NC}"
+}
+
+jkill-benode() {
+    echo -e "${YELLOW}Killing chat Node server (port 8100)...${NC}"
+    lsof -ti:8100 | xargs kill -9 2>/dev/null && echo -e "${GREEN}✓ Chat server stopped${NC}" || echo -e "${RED}No chat process found on port 8100${NC}"
+}
+
+# MCP server (Python, FastMCP) shortcuts - Phase 7B (HTTP transport, port 8001)
+jbemcp() {
+    cd "$JH_ROOT" || return 1
+    echo -e "${BLUE}Starting MCP server (HTTP) on port 8001...${NC}"
+    cd "$JH_ROOT/backend" || return 1
+    source venv/bin/activate
+    MCP_TRANSPORT=http MCP_PORT=8001 python -m mcp_server.server
+}
+
+jbemcp-bg() {
+    cd "$JH_ROOT" || return 1
+    echo -e "${BLUE}Starting MCP server (HTTP) in background on port 8001...${NC}"
+    cd "$JH_ROOT/backend" || return 1
+    source venv/bin/activate
+    MCP_TRANSPORT=http MCP_PORT=8001 nohup python -m mcp_server.server > "$JH_ROOT/backend/mcp_server.log" 2>&1 &
+    echo -e "${GREEN}✓ MCP server started in background (PID: $!)${NC}"
+    echo -e "${BLUE}Logs: tail -f $JH_ROOT/backend/mcp_server.log${NC}"
+}
+
+jkill-bemcp() {
+    echo -e "${YELLOW}Killing MCP server (port 8001)...${NC}"
+    lsof -ti:8001 | xargs kill -9 2>/dev/null && echo -e "${GREEN}✓ MCP server stopped${NC}" || echo -e "${RED}No MCP process found on port 8001${NC}"
+}
+
+# MCP automated tests: tool logic + in-memory protocol + service-auth (Phase 7B).
+# Needs TEST_DATABASE_URL in .env.local (same test DB as the db suite). No live
+# Voyage call (embeddings are faked). Pass extra args, e.g. jbemcp-test -k auth.
+jbemcp-test() {
+    cd "$JH_ROOT/backend" || return 1
+    source venv/bin/activate
+    python -m pytest mcp_server/__tests__/ -v "$@"
+}
+
+# MCP Inspector: official interactive client to click through the tools by hand
+# (https://github.com/modelcontextprotocol/inspector). Spawns the server over
+# stdio — no port, no separate jbemcp needed. Requires npx (Node).
+jbemcp-inspect() {
+    cd "$JH_ROOT/backend" || return 1
+    source venv/bin/activate
+    echo -e "${BLUE}Launching MCP Inspector against the stdio server...${NC}"
+    npx @modelcontextprotocol/inspector python -m mcp_server.server
+}
+
+# Chat health check
+jchat-health() {
+    echo -e "${BLUE}Chat health:${NC}"
+    curl -s http://localhost:8100/health && echo ""
+}
+
+# Generate a JWT signed with the backend's SECRET_KEY (the real create_access_token).
+# Used by jchat-test so chat auth can be tested without hand-copying a token.
+jchat-token() {
+    # Mint a JWT for chat testing. Defaults to user 18 — the test-DB user with
+    # embedded jobs + resume (Phase 7A/7C grounding), so the agent's MCP tools
+    # return real data. Override: jchat-token <user_id>
+    local user_id="${1:-18}"
+    cd "$JH_ROOT/backend" || return 1
+    source venv/bin/activate 2>/dev/null
+    JH_TOKEN_USER_ID="$user_id" python3 -c "
+import os, sys; sys.path.insert(0, '.')
+from auth.utils import create_access_token
+uid = int(os.environ['JH_TOKEN_USER_ID'])
+print(create_access_token({'user_id': uid, 'email': 'zduanx@gmail.com'}))
+"
+    deactivate 2>/dev/null || true
+    cd "$JH_ROOT" >/dev/null || return 1
+}
+
+# Chat streaming test (timestamped) - proves events arrive incrementally.
+# Targets local by default; use --aws (or CHAT_AWS_URL env) for the deployed Function URL.
+# --debug snapshots the Redis session (via GET /session, same prod path) before+after.
+# Auto-generates a JWT (via jchat-token) and sends it as a Bearer header.
+# Message and session_id are REQUIRED.
+# Usage: jchat-test [--aws] [--debug] "your message" <session_id>
+jchat-test() {
+    local base="http://localhost:8100"
+    local label="LOCAL"
+    local debug=0
+    # Parse flags in any order.
+    while [ "$1" = "--aws" ] || [ "$1" = "--debug" ]; do
+        if [ "$1" = "--aws" ]; then
+            base="$CHAT_AWS_URL"
+            if [ -z "$base" ]; then
+                base=$(aws cloudformation describe-stacks --stack-name jh-chat-stack --region us-east-1 \
+                    --query "Stacks[0].Outputs[?OutputKey=='ChatFunctionUrl'].OutputValue" \
+                    --output text 2>/dev/null)
+            fi
+            if [ -z "$base" ] || [ "$base" = "None" ]; then
+                echo -e "${RED}Could not find chat Function URL. Deploy first (jpushchat) or set CHAT_AWS_URL.${NC}"
+                return 1
+            fi
+            base="${base%/}"
+            label="AWS"
+        elif [ "$1" = "--debug" ]; then
+            debug=1
+        fi
+        shift
+    done
+    local msg="$1"
+    local sid="$2"
+    if [ -z "$msg" ] || [ -z "$sid" ]; then
+        echo -e "${RED}Usage: jchat-test [--aws] [--debug] \"your message\" <session_id>${NC}"
+        echo -e "${YELLOW}  Both message and session_id are required.${NC}"
+        return 1
+    fi
+    local token
+    token=$(jchat-token)
+    if [ -z "$token" ]; then
+        echo -e "${RED}Failed to generate token (jchat-token). Is backend venv set up?${NC}"
+        return 1
+    fi
+
+    if [ "$debug" = "1" ]; then
+        echo -e "${YELLOW}── Redis session BEFORE turn ──${NC}"
+        curl -s "${base}/session?session_id=${sid}" -H "Authorization: Bearer $token" | python3 -m json.tool 2>/dev/null || echo "(no session / parse error)"
+    fi
+
+    echo -e "${BLUE}Streaming /chat against ${label} (${base}) [session=$sid]... timestamps show incremental arrival${NC}"
+    curl -sN -X POST "${base}/chat" \
+        -H "Authorization: Bearer $token" \
+        -d "{\"session_id\":\"$sid\",\"message\":\"$msg\"}" \
+        | while IFS= read -r line; do echo "$(date +%H:%M:%S) | $line"; done
+
+    if [ "$debug" = "1" ]; then
+        echo -e "${YELLOW}── Redis session AFTER turn ──${NC}"
+        curl -s "${base}/session?session_id=${sid}" -H "Authorization: Bearer $token" | python3 -m json.tool 2>/dev/null || echo "(no session / parse error)"
+    fi
+}
+
+# Commit the WHOLE repo (all changes, tracked + untracked) and push.
+# Usage: jgit --m "message" [--c]
+#   --m "msg"  commit message (required; prompted if omitted and not --c)
+#   --c        auto-confirm (no y/n prompt). With --m, runs non-interactively.
+# Convenience for committing cross-cutting work (docs, dev.sh, configs) that the
+# per-stack jpush* commands don't cover. Commits to the CURRENT branch.
+jgit() {
+    local AUTO_CONFIRM=false
+    local FLAG_COMMIT_MSG=""
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --c) AUTO_CONFIRM=true; shift ;;
+            --m) FLAG_COMMIT_MSG="$2"; shift 2 ;;
+            *) echo -e "${YELLOW}  (ignoring unknown arg: $1)${NC}"; shift ;;
+        esac
+    done
+
+    cd "$JH_ROOT" || return 1
+    echo -e "${BLUE}=== jgit: commit + push whole repo ===${NC}"
+    echo -e "${BLUE}  Branch: ${YELLOW}$(git branch --show-current)${NC}"
+
+    # Nothing to do?
+    if [ -z "$(git status --porcelain 2>/dev/null)" ]; then
+        echo -e "${GREEN}  ✓ Working tree clean — nothing to commit${NC}"
+        return 0
+    fi
+
+    echo -e "${BLUE}  Changes to be committed:${NC}"
+    git status --short | sed 's/^/    /'
+
+    # Require a commit message.
+    local COMMIT_MSG="$FLAG_COMMIT_MSG"
+    if [ -z "$COMMIT_MSG" ]; then
+        if [ "$AUTO_CONFIRM" = true ]; then
+            echo -e "${RED}  ✗ --c requires --m \"message\"${NC}"; return 1
+        fi
+        echo -n -e "${YELLOW}  Commit message: ${NC}"
+        read COMMIT_MSG
+        [ -z "$COMMIT_MSG" ] && { echo -e "${RED}  ✗ Commit message required${NC}"; return 1; }
+    fi
+
+    # Confirm.
+    if [ "$AUTO_CONFIRM" = true ]; then
+        echo -e "${GREEN}  --c: auto-confirming${NC}"
+    else
+        echo -n -e "${YELLOW}  Commit ALL of the above and push? [y/n]: ${NC}"
+        read CONFIRM
+        [[ ! "$CONFIRM" =~ ^[Yy]$ ]] && { echo -e "${RED}  Cancelled${NC}"; return 1; }
+    fi
+
+    git add -A || { echo -e "${RED}  ✗ git add failed${NC}"; return 1; }
+    git commit -m "$COMMIT_MSG" || { echo -e "${RED}  ✗ commit failed${NC}"; return 1; }
+    echo -e "${BLUE}  Pushing to origin $(git branch --show-current)...${NC}"
+    git push origin "$(git branch --show-current)" || { echo -e "${RED}  ✗ push failed${NC}"; return 1; }
+    echo -e "${GREEN}=== jgit complete ===${NC}"
+}
+
+# Deploy the chat Node Lambda (+ Function URL) via SAM.
+# Chat has its OWN stack (jh-chat-stack) and template in chat/ — independent of
+# the Python backend (jh-backend-stack). Deploying chat never touches the backend.
+# Mirrors jpushapi's discipline (git clean-state check, confirm, build, deploy,
+# verify), minus backend-only steps (Python codegen, template/env generation).
+# Requires chat/samconfig.toml (cp from chat/samconfig.toml.example first).
+jpushchat() {
+    echo -e "${BLUE}=== Deploying Chat (Node) Lambda → jh-chat-stack ===${NC}"
+    echo ""
+
+    # Flags: --c (auto-confirm y/n prompts), --m "msg" (commit message).
+    local AUTO_CONFIRM=false
+    local FLAG_COMMIT_MSG=""
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --c) AUTO_CONFIRM=true; shift ;;
+            --m) FLAG_COMMIT_MSG="$2"; shift 2 ;;
+            *) echo -e "${YELLOW}  (ignoring unknown arg: $1)${NC}"; shift ;;
+        esac
+    done
+
+    # Step 1: git clean-state check for chat/
+    echo -e "${BLUE}[1/5] Checking git status (chat/ must be clean)...${NC}"
+    cd "$JH_ROOT" || return 1
+    echo -e "${BLUE}  Current branch: ${YELLOW}$(git branch --show-current)${NC}"
+    CHAT_CHANGES=$(git status --porcelain chat/ 2>/dev/null)
+    if [ -z "$CHAT_CHANGES" ]; then
+        echo -e "${GREEN}  ✓ No uncommitted chat/ changes${NC}"
+    else
+        echo -e "${RED}  ✗ You have uncommitted chat/ changes${NC}"
+        git status --short chat/ | sed 's/^/    /'
+        echo ""
+        if [ "$AUTO_CONFIRM" = true ]; then
+            echo -e "${GREEN}  --c: auto-confirming commit${NC}"; COMMIT_CHOICE="y"
+        else
+            echo -n -e "${YELLOW}Commit chat/ changes now? [y/n]: ${NC}"
+            read COMMIT_CHOICE
+        fi
+        if [[ ! "$COMMIT_CHOICE" =~ ^[Yy]$ ]]; then
+            echo -e "${RED}Deployment cancelled - commit changes first${NC}"
+            cd "$JH_ROOT" || return 1; return 1
+        fi
+        git add chat/
+        if git diff --cached --quiet; then
+            echo -e "${YELLOW}  ⚠ No chat changes to commit${NC}"
+        else
+            git status --short | grep "^[AM]" | sed 's/^/  /'
+            if [ -n "$FLAG_COMMIT_MSG" ]; then
+                COMMIT_MSG="$FLAG_COMMIT_MSG"
+                echo -e "${GREEN}  --m: using commit message: ${COMMIT_MSG}${NC}"
+            else
+                echo -n -e "${YELLOW}Commit message: ${NC}"
+                read COMMIT_MSG
+            fi
+            if [ -z "$COMMIT_MSG" ]; then
+                echo -e "${RED}✗ Commit message required${NC}"; git reset >/dev/null 2>&1
+                cd "$JH_ROOT" || return 1; return 1
+            fi
+            git commit -m "$COMMIT_MSG" || { echo -e "${RED}✗ Commit failed${NC}"; cd "$JH_ROOT"; return 1; }
+            echo -e "${GREEN}✓ Changes committed${NC}"
+        fi
+    fi
+
+    # Step 2: generate template.yaml + samconfig.toml from .sam-config / .env.local
+    echo ""
+    echo -e "${BLUE}[2/6] Generating deployment config (template.yaml + samconfig.toml)...${NC}"
+    cd "$JH_ROOT/chat" || return 1
+    python3 scripts/generate_template.py
+    TEMPLATE_EXIT=$?
+    if [ $TEMPLATE_EXIT -gt 2 ]; then
+        echo -e "${RED}  ✗ Failed to generate template.yaml${NC}"; cd "$JH_ROOT"; return 1
+    fi
+    python3 scripts/generate_samconfig.py
+    SAMCONFIG_EXIT=$?
+    if [ $SAMCONFIG_EXIT -gt 2 ]; then
+        echo -e "${RED}  ✗ Failed to generate samconfig.toml${NC}"; cd "$JH_ROOT"; return 1
+    fi
+    # If template.yaml changed/created, commit it (it's tracked; samconfig is gitignored).
+    if [ $TEMPLATE_EXIT -ne 0 ]; then
+        echo -e "${YELLOW}  template.yaml was updated — committing${NC}"
+        cd "$JH_ROOT" || return 1
+        git add chat/template.yaml
+        git diff --cached --quiet || git commit -m "Auto-generated: update chat/template.yaml" >/dev/null 2>&1
+        cd "$JH_ROOT/chat" || return 1
+    fi
+
+    # Step 3: confirm
+    echo ""
+    if [ "$AUTO_CONFIRM" = true ]; then
+        echo -e "${GREEN}[3/6] --c: auto-confirming deploy${NC}"; DEPLOY_CHOICE="y"
+    else
+        echo -n -e "${YELLOW}[3/6] Deploy chat to AWS (jh-chat-stack)? [y/n]: ${NC}"
+        read DEPLOY_CHOICE
+    fi
+    if [[ ! "$DEPLOY_CHOICE" =~ ^[Yy]$ ]]; then
+        echo -e "${RED}Deployment cancelled by user${NC}"; cd "$JH_ROOT"; return 1
+    fi
+
+    # Step 4: build
+    echo ""
+    echo -e "${BLUE}[4/6] sam build...${NC}"
+    [ -f server.log ] && rm -f server.log
+    sam build || { echo -e "${RED}✗ sam build failed${NC}"; cd "$JH_ROOT"; return 1; }
+
+    # Step 5: deploy
+    echo ""
+    echo -e "${BLUE}[5/6] sam deploy...${NC}"
+    sam deploy || { echo -e "${RED}✗ sam deploy failed${NC}"; cd "$JH_ROOT"; return 1; }
+
+    # Step 6: verify - print Function URL
+    echo ""
+    echo -e "${BLUE}[6/6] Verifying...${NC}"
+    CHAT_URL=$(aws cloudformation describe-stacks --stack-name jh-chat-stack --region us-east-1 \
+        --query "Stacks[0].Outputs[?OutputKey=='ChatFunctionUrl'].OutputValue" --output text 2>/dev/null)
+    echo -e "${GREEN}  ✓ Chat Function URL: ${BLUE}$CHAT_URL${NC}"
+    echo -e "${YELLOW}  Set CHAT_AWS_URL to the URL above (strip trailing slash), then: jchat-test --aws${NC}"
+    cd "$JH_ROOT" || return 1
+    echo ""
+    echo -e "${GREEN}=== Chat deployment complete ===${NC}"
+}
+
 jkillall() {
     echo -e "${YELLOW}Killing all processes...${NC}"
     jkill-be
     jkill-fe
+    jkill-benode
+    jkill-bemcp
+}
+
+# Start ALL 3 backends in the background: FastAPI (8000), chat Node (8100), MCP (8001).
+jbeall() {
+    echo -e "${BLUE}Starting all backends in background (FastAPI 8000, chat 8100, MCP 8001)...${NC}"
+    jbe-bg
+    jbenode-bg
+    jbemcp-bg
+    echo -e "${GREEN}✓ All backends started. Stop with: jkillall${NC}"
 }
 
 # Background process starters (process stays alive after terminal close)
@@ -152,6 +508,13 @@ jstatus() {
         echo -e "${GREEN}✓ Frontend running${NC} on http://localhost:3000"
     else
         echo -e "${RED}✗ Frontend not running${NC}"
+    fi
+
+    # Check chat (Node) server
+    if lsof -ti:8100 > /dev/null 2>&1; then
+        echo -e "${GREEN}✓ Chat server running${NC} on http://localhost:8100"
+    else
+        echo -e "${RED}✗ Chat server not running${NC}"
     fi
 
     echo ""
@@ -393,6 +756,39 @@ print('|'.join(results))
         echo -e "${GREEN}  ✓ Port 3000 (frontend) available${NC}"
     fi
 
+    if lsof -ti:8100 > /dev/null 2>&1; then
+        echo -e "${YELLOW}  ⚠ Port 8100 (chat) already in use${NC}"
+        echo -e "${YELLOW}    Run 'jkill-benode' to free it${NC}"
+        PORT_ISSUES=$((PORT_ISSUES + 1))
+    else
+        echo -e "${GREEN}  ✓ Port 8100 (chat) available${NC}"
+    fi
+
+    # Node.js (chat service)
+    if command -v node > /dev/null 2>&1; then
+        echo -e "${GREEN}  ✓ Node.js installed ($(node --version))${NC}"
+    else
+        echo -e "${RED}  ✗ Node.js not found (required for chat service)${NC}"
+        ISSUES=$((ISSUES + 1))
+    fi
+
+    # Chat Redis (Upstash) connectivity
+    if [ -f "$JH_ROOT/chat/.env.local" ] && [ -d "$JH_ROOT/chat/node_modules" ]; then
+        REDIS_PING=$(cd "$JH_ROOT/chat" && node -e "
+process.loadEnvFile('.env.local');
+const { ping } = await import('./redis.js');
+try { console.log(await ping()); } catch (e) { console.log('ERR:' + e.message); }
+" 2>/dev/null)
+        if [ "$REDIS_PING" = "PONG" ]; then
+            echo -e "${GREEN}  ✓ Chat Redis (Upstash) reachable${NC}"
+        else
+            echo -e "${RED}  ✗ Chat Redis unreachable (${REDIS_PING:-no response})${NC}"
+            ISSUES=$((ISSUES + 1))
+        fi
+    else
+        echo -e "${YELLOW}  ⊘ Chat Redis check skipped (no chat/.env.local or node_modules)${NC}"
+    fi
+
     # Summary
     echo ""
     echo -e "${BLUE}=== Summary ===${NC}"
@@ -400,8 +796,10 @@ print('|'.join(results))
         echo -e "${GREEN}✓ All checks passed! Ready to start development.${NC}"
         echo ""
         echo -e "${BLUE}Quick start:${NC}"
-        echo -e "  ${YELLOW}jbe-bg && jfe-bg${NC}   # Start both in background"
-        echo -e "  ${YELLOW}jstatus${NC}            # Check status"
+        echo -e "  ${YELLOW}jbe-bg && jfe-bg${NC}        # Start backend + frontend (background)"
+        echo -e "  ${YELLOW}jbenode-bg${NC}             # Start chat Node server (background, port 8100)"
+        echo -e "  ${YELLOW}jstatus${NC}                # Check what's running"
+        echo -e "  ${YELLOW}jchat-test --debug \"q\" sid${NC}  # Test chat (streams + Redis before/after)"
         return 0
     else
         if [ $ISSUES -gt 0 ]; then
@@ -455,6 +853,17 @@ _compare_and_display_env() {
 jpushvercel() {
     echo -e "${BLUE}=== Deploying Frontend to Vercel ===${NC}"
     echo ""
+
+    # Flags: --c (auto-confirm y/n prompts), --m "msg" (commit message).
+    local AUTO_CONFIRM=false
+    local FLAG_COMMIT_MSG=""
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --c) AUTO_CONFIRM=true; shift ;;
+            --m) FLAG_COMMIT_MSG="$2"; shift 2 ;;
+            *) echo -e "${YELLOW}  (ignoring unknown arg: $1)${NC}"; shift ;;
+        esac
+    done
 
     cd "$JH_ROOT" || return 1
     cd frontend || return 1
@@ -544,8 +953,12 @@ jpushvercel() {
             echo -e "${YELLOW}  • $VAR_NAME → $EXPECTED_VAL${NC}"
         done
         echo ""
-        echo -n -e "${YELLOW}Update Vercel with these values? [y/n]: ${NC}"
-        read UPDATE_CHOICE
+        if [ "$AUTO_CONFIRM" = true ]; then
+            echo -e "${GREEN}  --c: auto-confirming Vercel env update${NC}"; UPDATE_CHOICE="y"
+        else
+            echo -n -e "${YELLOW}Update Vercel with these values? [y/n]: ${NC}"
+            read UPDATE_CHOICE
+        fi
 
         if [[ "$UPDATE_CHOICE" =~ ^[Yy]$ ]]; then
             echo -e "${BLUE}Updating Vercel environment variables...${NC}"
@@ -600,8 +1013,12 @@ jpushvercel() {
     # Trigger git deployment
     echo ""
     echo -e "${BLUE}[5/5] Git push and deployment:${NC}"
-    echo -n -e "${YELLOW}Push frontend/ to git for Vercel CI/CD? [y/n]: ${NC}"
-    read DEPLOY_CHOICE
+    if [ "$AUTO_CONFIRM" = true ]; then
+        echo -e "${GREEN}  --c: auto-confirming git push${NC}"; DEPLOY_CHOICE="y"
+    else
+        echo -n -e "${YELLOW}Push frontend/ to git for Vercel CI/CD? [y/n]: ${NC}"
+        read DEPLOY_CHOICE
+    fi
 
     if [[ "$DEPLOY_CHOICE" =~ ^[Yy]$ ]]; then
         cd "$JH_ROOT" || return 1
@@ -618,8 +1035,13 @@ jpushvercel() {
             echo -e "${BLUE}Staged changes:${NC}"
             git status --short | grep "^[AM]" | sed 's/^/  /'
 
-            echo -n -e "${YELLOW}Commit message: ${NC}"
-            read COMMIT_MSG
+            if [ -n "$FLAG_COMMIT_MSG" ]; then
+                COMMIT_MSG="$FLAG_COMMIT_MSG"
+                echo -e "${GREEN}  --m: using commit message: ${COMMIT_MSG}${NC}"
+            else
+                echo -n -e "${YELLOW}Commit message: ${NC}"
+                read COMMIT_MSG
+            fi
 
             if [ -z "$COMMIT_MSG" ]; then
                 echo -e "${RED}✗ Commit message required${NC}"
@@ -804,13 +1226,16 @@ jhelp() {
     echo -e "${GREEN}Start Services:${NC}"
     echo "  jbe                - Start backend (foreground)"
     echo "  jfe                - Start frontend (foreground)"
+    echo "  jbenode            - Start chat Node server (foreground, port 8100)"
     echo "  jbe-bg             - Start backend (background, survives terminal close)"
     echo "  jfe-bg             - Start frontend (background, survives terminal close)"
+    echo "  jbenode-bg         - Start chat Node server (background)"
     echo ""
     echo -e "${GREEN}Stop Services:${NC}"
     echo "  jkill-be           - Kill backend"
     echo "  jkill-fe           - Kill frontend"
-    echo "  jkillall           - Kill both"
+    echo "  jkill-benode       - Kill chat Node server (port 8100)"
+    echo "  jkillall           - Kill all (backend, frontend, chat)"
     echo ""
     echo -e "${GREEN}Database:${NC}"
     echo "  jdbcreate <name>   - Create new Alembic migration"
@@ -822,12 +1247,16 @@ jhelp() {
     echo ""
     echo -e "${GREEN}Deployment:${NC}"
     echo "  jpushapi           - Deploy backend to AWS Lambda (SAM)"
+    echo "  jpushchat          - Deploy chat Node Lambda + Function URL (SAM)"
     echo "  jpushvercel        - Deploy frontend to Vercel (git CI/CD)"
     echo "  jenvcheck          - Verify environment variables (local vs deployed)"
     echo ""
     echo -e "${GREEN}Debugging:${NC}"
     echo "  js3get <s3_url>    - Download S3 object to stdout (raw/google/...)"
     echo "  js3url <s3_url>    - Generate presigned URL for S3 object"
+    echo "  jchat-health       - Curl chat /health"
+    echo "  jchat-token        - Generate a JWT (backend SECRET_KEY) for manual testing"
+    echo "  jchat-test [--aws] [--debug] \"msg\" <session> - Stream chat (--debug snapshots Redis before/after)"
     echo ""
     echo -e "${GREEN}Utilities:${NC}"
     echo "  jready             - Check all prerequisites + run codegen"
@@ -1043,16 +1472,27 @@ jdbpush() {
     CURRENT=$(alembic current 2>&1 | grep -oE '[a-f0-9]{12}' | head -1)
     HEAD=$(alembic heads 2>&1 | grep -oE '[a-f0-9]{12}' | head -1)
 
-    if [ "$CURRENT" = "$HEAD" ]; then
-        echo -e "${GREEN}  ✓ Already at latest migration: $HEAD${NC}"
+    # Also check PROD's version — test and prod normally move in lockstep, but if
+    # they've diverged (e.g. a migration applied to one DB independently), checking
+    # only test could silently skip prod. Only short-circuit if BOTH are at head.
+    local PROD_CURRENT=""
+    if [ -n "$PROD_DB_URL" ]; then
+        DATABASE_URL="$PROD_DB_URL"
+        PROD_CURRENT=$(alembic current 2>&1 | grep -oE '[a-f0-9]{12}' | head -1)
+        export DATABASE_URL="$TEST_DB_URL"
+    fi
+
+    if [ "$CURRENT" = "$HEAD" ] && { [ -z "$PROD_DB_URL" ] || [ "$PROD_CURRENT" = "$HEAD" ]; }; then
+        echo -e "${GREEN}  ✓ Already at latest migration (test + prod): $HEAD${NC}"
         echo -e "${YELLOW}  No migrations to apply${NC}"
         deactivate 2>/dev/null || true
         cd "$JH_ROOT" || return 1
         return 0
     fi
 
-    echo -e "${YELLOW}  Current: ${CURRENT:-none}${NC}"
-    echo -e "${YELLOW}  Head:    $HEAD${NC}"
+    echo -e "${YELLOW}  Head:         $HEAD${NC}"
+    echo -e "${YELLOW}  Test current: ${CURRENT:-none}${NC}"
+    [ -n "$PROD_DB_URL" ] && echo -e "${YELLOW}  Prod current: ${PROD_CURRENT:-none}${NC}"
     echo ""
 
     # Show migration history
@@ -1127,6 +1567,18 @@ jpushapi() {
     echo -e "${BLUE}=== Deploying Backend to AWS ===${NC}"
     echo ""
 
+    # Flags: --c (auto-confirm all y/n prompts), --m "msg" (commit message).
+    # With both set, jpushapi runs fully non-interactively.
+    local AUTO_CONFIRM=false
+    local FLAG_COMMIT_MSG=""
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --c) AUTO_CONFIRM=true; shift ;;
+            --m) FLAG_COMMIT_MSG="$2"; shift 2 ;;
+            *) echo -e "${YELLOW}  (ignoring unknown arg: $1)${NC}"; shift ;;
+        esac
+    done
+
     # Step 1: Check git status - ensure clean state (MUST commit or exit)
     echo -e "${BLUE}[1/7] Checking git status (must have clean state)...${NC}"
     cd "$JH_ROOT" || return 1
@@ -1143,8 +1595,13 @@ jpushapi() {
         git status --short backend/ | sed 's/^/    /'
         echo ""
         echo -e "${YELLOW}Deployment requires a clean git state.${NC}"
-        echo -n -e "${YELLOW}Commit backend/ changes now? [y/n]: ${NC}"
-        read COMMIT_CHOICE
+        if [ "$AUTO_CONFIRM" = true ]; then
+            echo -e "${GREEN}  --c: auto-confirming commit${NC}"
+            COMMIT_CHOICE="y"
+        else
+            echo -n -e "${YELLOW}Commit backend/ changes now? [y/n]: ${NC}"
+            read COMMIT_CHOICE
+        fi
 
         if [[ ! "$COMMIT_CHOICE" =~ ^[Yy]$ ]]; then
             echo -e "${RED}Deployment cancelled - commit changes first${NC}"
@@ -1164,8 +1621,13 @@ jpushapi() {
             echo -e "${BLUE}Staged changes:${NC}"
             git status --short | grep "^[AM]" | sed 's/^/  /'
 
-            echo -n -e "${YELLOW}Commit message: ${NC}"
-            read COMMIT_MSG
+            if [ -n "$FLAG_COMMIT_MSG" ]; then
+                COMMIT_MSG="$FLAG_COMMIT_MSG"
+                echo -e "${GREEN}  --m: using commit message: ${COMMIT_MSG}${NC}"
+            else
+                echo -n -e "${YELLOW}Commit message: ${NC}"
+                read COMMIT_MSG
+            fi
 
             if [ -z "$COMMIT_MSG" ]; then
                 echo -e "${RED}✗ Commit message required${NC}"
@@ -1285,8 +1747,13 @@ jpushapi() {
     if [ $TEMPLATE_EXIT -ne 0 ] || [ $SAMCONFIG_EXIT -ne 0 ]; then
         echo ""
         echo -e "${YELLOW}Configuration files were updated. Review the changes above.${NC}"
-        echo -n -e "${YELLOW}Do these changes look good? [y/n]: ${NC}"
-        read CONFIG_OK
+        if [ "$AUTO_CONFIRM" = true ]; then
+            echo -e "${GREEN}  --c: auto-confirming config${NC}"
+            CONFIG_OK="y"
+        else
+            echo -n -e "${YELLOW}Do these changes look good? [y/n]: ${NC}"
+            read CONFIG_OK
+        fi
 
         if [[ ! "$CONFIG_OK" =~ ^[Yy]$ ]]; then
             echo -e "${RED}Configuration rejected - exiting${NC}"
@@ -1318,8 +1785,12 @@ jpushapi() {
     # Step 5: Confirm deployment
     echo ""
     echo -e "${BLUE}[5/8] Deploy confirmation:${NC}"
-    echo -n -e "${YELLOW}Deploy backend to AWS Lambda? [y/n]: ${NC}"
-    read DEPLOY_CHOICE
+    if [ "$AUTO_CONFIRM" = true ]; then
+        echo -e "${GREEN}  --c: auto-confirming deploy${NC}"; DEPLOY_CHOICE="y"
+    else
+        echo -n -e "${YELLOW}Deploy backend to AWS Lambda? [y/n]: ${NC}"
+        read DEPLOY_CHOICE
+    fi
 
     if [[ ! "$DEPLOY_CHOICE" =~ ^[Yy]$ ]]; then
         echo -e "${RED}Deployment cancelled by user${NC}"

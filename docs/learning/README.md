@@ -73,6 +73,16 @@ Educational content about technologies and concepts used in this project.
 - Lambda triggers and concurrency
 - Error handling and retries
 
+**[lambda-streaming-disconnect.md](./lambda-streaming-disconnect.md)** - Lambda response streaming & client disconnect
+- Why disconnect-abort works locally but not on Lambda
+- AWS bills full duration even if client disconnects
+- Explicit client-cancel vs long-running server
+
+**[vectors-rag-eval.md](./vectors-rag-eval.md)** - Vectors, RAG & LLM evaluation
+- Embeddings, cosine similarity, HNSW / IVFFlat / ANN
+- pgvector vs dedicated vector DB; partitioning/sharding
+- RAG (retrieve → augment → generate); Ragas / DeepEval; semantic caching
+
 ---
 
 ## Quick Reference

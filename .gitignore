@@ -18,6 +18,12 @@ ENV/
 node_modules/
 npm-debug.log*
 
+# Local server logs
+server.log
+
+# SAM deploy config (contains secrets / per-env values; use samconfig.toml.example)
+samconfig.toml
+
 # IDE
 .vscode/
 .idea/

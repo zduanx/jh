@@ -548,6 +548,74 @@ See [ADR-024](./DECISIONS.md#adr-024-presigned-urls-for-resume-upload-direct-to-
 
 ---
 
+## Phase 6: Per-Job Chat Assistant (Streaming, Mocked AI)
+
+**Goals:**
+1. A streaming chat widget on the Search page (ask about jobs / resume fit).
+2. Real-time token streaming for turns that may exceed the 30s API Gateway cap.
+3. Ephemeral per-session conversation memory.
+4. Build the full infra with a **mock** AI behind a stable seam; the real agent
+   (Phase 7) drops in without changing the frontend or transport.
+
+### Architecture
+
+```
+┌──────────────────────────────────────────────────────────────────────┐
+│  Search Page (React)                                                   │
+│   └─ ChatWidget (floating, lower-right)                                │
+│        fetch + ReadableStream (POST + Bearer; NOT EventSource)         │
+└───────────────┬──────────────────────────────────────────────────────┘
+                │ POST /chat (SSE stream)   ·   GET /session (history/debug)
+                ▼
+┌──────────────────────────────────────────────────────────────────────┐
+│  Chat Lambda — Node.js, Function URL, RESPONSE_STREAM (jh-chat-stack)  │
+│   - SEPARATE from the Python backend / API Gateway (own stack)         │
+│   - JWT verified in-handler (AuthType: NONE on the URL)                │
+│   - runTurn(): read history → generateResponse (MOCK) → save           │
+│   - streams step/token/done/error events                               │
+└───────────────┬──────────────────────────────────────────────────────┘
+                ▼
+┌──────────────────────────────────────────────────────────────────────┐
+│  Upstash Redis (cloud, HTTP)  — ephemeral session store                │
+│   chat:{uid}:{sessionId} = { message_count, summary, messages[] }      │
+│   1h sliding TTL · per-message blob · block compaction                 │
+└──────────────────────────────────────────────────────────────────────┘
+```
+
+### Why a separate Lambda Function URL (not API Gateway)
+API Gateway + Mangum **buffers** the response and caps at 30s — proven unable to
+stream (measured: events arrived in one burst at close). A **Function URL with
+`RESPONSE_STREAM`** (Node.js — Lambda streaming is Node-first) streams token-by-token
+for up to 15 min. The main app stays on API Gateway; chat is a separate stack — a
+hybrid (serverless for short requests, streaming runtime for chat). See [ADR-025](./DECISIONS.md#adr-025-chatbox-runtime--lambda-function-url--nodejs-streaming).
+
+### SSE event protocol
+`step` (what the AI is doing) · `token` (answer chunk) · `done` · `error`. The
+frontend shows "processing" until the first event. Same events from the mock (6A/6B)
+and the real agent (Phase 7).
+
+### Session & storage
+- `sessionId` is frontend-generated, tab-tied (`sessionStorage`); the Redis key is
+  `chat:{uid}:{sessionId}` with `uid` from the verified JWT ([ADR-026](./DECISIONS.md#adr-026-chat-session-lifetime--identity--per-tab-ephemeral)).
+- Conversation = a single JSON blob, per-message + role, 1h sliding TTL; recent
+  window kept verbatim, older compressed in batches ([ADR-027](./DECISIONS.md#adr-027-chat-state-store--ephemeral-redis-upstash), [ADR-031](./DECISIONS.md#adr-031-conversation-storage-in-redis--per-message-entries-in-a-single-json-blob)).
+- Backend is the single source of truth; the frontend renders only (history fetched
+  via `GET /session`).
+
+### Known limitation
+Lambda Function URL streaming does **not** propagate client disconnect — an
+interrupted turn runs to completion and is billed fully (a long-running server would
+detect socket close). Accepted; turn budget caps cost. See
+[learning/lambda-streaming-disconnect.md](../learning/lambda-streaming-disconnect.md).
+
+### Phases
+- **6A** — streaming runtime + >30s proof + JWT auth (deployed).
+- **6B** — Redis session state, multi-turn, user-first save, block compaction (deployed).
+- **6C** — chatbox frontend widget (deployed; verified browser→AWS incl. CORS).
+- **Phase 7** — replace the mock with the real agent + MCP server.
+
+---
+
 ## Key Design Decisions
 
 All architectural decisions documented in [DECISIONS.md](./DECISIONS.md):
@@ -557,3 +625,10 @@ All architectural decisions documented in [DECISIONS.md](./DECISIONS.md):
 - **ADR-017**: SimHash for raw content deduplication
 - **ADR-018**: SSE update strategy (full state on connect, diffs during session)
 - **ADR-020**: SQS FIFO with MessageGroupId for crawler rate limiting
+- **ADR-025**: Chatbox runtime — Lambda Function URL + Node.js (streaming)
+- **ADR-026**: Chat session lifetime & identity (per-tab ephemeral)
+- **ADR-027**: Chat state store — ephemeral Redis (Upstash)
+- **ADR-028**: Chat turn lifecycle (sequential, interruption, partial-as-final)
+- **ADR-029**: Build agent loop & MCP client directly (reject LangChain / Vercel AI SDK)
+- **ADR-030**: Stack topology & MCP server boundary
+- **ADR-031**: Conversation storage in Redis (per-message JSON blob)

@@ -2104,4 +2104,500 @@ The `download=true` parameter adds `Content-Disposition: attachment` to the pres
 ### Related
 - Phase 4D: Resume management
 - [ADR-004](./DECISIONS.md#adr-004-deploy-backend-to-aws-lambda--api-gateway): Lambda deployment (timeout constraints)
-- [ADR-012](./DECISIONS.md#adr-012-use-neon-for-postgresql-hosting): Neon for metadata storage
+
+---
+
+## ADR-025: Chatbox Runtime — Lambda Function URL + Node.js (Streaming)
+
+**Date:** 2026-06-05
+**Status:** Accepted
+**Phase:** 6 (Per-Job Chat Agent)
+
+### Context
+
+The chatbox needs to stream an LLM response (token-by-token) to the browser. An agent turn (LLM round-trips + tool calls) may take longer than a simple request — assume up to ~1 minute. We must decide where the chat backend runs and how it streams.
+
+The existing app runs on **API Gateway (HTTP API) + Lambda + FastAPI/Mangum**. Investigation (curl + CloudWatch, see Evidence) proved this path **cannot stream in real time**: Mangum buffers the entire response and returns it at once, and API Gateway imposes a hard 30s integration cap. This is fine for buffered progress SSE but fatal for token-by-token chat.
+
+A hard product constraint: keep the deployment **pure-serverless** — nothing to spin up or keep running before the app is usable (scale-to-zero, $0 idle).
+
+### Decision
+
+Run the chat backend on a **Lambda Function URL with Node.js and response streaming** (`RESPONSE_STREAM` invoke mode). Stream tokens to the browser SSE-style. Budget a turn at up to ~1 minute (well within the Function URL 15-min limit). The rest of the app stays on API Gateway + Lambda (a hybrid).
+
+### Alternatives Considered
+
+| Option | 30s cap | Streams? | Serverless / $0 idle | Notes |
+|--------|---------|----------|----------------------|-------|
+| API Gateway + FastAPI/Mangum | ❌ 30s | ❌ (Mangum buffers) | ✅ | Proven broken for streaming |
+| **Lambda Function URL + Node.js** (chosen) | ✅ none | ✅ native (`streamifyResponse`) | ✅ | Node streaming is first-class |
+| Lambda Function URL + Python/Mangum | ✅ none | ❌ (Mangum still buffers) | ✅ | Function URL removes API GW buffer but NOT Mangum |
+| Long-running container (FastAPI) | ✅ none | ✅ native | ❌ always-on | **Industry norm**, rejected for always-on |
+| Async worker + SSE reconnect + Redis Streams | worked-around | partial | ✅ | Over-engineered |
+
+### Reasoning
+
+- **Two buffers, not one.** Removing API Gateway (via Function URL) removes the API Gateway buffer, but **Mangum** (FastAPI's Lambda adapter) still buffers — it collects the full response before returning, because classic Lambda returns one complete response. So FastAPI/Python on a Function URL still does not stream.
+- **Node escapes Mangum.** Lambda's response-streaming API (`awslambda.streamifyResponse`) is first-class in Node and writes chunks incrementally. Node is the runtime AWS built streaming for.
+- **Explicit trade (the honest part):** a long-running **container is the industry-standard home for streaming chat** and would be simpler (one language, native `StreamingResponse`, in-process state). We **reject it deliberately** to preserve pure-serverless / nothing-to-spin-up, accepting the resulting seams: a second language (Node) and a second front door (Function URL alongside API Gateway). Stayed on AWS rather than pivoting to Vercel-edge/TS to keep a single cloud.
+
+### Evidence
+
+- A timestamped `curl -N` against the deployed ingestion SSE showed all events arriving in a single ~116ms burst at connection close (not spread over the ~25s the server produced them) — proving Mangum + API Gateway buffer and flush on generator end.
+- CloudWatch logs confirmed the server-side generator polls/yields every 3s, but the client only receives the batch at close. (Separate overlapping-connection bug captured in `docs/backlog/`.)
+- Source confirms it: comment in `ingestion_routes.py` — "API Gateway + Mangum buffers the entire StreamingResponse and returns it at once when the generator ends."
+
+### Consequences
+
+- (+) Real token streaming, serverless, no 30s cap, $0 idle.
+- (−) Second language (Node) and second public entry point (Function URL) → own CORS + JWT verification in the Node handler.
+- (−) Cross-language tool access (Node ↔ Python) — addressed in [ADR-030](#adr-030-single-standalone-python-mcp-server-multi-client).
+
+### Related
+- [ADR-004](./DECISIONS.md#adr-004-deploy-backend-to-aws-lambda--api-gateway): Lambda + API Gateway base
+- [ADR-016](./DECISIONS.md#adr-016-use-sse-for-real-time-progress-updates): SSE for progress (buffered, different needs)
+- [ADR-028](#adr-028-chat-turn-lifecycle--sequential-turns-interruption-aborts): turn lifecycle on this runtime
+
+---
+
+## ADR-026: Chat Session Lifetime & Identity — Per-Tab Ephemeral
+
+**Date:** 2026-06-05
+**Status:** Accepted
+**Phase:** 6 (Per-Job Chat Agent)
+
+### Context
+
+The chatbox lives in the lower-right of the Search page. We must decide how long a conversation persists and how it is identified.
+
+### Decision
+
+A chat conversation is **per-tab and ephemeral**. A frontend-generated **`sessionId`** identifies it, stored in `sessionStorage` (the **id only**, not the history). The chatbox can be minimized or closed; **closing → next open starts a new chat** (new `sessionId` + suffix). The `sessionId` is a cache/correlation key, **not** an auth boundary — the JWT still authenticates the user.
+
+### Alternatives Considered
+
+| Option | Survives refresh | Survives tab close | Cross-device | Verdict |
+|--------|------------------|--------------------|--------------|---------|
+| Per-message (no continuity) | n/a | n/a | n/a | ❌ no multi-turn |
+| **Per-tab (sessionId, chosen)** | ✅ | ❌ (intended) | ❌ | ✅ matches ephemeral helper |
+| Per-login (localStorage) | ✅ | ✅ | ❌ | ❌ stale context, cross-tab clobber, logout privacy |
+| Backend DB persistence | ✅ | ✅ | ✅ | ❌ CRUD plumbing, no resume value |
+
+### Reasoning
+
+- This is a **contextual, in-the-moment assistant**, not a saved-thread product. Ephemeral matches the use case.
+- A DB would add CRUD plumbing with little AI-engineering signal; explicitly out of scope.
+- `crypto.randomUUID()` generates the `sessionId` on first load; `sessionStorage` is naturally per-tab and survives refresh, so the id (and thus conversation identity) is stable across reloads and dies with the tab.
+
+### Consequences
+
+- (+) Simple, no DB, ephemeral by construction.
+- (−) No cross-device / cross-tab history (acceptable — single-user contextual helper).
+- `sessionId` doubles as the Redis key and a log-correlation id ([ADR-027](#adr-027-chat-state-store--ephemeral-redis-upstash)).
+
+### Related
+- [ADR-027](#adr-027-chat-state-store--ephemeral-redis-upstash): where the session's state lives
+
+---
+
+## ADR-027: Chat State Store — Ephemeral Redis (Upstash)
+
+**Date:** 2026-06-05
+**Status:** Accepted
+**Phase:** 6 (Per-Job Chat Agent)
+
+### Context
+
+Each chat turn is a separate, stateless request (one SSE request per question; the connection closes after each answer). On Lambda there is no reliable in-process memory across turns (instance churn). So conversation history and retrieved tool results must live somewhere that survives between turns. We must pick a **single source of truth** — having history in two places (e.g. sessionStorage AND a server store) makes the LLM input assembly ambiguous and is the classic two-source-of-truth anti-pattern.
+
+### Decision
+
+Use **Redis (Upstash — free tier, HTTP-accessible, no VPC) as the single, ephemeral source of truth** for a session, keyed by `sessionId` with a **TTL = session lifetime**. Redis holds **both** conversation history **and** the MCP/tool-result cache. The **frontend renders only** (it holds the `sessionId` and a transient in-flight copy for optimistic display). **The LLM input is assembled backend-side from Redis** — one clean assembly point.
+
+### Alternatives Considered
+
+| Option | Source of truth | New infra | Verdict |
+|--------|-----------------|-----------|---------|
+| **Redis (Upstash), ephemeral (chosen)** | Redis | Upstash (free, HTTP) | ✅ matches ephemeral data lifecycle |
+| sessionStorage owns history | frontend | none | viable, but frontend re-sends full history; backend-as-truth is more production-shaped |
+| History in BOTH sessionStorage + Redis | two ❌ | — | ❌ two sources of truth — ambiguous LLM input |
+| In-process cache | per-instance | none | ❌ unreliable on Lambda (instance churn) |
+| Backend DB (Postgres) | DB | migration | ❌ durable not needed; CRUD overhead |
+| AWS ElastiCache | Redis | paid + VPC | ❌ cost + VPC friction from Lambda |
+
+### Reasoning
+
+- **Ephemeral data → TTL store.** The data is *meant* to expire. Redis-with-TTL is purpose-built for "hold this for a few hours then auto-delete" — the store's expiry **is** the session lifetime. This is matching the tool to the data's lifecycle, **not** "using a cache as a source of truth." (A persistent product would instead use Postgres as truth + Redis as cache.)
+- **Industry note:** persistent chat records history in a **DB** (source of truth) with Redis as a cache/pub-sub. For a *short, ephemeral support chatbox*, skipping the DB and saving directly to Redis-with-TTL is a deliberate, appropriate workaround.
+- **Single source of truth** keeps LLM-input assembly clean and avoids sync issues.
+- **Upstash over ElastiCache:** free tier, HTTP/REST so a Lambda calls it **without VPC/NAT setup**; ElastiCache is paid and needs VPC wiring.
+
+### Consequences
+
+- (+) One ephemeral store for history + tool cache; clean backend-side context assembly; no DB, no VPC.
+- (−) Redis can evict under memory pressure before TTL → a busy session could lose history early. **Acceptable** here: single-user + ephemeral by design.
+- (−) Adds Upstash as a dependency (mitigated: free tier, no infra to manage).
+
+### Related
+- [ADR-026](#adr-026-chat-session-lifetime--identity--per-tab-ephemeral): sessionId keying
+- [ADR-025](#adr-025-chatbox-runtime--lambda-function-url--nodejs-streaming): why Lambda → no in-process cache
+
+---
+
+## ADR-028: Chat Turn Lifecycle — Sequential Turns, Interruption Aborts
+
+**Date:** 2026-06-05
+**Status:** Accepted
+**Phase:** 6 (Per-Job Chat Agent)
+
+### Context
+
+With one SSE request per turn and an agent loop that may run several seconds, we must define turn semantics: can turns overlap, and what happens when the user interrupts mid-response?
+
+### Decision
+
+- **Sequential turns:** input is locked while a response streams; no overlapping turns on one session.
+- **Interruption** (close / refresh / navigate away / stop button) **aborts the in-flight Lambda Function URL invocation** — stops the agent loop and any in-progress LLM calls.
+- **Partial-as-final:** whatever streamed before interruption is what's kept. **No resume** — the SSE connection and invocation are gone. Persist incrementally so the partial answer is recoverable on reload (optionally marked "interrupted").
+
+### Reasoning
+
+- Sequential turns prevent races on a single `sessionId`'s history/state.
+- Refresh kills the SSE → kills the invocation → the turn cannot be continued anyway, so treating the partial as final is honest and correct.
+- Resuming an interrupted stream would require durable, resumable turn-state (e.g. server-side checkpointing + Redis Streams replay) — overkill for an ephemeral support chatbox.
+
+### Alternatives Considered
+
+- **Concurrent turns:** rejected — races on session state, confusing UX.
+- **Stream resume after interruption:** rejected — needs durable resumable turn-state; disproportionate to value.
+
+### Consequences
+
+- (+) Simple, race-free, matches "refresh kills SSE → partial OK."
+- (−) An early-interrupted answer may be cut off mid-sentence (mitigated by an "interrupted" marker; user re-asks).
+
+### Related
+- [ADR-025](#adr-025-chatbox-runtime--lambda-function-url--nodejs-streaming): interruption = abort the Function URL invocation
+
+---
+
+## ADR-029: Build Agent Loop & MCP Client Directly (Reject LangChain & Vercel AI SDK)
+
+**Date:** 2026-06-05
+**Status:** Accepted
+**Phase:** 6 (Per-Job Chat Agent)
+
+### Context
+
+The chat is an agent: LLM decides → calls tools → observes → repeats → final answer. Frameworks (LangChain, Vercel AI SDK) provide this loop, MCP client, and streaming out of the box. This is a **resume-driven** project whose goal is to demonstrate (and defend, cold, in interviews) understanding of agentic systems.
+
+### Decision
+
+**Hand-write** the agent loop (`stop_reason`-driven, bounded iterations), tool-call routing, MCP client, and streaming relay against the raw Anthropic API. **Reject both LangChain and the Vercel AI SDK** for this project.
+
+### Reasoning
+
+- **Defensibility is the goal.** The frameworks abstract away exactly the mechanics interviewers probe — the `stop_reason` loop, tool-schema passing, how tool results re-enter context, iteration bounding. "The framework handles that" sinks an interview the same way "Claude Code handles that" would.
+- **Scale doesn't justify a framework.** ~200-line loop over ~4 tools. Writing it *is* the learning.
+- **Vercel AI SDK specifically** (`createMCPClient` + `streamText` + `maxSteps`) would run the entire loop and MCP client internally — the same category of abstraction as LangChain. The same rejection reasoning applies to both.
+- **Build-vs-buy is explicit:** for a ship-fast product (not demonstrating fundamentals), a framework would be a reasonable choice.
+
+### Consequences
+
+- (+) Full ownership of agent mechanics; strong, defensible interview signal; surveyed-the-landscape maturity (rejecting *two* popular frameworks deliberately).
+- (−) Reimplements the ~200-line engine the SDK gives free (intentional — it's the educational point). Must keep it focused and articulate *why* it exists, knowing what the SDK provides (provider abstraction, integrations, hooks, hardening) that we deliberately skip.
+- The **MCP server makes tools portable** — consumable by our own loop *and* off-the-shelf clients (Vercel AI SDK, Claude Desktop). This is the multi-client justification, and it is demonstrable.
+
+### Related
+- [ADR-030](#adr-030-single-standalone-python-mcp-server-multi-client): the MCP server the loop talks to
+
+---
+
+## ADR-030: Single Standalone Python MCP Server (Multi-Client)
+
+**Date:** 2026-06-05 (updated 2026-06-06)
+**Status:** Accepted (revised)
+**Phase:** 6 → 7 (Per-Job Chat Agent / AI backend)
+
+### Context
+
+The chat backend is a **Node.js** Lambda ([ADR-025](#adr-025-chatbox-runtime--lambda-function-url--nodejs-streaming)), but the tools, DB access, and search logic are **Python** (existing service layer). We must define where the MCP server lives and how consumers reach it.
+
+The original framing (6) considered only the chat agent as a consumer. Phase 7/8 adds **more consumers** (the admin extractor agent; possibly Claude Desktop / IDEs). That changes the right shape: tools should be built **once**, in **one place**, with any client connecting — the whole point of MCP being a protocol.
+
+### Decision (revised)
+
+Build **ONE standalone Python MCP server**, separate from any consumer, that exposes the tools (`search_jobs`, `search_jobs_semantic`, `get_job`, `get_resume`, `score_against_jd`, and later admin tools) as thin wrappers over the **existing Python logic** (in-process — no HTTP hop to reach the logic). Every consumer connects as an **MCP client**:
+
+```
+Python logic (search, score, pgvector, …)
+      │ in-process
+Python MCP server (ONE, standalone) — wraps logic as tools
+      │ MCP protocol
+ ┌────┴───────────────┬──────────────────┐
+Node chat agent   Python admin agent   Claude Desktop / IDE
+(MCP client, JS)  (MCP client, Py)     (MCP client)
+```
+
+- **Server language = Python** (where the logic lives → wraps it directly, no cross-language hop).
+- **Clients can be any language** — the Node chat agent is the genuine cross-language MCP client (JS client ↔ Python server); the admin agent is a Python client; Claude Desktop is an off-the-shelf client.
+- **Flat fan-out, no cascading** — tools call Python logic in-process; MCP servers do not call other MCP servers.
+
+### Reasoning
+
+- **Build once, consume many** — the defining value of MCP as a protocol. One tool surface; add a consumer (admin agent) → it connects to the *existing* server, no second MCP server, no duplicated logic.
+- **Server in Python** wraps the logic with no network hop (vs. the earlier idea of a JS MCP server calling Python REST, which added a hop and split the logic).
+- **MCP genuinely load-bearing** — multiple real clients (chat agent, admin agent, Claude Desktop) share one surface. Demonstrable (point Claude Desktop at it). Resolves the "ceremony for one client" critique.
+- **Reuse, don't duplicate** — tools wrap the same Python functions the REST API uses (one source of truth).
+
+### Alternatives Considered
+
+- **MCP server in Node (per the chat consumer), calling Python REST** — *rejected*: consumer-coupled, adds an HTTP hop, and forces a 2nd MCP server when the admin agent needs tools.
+- **One MCP server per consumer** — *rejected*: duplicates logic, defeats the protocol's purpose.
+- **No MCP, Node calls Python REST directly** — *rejected*: thins the MCP story, forgoes portability/multi-client.
+
+### Sub-Decisions (resolved in 7B)
+
+- **Transport:** ✅ **HTTP (streamable-http)** for the deployed chat path (Node client + Python server = network boundary; persistent shared server, not subprocess-per-request). Also supports stdio (`MCP_TRANSPORT` env) for local/same-machine clients. (A same-process Python admin agent in Phase 8 can skip the protocol and call the tool functions directly — transport follows the consumer.)
+- **Hosting:** ✅ **A new `McpServer` Lambda + Function URL inside `jh-backend-stack`** (NOT its own stack). The MCP server is Python and imports backend code (db/utils/models), so it reuses the backend build/deps/env; `jpushapi` deploys it. (Own-stack would duplicate the Python build for the same codebase; chat got its own stack only because it's Node.)
+- **Auth:** ✅ service-to-service shared token — see [ADR-033](#adr-033-mcp-server-auth--service-to-service-token-not-cors).
+
+### Consequences
+
+- (+) One tool surface, many clients; one source of truth; strong, demonstrable MCP justification; no cross-language hop to the logic.
+- (−) A new standalone Python MCP server to build + host (the Python MCP SDK).
+- (−) Cross-language client (Node→Python over MCP) is slightly more than a REST call — but that's the point of MCP.
+
+### Related
+- [ADR-029](#adr-029-build-agent-loop--mcp-client-directly-reject-langchain--vercel-ai-sdk): the hand-written MCP client (chat agent)
+- [ADR-025](#adr-025-chatbox-runtime--lambda-function-url--nodejs-streaming): Node chat runtime (one MCP client)
+- [ADR-032](#adr-032-embeddings--voyage-pre-trained-no-fine-tuning): embeddings used by the search tools
+
+---
+
+## ADR-031: Conversation Storage in Redis — Per-Message Entries in a Single JSON Blob
+
+**Date:** 2026-06-05
+**Status:** Accepted
+**Phase:** 6B (Chat Redis + Session State)
+
+### Context
+
+The chat session needs to store conversation state in Redis ([ADR-027](#adr-027-chat-state-store--ephemeral-redis-upstash)): the messages exchanged, a (future) rolling summary, and a counter. Since the LLM is stateless, every turn reads this state to rebuild context and writes the new exchange back. Two modeling decisions:
+
+1. **Indexing unit** — store per-**message** (alternating user/assistant, role-tagged) or per-**exchange** (user+assistant pairs)?
+2. **Storage shape** — one JSON blob per session, or separate Redis keys / native structures (LIST / sorted set)?
+
+### Decision
+
+Store conversation state as **per-message entries inside a single JSON blob**, keyed `chat:{uid}:{sessionId}`:
+
+```
+chat:{uid}:{sessionId} → {
+  "message_count": 0,        // monotonic counter (≈ industry's sequence_number)
+  "summary": "",             // rolling summary of compressed-out messages (Phase 7 fills; 6B stub)
+  "messages": [              // recent messages, role-tagged, in order (LLM API-native shape)
+    { "role": "user",      "content": "...", "ts": 0, "interrupted": false },
+    { "role": "assistant", "content": "...", "ts": 0, "interrupted": false }
+  ],
+  "created_at": 0,
+  "updated_at": 0
+}
+TTL: 3600s (1h), sliding — re-set on each write (SET ... EX)
+```
+- `uid` comes from the verified JWT (not client-supplied) — namespaces by authenticated user.
+- 2 commands/turn: `GET` (read context) + `SET ... EX` (write + refresh TTL).
+
+### Alternatives Considered
+
+**Indexing: per-message (chosen) vs per-exchange pairs**
+
+| | Per-message (chosen) | Per-exchange pairs |
+|---|---|---|
+| Matches LLM API (`messages:[{role}]`) | ✅ direct, no transform | ✗ must flatten pairs per call |
+| Asymmetric turns (user→tool→assistant) | ✅ any sequence | ✗ breaks pairing |
+| Partials (user w/ no reply, interrupted assistant) | ✅ natural | ✗ awkward empty-assistant pairs |
+| Industry norm (messages table + sequence_number) | ✅ | uncommon as storage |
+
+**Storage shape: single JSON blob (chosen) vs Redis LIST / sorted set**
+
+| Factor | Favors blob (chosen) | Favors LIST/sorted-set |
+|---|---|---|
+| Size | small + bounded (~30 KB, see below) | large / unbounded |
+| Read pattern | read the WHOLE working set each turn | read slices/ranges |
+| Write pattern | rewrite multiple fields together (messages+summary+count+TTL) | append one item |
+| Concurrency | single writer (sequential turns) | many writers / high append rate |
+| TTL | one key, one atomic sliding TTL (`SET ... EX`) | per-key EXPIRE coordination (footgun) |
+| Commands/turn | 2 | 4–6 |
+
+### Reasoning
+
+- **Size estimate confirms "small":** the full 200K-token context ≈ 800 KB of text, but we never store that — we cap recent messages + a bounded summary. Realistic stored size ≈ **~30 KB** (recent ~10 exchanges + summary + metadata). At that size, rewriting the whole blob per turn is trivial; the LIST's "don't rewrite the whole dataset" advantage doesn't apply.
+- **Access pattern is document-shaped, not log-shaped:** we read the whole working set every turn to build the prompt, and write several fields together. That's an atomic `GET`/`SET ... EX` on one key — simpler, cheaper, single sliding TTL. A LIST/sorted-set wins only for large, unbounded, append-heavy, range-queried, or concurrent data — none of which apply here.
+- **Per-message is API-native and partial-friendly:** stored exactly as the LLM API consumes it; an interrupted turn saves a partial assistant message flagged `interrupted: true` (the ChatGPT-style behavior — partials are real conversation context).
+- **Policy vs storage separation:** the *storage* is per-message in a blob; *policies* (keep recent N, compress oldest when tokens exceed a target — Phase 7) reason over it. Storage shape supports either policy.
+
+### Consequences
+
+- (+) One `GET`/`SET ... EX` per turn; atomic multi-field update; one clean sliding TTL; API-native message shape; partial-saving works.
+- (−) Bounded by design — messages beyond the recent window are summarized away (Phase 7), not retained verbatim (production DBs keep all and window on retrieval; we cap because ephemeral). Acceptable for a short-lived assistant.
+- (−) Would need re-modeling to a native structure if the data became large/unbounded/concurrent — not the case here.
+
+### Related
+- [ADR-027](#adr-027-chat-state-store--ephemeral-redis-upstash): ephemeral Redis as the source of truth
+- [ADR-026](#adr-026-chat-session-lifetime--identity--per-tab-ephemeral): sessionId; uid from the verified JWT
+- [ADR-028](#adr-028-chat-turn-lifecycle--sequential-turns-interruption-aborts): partial-as-final (informs `interrupted` flag)
+
+---
+
+## ADR-032: Embeddings — Voyage (Pre-Trained, No Fine-Tuning)
+
+**Date:** 2026-06-06
+**Status:** Accepted
+**Phase:** 7A (Vector / RAG infrastructure)
+
+### Context
+
+Phase 7 adds semantic job↔resume matching: embed job descriptions (at extraction)
+and resumes (at upload) into vectors, store in pgvector, retrieve top-K by cosine
+for the "best match across all my jobs" query (RAG). We must choose:
+1. **Which embedding provider** (cloud vs open-source; which vendor).
+2. **Pre-trained vs fine-tuned.**
+
+Key constraint: embeddings are computed in the **`ExtractorWorker` Lambda**
+(256 MB, 30s) and at resume upload — so the *runtime environment* matters.
+
+### Decision
+
+- **Provider: Voyage AI** (Anthropic-recommended third-party embeddings; cloud, HTTP).
+- **Pre-trained, general model — NO fine-tuning.**
+
+### Reasoning
+
+**Why a cloud API (not open-source local) — the runtime decides it:**
+Embedding runs inside a **256 MB / 30s Lambda**. Bundling a local model
+(sentence-transformers/BGE: 80 MB–1.3 GB) into that Lambda is hostile —
+size/memory limits, cold-start model load, CPU-only. A **cloud embedding = a
+simple HTTP call**, which fits Lambda cleanly. (Same "don't bundle heavy things
+in Lambda" theme as ADR-024/025.) Open-source would be viable only if embedding
+moved to a container — not worth it here.
+
+**Why Voyage specifically:**
+- **Free tier** — our usage is tiny (≈300 jobs embedded once at ingest ≈ a few
+  hundred K tokens), so realistically **~$0**.
+- Anthropic-recommended (we use Claude), strong quality, simple HTTP from Lambda.
+- (OpenAI / Bedrock are comparable in quality + pennies in cost, but OpenAI needs
+  a payment method and we have **no existing OpenAI API key** — the repo's
+  "openai" is a *scraping extractor for the company OpenAI*, not API access.
+  Bedrock has no free tier. Voyage's free tier is the cleanest $0 path.)
+
+**Why pre-trained, not fine-tuned:**
+- Job/resume text is **general English** — general embeddings already capture
+  "distributed systems ≈ large-scale infrastructure." No specialized domain.
+- Fine-tuning needs **labeled (resume, job, good/bad-match) pairs** + a **measured
+  retrieval gap** — we have neither (no user-feedback labels). The senior move is
+  to **evaluate** the general model's retrieval on a small hand-picked test set,
+  not to train one.
+- Quality of top open-source/cloud embeddings is comparable on general English
+  (MTEB) — model choice is not the bottleneck.
+
+### Embeddings ≠ chat model
+Anthropic has **no first-party embedding model** — embeddings always come from a
+separate provider regardless of the chat vendor. The embedding vendor (Voyage) is
+independent of the chat vendor (Anthropic/Claude); matching them gives no quality
+benefit, just convenience.
+
+### Consequences
+
+- (+) Simple HTTP from the ExtractorWorker Lambda; free-tier → ~$0; strong quality.
+- (+) Pre-trained → no training pipeline, no labeled data needed.
+- (−) A new vendor account/key (Voyage) → goes in `.env.local` + generators → Lambda env.
+- **Roadmap:** fine-tune embeddings only if we later collect match-feedback labels
+  AND a retrieval eval shows a real gap. Document, don't build.
+
+### Related
+- [ADR-031](#adr-031-conversation-storage-in-redis--per-message-entries-in-a-single-json-blob): per-message storage (vectors are separate, on the jobs table)
+- [ADR-014](./DECISIONS.md#adr-014-use-hybrid-text-search-postgresql-full-text--fuzzy): existing keyword search (vectors add semantic retrieval)
+- [ADR-030](#adr-030-single-standalone-python-mcp-server-multi-client): the MCP search tools that use these embeddings
+
+---
+
+## ADR-033: MCP Server Auth — Service-to-Service Token (Not CORS)
+
+**Date:** 2026-06-06
+**Status:** Accepted
+**Phase:** 7B (MCP server hosting)
+
+### Context
+
+The MCP server (ADR-030) is hosted as a Lambda + Function URL inside
+`jh-backend-stack` (ADR-030 sub-decision). The Function URL is **`AuthType: NONE`**
+(no IAM/API-Gateway auth — same as the chat Lambda, ADR-025), so an in-handler
+check is the *only* gate. This matters: the tools take `user_id` as an argument
+and return that user's private data — `get_resume(user_id=…)` would leak any
+user's resume if the endpoint were open. We must choose **what kind of auth**
+sits in front of the MCP server.
+
+The key question is *who the caller is*. The MCP server is never called by a
+browser. Its clients are **backend services**: the Node chat agent (ADR-025/029)
+and, later, the admin agent (Phase 8). The end user never talks to the MCP server
+directly — they talk to the agent, which already verifies the user's JWT and then
+calls the MCP server on their behalf.
+
+### Decision
+
+- **Service-to-service shared token.** The caller sends
+  `Authorization: Bearer <MCP_SERVICE_TOKEN>`; the handler rejects anything else.
+- **Fail closed.** If `MCP_SERVICE_TOKEN` is unset, the server returns 500 and
+  refuses to serve — never runs unauthenticated.
+- **`user_id` is a trusted tool argument**, not re-authenticated at the MCP layer.
+  The agent (which holds and verifies the user's JWT) passes the authenticated
+  `user_id`; the server trusts its caller, mirroring how the REST layer derives
+  uid from the JWT.
+- Enforced as Starlette `ServiceAuthMiddleware` wrapping the FastMCP ASGI app
+  (`mcp_server/handler.py`).
+
+### Reasoning
+
+**Why service-to-service, not user-JWT, at the MCP layer:**
+The MCP server's *client* is the agent, a trusted backend service — not the
+browser and not the end user. Re-verifying the user's JWT here would be the wrong
+boundary: the agent is the thing being authenticated, and it may act for different
+users across calls (and the Phase-8 admin agent acts with no end user at all).
+A single shared service token correctly models "only our backend may call this."
+The per-user authorization already happened upstream (the agent verified the JWT);
+the MCP server's job is to trust *that the caller is our agent*.
+
+**Why NOT CORS:**
+CORS is a **browser-only** mechanism — it restricts which *web origins* a browser
+will let make a request; it does nothing against a non-browser caller (curl, a
+Lambda, an attacker's script). This endpoint is called **server-to-server**, so
+CORS would add zero security while implying protection. The real gate is the
+shared token. (Contrast the chat Lambda, ADR-025, which *is* browser-facing and
+*does* need CORS — different boundary, different control.)
+
+**Why a shared static token (not signed/rotated/IAM):**
+- The trust set is tiny and internal (our own agents), so a shared secret in
+  Lambda env is proportionate — same trust model as the JWT `SECRET_KEY`.
+- IAM/SigV4 on the Function URL would couple the Node agent to AWS SDK signing
+  for marginal benefit over a token both sides already hold via env.
+- Lives in `.env.local` + the SAM generators → Lambda env (never git-tracked),
+  consistent with every other secret in the repo.
+
+### Consequences
+
+- (+) Correct boundary: authenticates the *service*, leaves per-user authz to the
+  agent that holds the JWT. One env var, fail-closed, no AWS-signing coupling.
+- (+) Same secret-handling pattern as the rest of the stack (`.env.local` →
+  generators → Lambda env).
+- (−) A static shared token must be rotated manually if leaked (acceptable for an
+  internal-only surface; revisit if external clients are ever allowed).
+- (−) The MCP server trusts the agent's `user_id` blindly — safe only because the
+  token proves the caller is our agent. If the token leaked, a caller could read
+  any user's data; the token is therefore the whole security boundary.
+
+### Related
+- [ADR-030](#adr-030-single-standalone-python-mcp-server-multi-client): the MCP server this auth protects
+- [ADR-025](#adr-025-chatbox-runtime--lambda-function-url--nodejs-streaming): the chat Lambda — browser-facing, so it DOES use CORS (the contrast)
+- [ADR-029](#adr-029-build-agent-loop--mcp-client-directly-reject-langchain--vercel-ai-sdk): the agent (MCP client) that holds the JWT and passes `user_id`
+- Learning: [vectors-rag-eval.md](../learning/vectors-rag-eval.md)

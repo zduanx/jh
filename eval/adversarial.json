@@ -1,0 +1,12 @@
+[
+  {
+    "id": "ADVERSARIAL-hallucination",
+    "synthetic": true,
+    "expectLowFaithfulness": true,
+    "question": "what backend jobs do I have?",
+    "answer": "You have a Backend Engineer role at SpaceX (job 999) paying $500k, and a Staff role at Netflix (job 888) that's fully remote in Hawaii.",
+    "contexts": [
+      "Tool search_jobs_semantic returned: [{\"job_id\":163,\"company\":\"openai\",\"title\":\"Software Engineer, Backend\",\"location\":\"San Francisco\"}]"
+    ]
+  }
+]
