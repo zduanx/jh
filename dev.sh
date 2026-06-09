@@ -789,6 +789,24 @@ try { console.log(await ping()); } catch (e) { console.log('ERR:' + e.message); 
         echo -e "${YELLOW}  ⊘ Chat Redis check skipped (no chat/.env.local or node_modules)${NC}"
     fi
 
+    # Docker (Phase 8 extractor-agent sandbox). OPTIONAL — only needed for the
+    # extractor discovery agent, not the core app. So warn, don't fail.
+    echo -e "${BLUE}[+] Docker sandbox (Phase 8 extractor agent — optional)...${NC}"
+    if ! command -v docker > /dev/null 2>&1; then
+        echo -e "${YELLOW}  ⊘ Docker not installed (only needed for the extractor agent)${NC}"
+        echo -e "${YELLOW}    Install: brew install --cask docker${NC}"
+    elif docker info > /dev/null 2>&1; then
+        echo -e "${GREEN}  ✓ Docker daemon running${NC}"
+        if docker image inspect jh-extractor-sandbox > /dev/null 2>&1; then
+            echo -e "${GREEN}  ✓ Sandbox image built (jh-extractor-sandbox)${NC}"
+        else
+            echo -e "${YELLOW}  ⊘ Sandbox image not built yet (auto-builds on first agent run)${NC}"
+        fi
+    else
+        echo -e "${YELLOW}  ⚠ Docker installed but daemon not running${NC}"
+        echo -e "${YELLOW}    Start: open -a Docker  (or: extractors_v2/cli.sh edocker)${NC}"
+    fi
+
     # Summary
     echo ""
     echo -e "${BLUE}=== Summary ===${NC}"

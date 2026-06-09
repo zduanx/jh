@@ -2601,3 +2601,71 @@ shared token. (Contrast the chat Lambda, ADR-025, which *is* browser-facing and
 - [ADR-025](#adr-025-chatbox-runtime--lambda-function-url--nodejs-streaming): the chat Lambda — browser-facing, so it DOES use CORS (the contrast)
 - [ADR-029](#adr-029-build-agent-loop--mcp-client-directly-reject-langchain--vercel-ai-sdk): the agent (MCP client) that holds the JWT and passes `user_id`
 - Learning: [vectors-rag-eval.md](../learning/vectors-rag-eval.md)
+
+---
+
+## ADR-034: Sandbox Execution — Local Docker (Dev), Lambda the Production Path
+
+**Date:** 2026-06-08
+**Status:** Accepted
+**Phase:** 8 (autonomous extractor-discovery agent)
+
+### Context
+
+The Phase 8 agent runs **untrusted, LLM-generated trial code** that fetches arbitrary
+external sites (to discover how to list a company's jobs). Untrusted code must be
+**sandboxed** — never `exec()`'d in-process with our secrets / IAM / filesystem (it could
+`rm -rf`, read `.env`, exfiltrate, or pivot to internal services). The question is **where**
+the sandbox runs.
+
+Two viable implementations, with the *same* isolation goal (no secrets, controlled
+network, resource limits, ephemeral, unprivileged):
+1. **Local Docker** — an ephemeral container per trial (`docker run --rm`).
+2. **AWS Lambda** — invoke a zero-permission runner Lambda per trial (Firecracker microVM).
+
+### Decision
+
+- **Build + run with LOCAL DOCKER.** The agent's `run_trial(code)` ([host_harness.py](../../backend/extractor_agent/sandbox/host_harness.py)) ships trial code into a hardened, ephemeral container and returns the result.
+- **Lambda is the documented PRODUCTION path, not built.** A production deployment would run trials in a zero-permission, network-restricted Lambda (`CodeUri: extractors_v2`, `Policies: []`, no secrets) — Firecracker microVM isolation, auto-scale.
+
+### Reasoning
+
+**Why local Docker for the build (it's a DEV-time choice, not a safety one):**
+- **$0, no deploy, fast iteration** — edit → run instantly, no `sam build`/invoke round-trip, no AWS dependency. For a *local, on-demand admin tool* (the agent is run by hand, not user-facing), this is the pragmatic dev experience.
+- **Owned + inspectable** — we wrote the isolation flags (`--rm`, `--read-only`, `--network`, `--cap-drop ALL`, no secrets), so the sandboxing is demonstrable and explainable, not outsourced.
+- Docker is NOT safer or more capable than Lambda here — it's just **more convenient to build and iterate on.**
+
+**Why Lambda is the right PRODUCTION path (consistent with the rest of the stack):**
+- The whole app is already serverless Lambda (backend/MCP/chat). A production code-runner should be Lambda too — same architecture, no new infra type.
+- **Firecracker microVM** isolation (what Lambda runs on) is *stronger* than a shared-kernel container, and Lambda auto-scales with $0 idle. EC2+Docker would mean managing servers (avoided everywhere else) for *worse* isolation — rejected.
+
+**The swappable seam (the key design point):**
+The ONLY thing that changes between dev and prod is **how `run_trial` executes the code** —
+`docker run` (local) vs. `lambda.invoke` (prod). Both take a code string, run it isolated,
+return JSON. So `run_trial` is a clean boundary: a future `RUN_TRIAL_MODE=lambda` could swap
+the backend without touching the agent loop. This is what makes "Docker now, Lambda later" a
+config change, not a redesign — *the sandboxing skill is portable; only the delivery differs.*
+
+**Why this is fine for THIS project:**
+The agent is a **local admin/build-time tool** (run on-demand to onboard a company; its
+*output* — a discovered extractor — is what's published, not the agent). So a local-only
+sandbox is proportionate; no production sandbox needs deploying. ([ADR-033](#adr-033-mcp-server-auth--service-to-service-token-not-cors)'s "boundary
+follows the consumer" theme: the sandbox boundary is local because the consumer is local.)
+
+### Self-contained `extractors_v2` enables both
+Both deliveries require the trial's contract (`BaseExtractorV2`) be in the sandbox WITHOUT
+the rest of the backend (no `db`/`config.settings`/secrets). That's why `extractors_v2/` is
+**import-clean** — Docker bakes just that folder into the image; a Lambda would set
+`CodeUri: extractors_v2`. A non-self-contained framework would leak the whole backend into
+the sandbox.
+
+### Consequences
+- (+) Free, fast, owned dev sandbox; the sandboxing concept is fully demonstrated locally.
+- (+) Clear production story (Lambda) that fits the all-serverless architecture — a config-level swap at `run_trial`, not a rewrite.
+- (−) The local Docker sandbox isn't deployed/scalable as-is — acceptable, since the agent is a local admin tool (production would swap to Lambda).
+- (−) `exec()`-ing untrusted code is sufficient for our semi-trusted (LLM scraping) case + microVM/container isolation; a maximally-hostile, internet-scale runner (e.g. LeetCode) would add gVisor/syscall-filtering/no-egress. Scale hardening to the threat.
+
+### Related
+- [PHASE_8B_SUMMARY](../logs/PHASE_8B_SUMMARY.md): the Docker sandbox harness this describes
+- [ADR-024/025](#adr-025-chatbox-runtime--lambda-function-url--nodejs-streaming): "don't bundle heavy things in Lambda" / runtime-follows-consumer — same reasoning family
+- [ADR-029](#adr-029-build-agent-loop--mcp-client-directly-reject-langchain--vercel-ai-sdk): own the mechanics (hand-built loop) — same "build it, understand it" ethos applied to the sandbox
