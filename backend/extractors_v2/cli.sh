@@ -49,8 +49,23 @@ case "$verb" in
     docker system df 2>/dev/null | head -4
     ;;
   elogo)
-    echo "elogo: not implemented yet (Phase 8C)"
-    exit 1
+    # Load the GENERATED extractor for a company via the registry, print its ICON_URL.
+    # Proves the agent's output actually loads + works when used by the backend.
+    company="${1:-}"
+    if [ -z "$company" ]; then echo "Usage: elogo <company>"; exit 1; fi
+    cd "$BACKEND"
+    source venv/bin/activate 2>/dev/null || true
+    python -c "
+import sys
+from extractors_v2.registry import get_extractor
+try:
+    cls = get_extractor('$company')
+except ValueError as e:
+    print('✗', e); sys.exit(1)
+print(f'company : {cls.COMPANY_NAME}')
+print(f'class   : {cls.__name__}')
+print(f'icon_url: {cls.ICON_URL}')
+"
     ;;
   elist)
     echo "elist: not implemented yet (Phase 8D)"

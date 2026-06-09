@@ -6,7 +6,6 @@ package can run inside the Docker sandbox. See docs/logs/PHASE_8A_SUMMARY.md.
 """
 
 from .base import BaseExtractorV2
-from .enums import Company
 from .config import TitleFilters
 
-__all__ = ["BaseExtractorV2", "Company", "TitleFilters"]
+__all__ = ["BaseExtractorV2", "TitleFilters"]

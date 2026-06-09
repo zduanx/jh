@@ -5,8 +5,8 @@ This is the contract the discovery agent (Phase 8C/8D) codes against. A company
 extractor is a subclass that fills in a few PENDING consts/methods:
 
     class GoogleV2(BaseExtractorV2):
-        COMPANY_NAME = Company.GOOGLE
-        LOGO_URL     = "..."        # ← discovered by the agent in 8C
+        COMPANY_NAME = "google"
+        ICON_URL     = "..."        # ← discovered by the agent in 8C
         async def _fetch_all_jobs(self) -> list[dict]:   # ← discovered in 8D
             ...
 
@@ -26,7 +26,6 @@ from typing import Any
 
 import httpx
 
-from .enums import Company
 from .config import TitleFilters
 
 # Browser-like headers so a plain HTTP request looks like a real browser (most
@@ -46,15 +45,19 @@ class BaseExtractorV2(ABC):
     Base class for v2 extractors. Subclasses fill the PENDING members below.
 
     Class members a concrete extractor defines:
-      COMPANY_NAME : Company          (required)
-      LOGO_URL     : str | None       (8C — agent-discovered; None = pending)
+      COMPANY_NAME : str              (required — the company slug, e.g. "anthropic")
+      ICON_URL     : str | None       (8C — agent-discovered; None = pending)
       URL_PREFIX_JOB : str            (used to build job-detail URLs; may be "")
       _fetch_all_jobs()               (8D — agent-discovered; the hard part)
+
+    Note: COMPANY_NAME is a plain string (NOT an enum) — companies are an open,
+    growing set (the discovery agent adds new ones). The registry is the source of
+    truth for "what companies exist", not a hardcoded enum.
     """
 
     # --- PENDING members (filled by concrete subclasses / the agent) ---
-    COMPANY_NAME: Company
-    LOGO_URL: str | None = None          # 8C target
+    COMPANY_NAME: str
+    ICON_URL: str | None = None          # 8C target
     URL_PREFIX_JOB: str = ""             # for building job URLs from ids
 
     def __init__(self, config: TitleFilters | None = None):

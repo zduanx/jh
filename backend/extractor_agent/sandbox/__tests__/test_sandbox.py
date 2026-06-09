@@ -43,12 +43,12 @@ def test_async_run_is_awaited():
 def test_can_import_extractors_v2():
     # The whole point: trial code extends the baked-in framework.
     code = (
-        "from extractors_v2_base import BaseExtractorV2, Company\n"
-        "result = Company.GOOGLE.value\n"
+        "from extractors_v2_base import BaseExtractorV2, TitleFilters\n"
+        "result = TitleFilters().to_dict()\n"
     )
     r = run_trial(code)
     assert r.ok
-    assert r.result == "google"
+    assert r.result == {"include": [], "exclude": []}
 
 
 def test_network_fetch_works():

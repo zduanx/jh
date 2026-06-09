@@ -7,21 +7,21 @@ just the reference shape. Generated code imports the framework from
 `extractors_v2_base` (this package, which is baked into the Docker sandbox image).
 
 The agent fills the PENDING members:
-  - LOGO_URL        (8C)
+  - ICON_URL        (8C)
   - _fetch_all_jobs (8D)
-A class is "done" when LOGO_URL is set and _fetch_all_jobs works.
+A class is "done" when ICON_URL is set and _fetch_all_jobs works.
 """
 
 from typing import Any
 
-from extractors_v2_base import BaseExtractorV2, Company
+from extractors_v2_base import BaseExtractorV2
 
 
 class TemplateExtractor(BaseExtractorV2):
-    COMPANY_NAME = Company.GOOGLE          # ← set to the real company
+    COMPANY_NAME = "google"                 # ← set to the real company slug (a string)
 
-    # 8C — agent fills this (the company's logo image URL):
-    LOGO_URL: str | None = None            # PENDING
+    # 8C — agent fills this (the company's icon image URL):
+    ICON_URL: str | None = None            # PENDING
 
     # Used to build job-detail URLs from ids (8D may set this):
     URL_PREFIX_JOB = ""                     # PENDING (if needed)

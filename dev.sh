@@ -460,6 +460,61 @@ jkillall() {
     jkill-fe
     jkill-benode
     jkill-bemcp
+    # Extractor sandbox (Phase 8): force-remove any leftover trial containers AND
+    # the sandbox image (next `jcompany` run rebuilds it fresh, ~30s).
+    if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
+        echo -e "${YELLOW}Killing extractor sandbox containers + image...${NC}"
+        docker ps -aq --filter "ancestor=jh-extractor-sandbox" | xargs -r docker rm -f >/dev/null 2>&1
+        docker rmi -f jh-extractor-sandbox >/dev/null 2>&1 \
+            && echo -e "${GREEN}  ✓ sandbox image removed (rebuilds on next jcompany)${NC}" \
+            || echo -e "${BLUE}  (no sandbox image to remove)${NC}"
+    fi
+}
+
+# Ensure the extractor sandbox is READY: (1) Docker daemon running, (2) sandbox
+# image built (Docker's build cache makes this instant if nothing changed, and
+# rebuilds changed layers automatically). Run before jcompany; daemon stops on reboot.
+# Usage: jdocker [--rebuild]   (--rebuild = from-scratch build, ignores the cache)
+jdocker() {
+    if ! command -v docker >/dev/null 2>&1; then
+        echo -e "${RED}  ✗ Docker not installed${NC}"
+        echo -e "${YELLOW}    Install: brew install --cask docker${NC}"
+        return 1
+    fi
+
+    # 1) Daemon up?
+    if docker info >/dev/null 2>&1; then
+        echo -e "${GREEN}✓ Docker daemon running${NC}"
+    else
+        echo -e "${BLUE}Starting Docker Desktop...${NC}"
+        open -a Docker
+        echo -ne "${BLUE}  waiting for daemon"
+        local up=0
+        for _ in $(seq 1 30); do
+            if docker info >/dev/null 2>&1; then up=1; break; fi
+            echo -ne "."; sleep 2
+        done
+        if [ "$up" = 1 ]; then
+            echo -e "${NC}\n${GREEN}✓ Docker daemon ready${NC}"
+        else
+            echo -e "${NC}\n${YELLOW}⚠ daemon not ready after 60s — check Docker Desktop (may need a license click)${NC}"
+            return 1
+        fi
+    fi
+
+    # 2) Build the image. Docker's build CACHE handles staleness for us: if nothing
+    # changed, this is ~instant (all layers cached); if the source changed, it rebuilds
+    # the changed layers. So we just always build — no timestamp/hash bookkeeping needed.
+    # `jdocker --rebuild` forces a from-scratch build (ignores the cache).
+    local img="jh-extractor-sandbox"
+    local backend="$JH_ROOT/backend"
+    local nocache=""
+    [ "${1:-}" = "--rebuild" ] && { nocache="--no-cache"; echo -e "${YELLOW}  --rebuild: building from scratch${NC}"; }
+
+    echo -e "${BLUE}  building sandbox image ($img)...${NC}"
+    ( cd "$backend" && docker build -q $nocache -f extractor_agent/sandbox/Dockerfile -t "$img" . ) \
+        && echo -e "${GREEN}✓ sandbox image ready${NC}" \
+        || { echo -e "${RED}  ✗ image build failed${NC}"; return 1; }
 }
 
 # Start ALL 3 backends in the background: FastAPI (8000), chat Node (8100), MCP (8001).
@@ -1896,12 +1951,51 @@ jpushapi() {
 
 # ---------------------------------------------------------------------------
 # Extractor-agent CLI (Phase 8) — expose the `e*` verbs from
-# backend/extractors_v2_base/cli.sh as shell commands, so `source dev.sh` makes
+# backend/extractors_v2/cli.sh as shell commands, so `source dev.sh` makes
 # them available everywhere (edocker, eclean, elogo, elist, ejd).
 # Each is a thin wrapper that runs the cli.sh dispatcher.
 # ---------------------------------------------------------------------------
-_JH_EXTRACTOR_CLI="$JH_ROOT/backend/extractors_v2_base/cli.sh"
+_JH_EXTRACTOR_CLI="$JH_ROOT/backend/extractors_v2/cli.sh"
 for _verb in edocker eclean elogo elist ejd; do
     eval "${_verb}() { \"$_JH_EXTRACTOR_CLI\" ${_verb} \"\$@\"; }"
 done
 unset _verb
+
+# Run the extractor-DISCOVERY agent for a company (Phase 8C/8D).
+# Usage: jcompany <company> <careers_url>
+#   The agent (host brain + Docker-sandboxed trials) discovers, prints step-by-step.
+# Needs: ANTHROPIC_API_KEY (from backend/.env.local) + Docker running (edocker).
+jcompany() {
+    if [ $# -lt 2 ]; then
+        echo -e "${YELLOW}Usage: jcompany [--d] <company> <careers_url>${NC}"
+        echo -e "${YELLOW}  --d  also print the full thought + the trial code each step${NC}"
+        return 1
+    fi
+    cd "$JH_ROOT/backend" || return 1
+    source venv/bin/activate 2>/dev/null
+    # The agent brain (host) needs ANTHROPIC_API_KEY. It lives in chat/.env.local
+    # (the chat agent's key) — reuse it. Fall back to backend/.env.local if present.
+    export ANTHROPIC_API_KEY="${ANTHROPIC_API_KEY:-$(grep '^ANTHROPIC_API_KEY=' "$JH_ROOT/chat/.env.local" 2>/dev/null | cut -d= -f2-)}"
+    export ANTHROPIC_API_KEY="${ANTHROPIC_API_KEY:-$(grep '^ANTHROPIC_API_KEY=' .env.local 2>/dev/null | cut -d= -f2-)}"
+    if [ -z "$ANTHROPIC_API_KEY" ]; then
+        echo -e "${YELLOW}  ANTHROPIC_API_KEY not found (checked chat/.env.local, backend/.env.local)${NC}"
+    fi
+
+    # Record the run to a gitignored log (the audit of what the agent did). The agent
+    # already prints everything; we tee it to a file (ANSI colors stripped) for review.
+    local company_label
+    company_label=$(for a in "$@"; do case "$a" in --*) ;; *) echo "$a"; break;; esac; done)
+    local runs_dir="$JH_ROOT/backend/extractor_agent/runs"
+    mkdir -p "$runs_dir"
+    local logfile="$runs_dir/${company_label:-run}-$(date +%Y%m%d-%H%M%S).log"
+
+    # tee to console (colored) + logfile (ANSI stripped: color codes AND cursor/clear
+    # sequences like \x1b[2K and \r). PIPESTATUS keeps python's rc.
+    python -u -m extractor_agent.cli "$@" 2>&1 \
+        | tee >(sed -E $'s/\x1b\\[[0-9;]*[a-zA-Z]//g; s/\r//g' > "$logfile")
+    local rc=${pipestatus[1]:-${PIPESTATUS[0]:-0}}
+    echo -e "${BLUE}  run log: ${logfile#$JH_ROOT/}${NC}"
+    deactivate 2>/dev/null || true
+    cd "$JH_ROOT" || return 1
+    return $rc
+}

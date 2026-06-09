@@ -1,135 +1,128 @@
-# Phase 8C: Logo Walking-Skeleton (the first agent slice)
+# Phase 8C: Icon Walking-Skeleton → a Multi-File AI Coding Agent
 
-**Status**: 📋 Planning
-**Date**: June 8, 2026
-**Goal**: The thinnest end-to-end agent slice — given a company + careers URL, the agent **discovers the company logo URL** through sandboxed trials and writes it into a generated extractor (uncommitted). The *task* is trivial; the point is to **wire every layer** (agent loop · structured terminal output · sandboxed trials · scoped file write · reporting) on an easy task before scaling to the hard one (8D).
+**Status**: ✅ Completed
+**Date**: June 9, 2026
+**Goal**: The first end-to-end agent slice — given a company + careers URL, the agent **discovers the company icon** through sandboxed trials and **writes its own output** (the extractor file + registry entry) via read/write tools, scoped to `extractors_v2/`. Started as a walking skeleton ("find the logo"); grew into a genuine **autonomous multi-file coding agent**.
 
-> Walking-skeleton-first: prove the whole pipeline on "find the logo", then 8D makes
-> the *task* harder ("list all jobs") through the *same* proven machinery.
-
----
-
-## Folder model (resolved — see ADR-034)
-
-```
-extractors_v2_base/        ← the CONTRACT (baked into the Docker image): base.py, enums, config
-                              trial code does `import extractors_v2_base`; NEVER changes with output
-extractors_v2/             ← GENERATED extractors (the agent's OUTPUT): {company}.py
-                              what production imports; written on the HOST; NEVER baked into the image
-extractor_agent/           ← the agent (host-only brain + sandbox harness)
-```
-Generated code lives in `extractors_v2/` (outside the baked folder) so **sandbox rebuilds stay clean** — generated output never pollutes the contract image.
+> Walking-skeleton-first: prove the whole pipeline on the easy task (icon), with the
+> *same* machinery (plan-execute · sandboxed trials · read/write file tools · registry)
+> that 8D scales to the hard task ("list all jobs").
 
 ---
 
-## What 8C builds
+## What it became (vs. the original plan)
+
+The original 8C was "find a logo, write one const." It evolved — each change driven by a design discussion (see git history of this doc):
+
+| Original plan | What we built | Why |
+|---|---|---|
+| find the **logo** | find the **icon** (standalone symbol, no wordmark) | logo had the company name; we want the mark — prefer apple-touch-icon/favicon over og:image |
+| ReAct only (plan deferred to 8D) | **Plan-and-Execute** (outer) + ReAct (inner) | built the structure now; LLM plans stages from the goal |
+| `apply.py` writes one file (deterministic post-step) | the **LLM writes via read_file/write_file tools** | the demo is an AI *coding* agent — the LLM does the multi-file editing, like Claude Code |
+| one output const (`LOGO_URL`) | **two files**: `extractors_v2/{company}.py` + `extractors_v2/registry.py` | demonstrates safe, scoped, multi-file editing |
+| `Company` enum | **dropped the enum → `COMPANY_NAME: str` + a registry** | companies are an OPEN set (the agent adds them); enum is the wrong type. Registry = source of truth |
+
+---
+
+## Folder model (see ADR-034)
+
+```
+extractors_v2_base/   ← the CONTRACT (baked into the Docker image): base.py, config.py, _template.py
+                         self-contained (stdlib + httpx); trial code does `import extractors_v2_base`
+extractors_v2/        ← GENERATED output (production imports; NEVER baked): {company}.py, registry.py, cli.sh
+extractor_agent/      ← the agent (host brain + sandbox harness + file tools)
+```
+Generated code lives in `extractors_v2/` (outside the baked folder) so sandbox rebuilds stay clean.
+The `Company` enum was removed — `extractors_v2/registry.py` is the source of truth for "what companies exist".
+
+---
+
+## What 8C built
 
 ```
 backend/extractor_agent/
-├── discover.py    # the agent loop (host brain): structured LLM turn → run tool → observe → retry
-├── prompts.py     # the logo-discovery system prompt
-├── tools.py       # the tool implementations: run_trial(code), read_file(path)
-├── apply.py       # scoped, create-only host file writer (write the generated {company}.py)
-├── report.py      # structured terminal stepping + a record file (the audit)
-└── generated/{company}/run.json   # record file (gitignored) — what the agent did
+├── discover.py    # Plan-and-Execute (run_agent) + inner ReAct loop (run_stage); dispatches tools
+├── prompts.py     # Pydantic models (AgentStep/Action/Plan) + per-stage prompts (icon, write_extractor)
+├── tools.py       # read_file / write_file — scoped to extractors_v2/, READ-BEFORE-WRITE enforced
+├── cli.py         # entry: run_agent → print result
+├── runs/          # gitignored run logs — {company}-{ts}.log (the audit; tee'd from jcompany)
+└── sandbox/       # (8B) the Docker harness — run_trial in an isolated container
+
+backend/extractors_v2/
+├── registry.py    # source of truth: {slug: ExtractorClass}; list_companies() / get_extractor()
+├── cli.sh         # e* verbs: edocker, eclean, elogo, elist, ejd
+└── {company}.py   # the agent's generated extractors (e.g. anthropic.py)
 ```
 
 ---
 
-## Agent shape (resolved)
+## Architecture (resolved through discussion)
 
-- **Plan-and-Execute (outer) + ReAct (inner).** The full Phase-8 task is multi-stage with a
-  *knowable* plan (logo → discover fetch-all → validate a JD), but *within* each stage it's
-  **ReAct** (trial → observe → retry — we don't know what a trial returns until we run it).
-- **8C builds only the inner ReAct loop for ONE stage (logo).** The outer plan turn is deferred
-  to 8D (where there are multiple stages). The system prompt may state the plan but is told it
-  **can skip stages** that don't apply (8C = logo only).
-- Same family as the 7C chat ReAct agent — reuse that understanding; the difference is the tools.
+**Plan-and-Execute (outer) + ReAct (inner).**
+- `run_agent` → **plan turn** (LLM selects stages for the goal) → executes each stage's **inner ReAct loop**.
+- WE author the available stages (in the prompt); the **LLM plans which to run** (goal-driven) and **reacts** within each (trial → observe → retry). So: *we plan the menu, the LLM plans the selection + reacts on execution.*
+- 8C stages: `["validate_company", "icon", "write_extractor"]`. 8D adds `fetch_jobs`, `validate_jd` — just more `_STAGE_INSTRUCTIONS` entries.
+- **`validate_company` is a sanity GATE that runs first** — a **loose, judgment-based** check (NOT rigid rules): "are you confident this is a real company and a consistent site?" + a confidence signal. Garbage (`zzqwerty`, keyboard-mash) **fails → nothing written**; legitimate-but-unusual passes (e.g. `alphabet` @ abc.xyz — the LLM knows the branding *and* that a Cloudflare 403 ≠ a dead site). **Deliberately NOT a name↔domain string match** — that false-rejects real companies (Google@abc.xyz, anyone on Greenhouse/Lever/Workday ATS domains). Lesson: *for judgment calls, give the LLM the question + a bias-to-allow (git diff is the backstop), not a decision tree; rigid rules are for deterministic constraints (scope guard, read-before-write).*
 
-## Structured LLM output (the terminal UX)
+**Structured output, Pydantic-validated.**
+- Each turn the LLM returns a forced `AgentStep` `{thought, summary, action}` (schema generated from the Pydantic model). Replies are **validated** (`model_validate`); malformed ones are fed back for a retry — *validation scales with autonomy*.
 
-Each LLM turn returns **structured JSON** (forced, like the eval judge) carrying both an internal
-part and a terminal part — in ONE response (Claude returns reasoning + action together natively;
-we just shape it):
-```json
-{
-  "thought":  "internal reasoning (kept in context for the next turn)",
-  "summary":  "checking og:image meta tag",          // printed to terminal with a step index
-  "action":   { "tool": "run_trial", "args": {...} } // or {"tool": "done", "result": {...}}
-}
-```
-The CLI prints `[step N] summary` per turn → the **observable step-by-step** the user wants.
+**Tools (one action per turn — observable, industry-standard):**
+- `run_trial(code)` — execute python in the Docker sandbox (8B). The discovery "act".
+- `read_file(path)` / `write_file(path, content)` — the agent's own file editing, **confined to `extractors_v2/`** (path guard) with **read-before-write** (must read an existing file before overwriting it). Multi-file = multiple turns, one file each (so every edit is individually visible).
 
-## Tools (the schema)
-
-Not just "run code" — the agent can also examine:
-- **`run_trial(code)`** — execute discovery python in the Docker sandbox (8B), get JSON back. The "act".
-- **`read_file(company)`** — show the current generated `extractors_v2/{company}.py` (examine before writing). (More relevant in 8D; included for completeness.)
+**Brain on host, trials in Docker.** The LLM (with the API key) runs on the host; only trial *code* ships into the sandbox. File edits are host-side (the reviewed output).
 
 ---
 
-## The flow
+## The flow (verified end-to-end)
 
 ```
-jcompany <company> <careers_url>     (root dev.sh)
-Agent (host brain, autonomous, ReAct inner loop):
-  - LLM turn → {thought, summary, action} → print "[step N] summary"
-  - action run_trial(code): "fetch the page, find og:image / favicon / logo <img>"
-       → Docker sandbox runs it → returns candidate logo URL(s)
-  - observe → retry a different approach if needed (bounded iterations)
-  - converge → action "done" with the logo URL
-Validate:  URL reachable + is an image (a final run_trial HEAD/content-type check)
-Apply (i2): write LOGO_URL into extractors_v2/{company}.py (HOST, uncommitted) via apply.py
-Report:    terminal summary (url, confidence) + record file (the trial log)
-Review:    human runs `git diff extractors_v2/{company}.py` → keep or `git checkout` to revert
-Test:      elogo <company>   → prints the discovered LOGO_URL
+jcompany [--d] <company> <careers_url>        (root dev.sh; --d = verbose)
+  PLAN  → LLM selects stages for the goal → ["icon", "write_extractor"]
+  STAGE icon (ReAct):  fetch page → find apple-touch-icon/favicon/manifest → verify it's an image → done
+  STAGE write_extractor (ReAct + file tools):
+     read_file({company}.py)  → write_file({company}.py, <class>)
+     read_file(registry.py)   → write_file(registry.py, <+ entry>)     ← multi-file, read-before-write
+  RESULT → printed; review with `git status / git diff extractors_v2/`
+elogo <company>   → loads the GENERATED class via the registry, prints its ICON_URL  ← proves it works
 ```
 
-### Build in two iterations
-- **8C-i1 (first):** the ReAct loop + sandbox + structured terminal stepping → **PRINT** the discovered logo (no file write). Proves loop + Docker + structured output + terminal UX.
-- **8C-i2 (then):** add the scoped create-only write (`apply.py` → `extractors_v2/{company}.py`) + record file + git-diff review. Proves the write + review path.
+Observed run (Anthropic): plan → icon found in ~4 trials (recovered from a `bs4` ModuleNotFound by
+switching to regex) → wrote `anthropic.py` + `registry.py` → `elogo anthropic` loaded the class and
+printed the icon URL. The agent's generated code is real, importable, production-usable.
 
 ---
 
-## `apply.py` — scoped create-only writer (reused in 8D)
-- Writes **only** within `extractors_v2/` (path validated — refuse anything outside).
-- **Create-only by default** (refuse to overwrite a filled value unless `--force`) — git is the safety net, but don't clobber silently.
-- Built here, reused for the bigger `_fetch_all_jobs` write in 8D.
+## Acceptance — status
+- [x] `jcompany <company> <url>` runs the full flow with **observable step-by-step** output (`[stage - step N]`).
+- [x] Agent discovers a plausible **icon** URL via sandboxed trial(s).
+- [x] Validation confirms it's a reachable image (a trial HEAD/content-type check).
+- [x] Output written into `extractors_v2/{company}.py` (uncommitted) — visible in `git diff`. **Exceeded:** also writes `registry.py` (multi-file).
+- [x] `elogo <company>` loads the generated class via the registry and prints its `ICON_URL`.
+- [x] Bad reply / malformed output → validated + retried (Pydantic); scoped path guard + read-before-write prevent garbage writes.
+- [x] **Record file produced** — `jcompany` tees the run to a gitignored `extractor_agent/runs/{company}-{ts}.log` (ANSI-stripped); the path is printed at the end. The console log IS the audit; the file persists it.
+- [x] **Fail path verified** — tested with a nonsense company + unreachable URL: the agent fetched, got a DNS error, **stopped early** (2 steps, not 8), reported `✗ icon failed` with a clear reason, `write_extractor` never ran → **no garbage file written**.
 
 ---
 
-## Why logo first
-- **Trivial discovery** (logo is in the page HTML — `og:image`/favicon) → ≤2 trials usually. Debug the *plumbing*, not a hard task.
-- **Exercises every layer**: ReAct loop, Docker `run_trial`, structured output, scoped writer, reporting, dev.sh. If logo works end-to-end, 8D is "same pipeline, harder prompt + the outer plan".
-- **No DB change**: no logo field exists in the schema — output is `LOGO_URL` in a generated class + a record file. No migration.
-
----
-
-## Acceptance
-- [ ] `jcompany <company> <url>` runs the full flow with **observable step-by-step** terminal output.
-- [ ] Agent discovers a plausible logo URL via sandboxed trial(s).
-- [ ] Validation confirms it's a reachable image.
-- [ ] (i2) `LOGO_URL` written into `extractors_v2/{company}.py` (uncommitted) — visible in `git diff`.
-- [ ] Terminal summary + record file produced.
-- [ ] `elogo <company>` prints it.
-- [ ] Bad/failed discovery → reported clearly (confidence: needs-review/failed), nothing garbage written.
-
----
-
-## Decisions
+## Key decisions
 | Decision | Choice |
 |---|---|
-| Agent shape | **ReAct inner** (8C); Plan-and-Execute outer added in 8D |
-| LLM output | **Forced structured JSON** `{thought, summary, action}` — reason + action in one response |
-| Tools | `run_trial(code)` + `read_file(company)` — run AND examine |
-| Brain location | Host (has `ANTHROPIC_API_KEY`); only trial code in Docker |
-| Output target | **`extractors_v2/{company}.py`** (generated; NOT `extractors_v2_base/`) — keeps the image clean (ADR-034) |
-| File write | Scoped + create-only (`apply.py`) |
-| Review | Git diff (uncommitted change) — no custom review UI |
-| CLI | `jcompany` (root dev.sh, `j*`); `elogo`/`elist`/`ejd` are `e*` cli.sh verbs (auto-sourced) |
-| Framework | Hand-rolled loop (ADR-029) unless PydanticAI clearly wins |
-| Build order | i1 print-only → i2 add the file write |
+| Agent shape | **Plan-and-Execute (outer) + ReAct (inner)** — built now, not deferred |
+| LLM output | **Pydantic-validated** structured `{thought, summary, action}` + retry on invalid |
+| Tools | `run_trial` (sandbox) + `read_file`/`write_file` (scoped, read-before-write) — the LLM does the coding |
+| File writes | **the LLM writes** via tools (AI coding agent), not a deterministic post-step. Multi-file across turns |
+| Company identity | **string `COMPANY_NAME` + registry** (enum dropped — open set; registry validates typos at lookup) |
+| Scope guard | tools confined to `extractors_v2/`; only `.py`; read-before-write — prompt limit + hard code backstop |
+| Review | git diff (uncommitted) — no custom review UI |
+| Run record | `jcompany` tees output to a gitignored `extractor_agent/runs/{company}-{ts}.log` (ANSI-stripped) — the audit of what the agent did |
+| CLI | `jcompany` (root, `j*`); `jdocker` (daemon + image); `elogo`/`eclean`/etc. are `e*` cli.sh verbs (auto-sourced) |
+| Sandbox lifecycle | `jdocker` (build, cache = staleness), `jkillall` (remove containers + image), container force-kill on timeout |
 
 ---
 
-## Next: 8D (list-all-jobs) — the hard discovery task + the outer Plan-and-Execute loop, on the same pipeline.
+## Next: 8D (list-all-jobs) — the hard discovery task on the SAME machinery.
+Add a `fetch_jobs` stage (discover how to enumerate a company's jobs via sandboxed trials) +
+`validate_jd` (a job page LLM-parses to a JD). The plan-execute structure, sandbox, file tools,
+and registry are all built — 8D is "new stages + harder prompts", not new infrastructure.

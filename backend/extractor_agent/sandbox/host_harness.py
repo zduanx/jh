@@ -21,7 +21,9 @@ Build the image once:  build_image()  (or it auto-builds on first run if missing
 
 from __future__ import annotations
 
+import itertools
 import json
+import os
 import shutil
 import subprocess
 from dataclasses import dataclass
@@ -66,6 +68,15 @@ def _image_exists() -> bool:
     return r.returncode == 0
 
 
+# Monotonic counter for unique container names (no Math.random / wall-clock).
+_run_counter = itertools.count(1)
+
+
+def _kill_container(name: str) -> None:
+    """Force-remove a container by name (best effort)."""
+    subprocess.run(["docker", "rm", "-f", name], capture_output=True, text=True)
+
+
 def run_trial(code: str, *, timeout: int = DEFAULT_TIMEOUT,
               network: str = "bridge", memory: str = "256m", cpus: str = "1") -> TrialResult:
     """
@@ -80,11 +91,18 @@ def run_trial(code: str, *, timeout: int = DEFAULT_TIMEOUT,
     if not _image_exists():
         build_image()
 
+    # Unique name so we can FORCE-KILL the container on timeout. CRITICAL: a bare
+    # subprocess timeout kills only the `docker` CLI, NOT the container — which then
+    # keeps running (e.g. an infinite loop pegging a CPU forever). We must kill by name.
+    name = f"jh-trial-{os.getpid()}-{next(_run_counter)}"
+
     cmd = [
         "docker", "run", "--rm", "-i",
+        "--name", name,
         "--network", network,
         "--read-only", "--tmpfs", "/tmp",
         "--memory", memory, "--cpus", cpus,
+        "--pids-limit", "128",          # prevent fork bombs
         "--cap-drop", "ALL",
         # NOTE: deliberately NO --env / --env-file → container sees no secrets.
         IMAGE,
@@ -95,8 +113,13 @@ def run_trial(code: str, *, timeout: int = DEFAULT_TIMEOUT,
             cmd, input=code, capture_output=True, text=True, timeout=timeout,
         )
     except subprocess.TimeoutExpired:
-        # Best-effort: the --rm container is reaped; report the timeout.
+        # The CLI was killed, but the CONTAINER is still running → force-remove it.
+        _kill_container(name)
         return TrialResult(ok=False, error="timed out", timed_out=True)
+    except BaseException:
+        # Any other failure (incl. KeyboardInterrupt) — don't leak the container.
+        _kill_container(name)
+        raise
 
     raw = (proc.stdout or "").strip()
     # The runner prints exactly one JSON object as its final stdout.
