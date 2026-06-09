@@ -83,6 +83,11 @@ Educational content about technologies and concepts used in this project.
 - pgvector vs dedicated vector DB; partitioning/sharding
 - RAG (retrieve → augment → generate); Ragas / DeepEval; semantic caching
 
+**[agent-discovery-prompts.md](./agent-discovery-prompts.md)** - Building an autonomous discovery agent (Phase 8C/8D)
+- Judgment vs. control flow (LLM decides, code acts); loose prompts for judgment, rigid for constraints
+- "Verify == ship" (the validator emits the artifact it validated); encode failures as shortcuts
+- Cached detailed prompts vs. round-trips; why context trimming backfired; the ATS discovery ladder
+
 ---
 
 ## Quick Reference

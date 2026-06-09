@@ -33,7 +33,23 @@ from .sandbox.host_harness import run_trial
 from .tools import FileTools, FileToolError
 
 MODEL = os.environ.get("EXTRACTOR_AGENT_MODEL", "claude-sonnet-4-6")
-MAX_STEPS = int(os.environ.get("EXTRACTOR_AGENT_MAX_STEPS", "8"))
+
+# Per-stage HARD step cap (the outer code gate). The PROMPT sets a tighter soft budget
+# ("aim to solve within N trials, else escalate") so the agent stays efficient; this is
+# the backstop so a hard stage (fetch_jobs) isn't killed mid-discovery. (validate~2,
+# icon~4, write~4 observed; fetch_jobs is the hard one — give it real headroom.)
+_DEFAULT_MAX_STEPS = int(os.environ.get("EXTRACTOR_AGENT_MAX_STEPS", "8"))
+_STAGE_MAX_STEPS = {
+    "validate_company": 4,
+    "icon": 8,
+    "fetch_jobs": 18,        # prompt soft-limit is ~10; code allows 18 (HRT used 13 — headroom)
+    "validate_jd": 5,        # fetch one job page via the base class + judge it's a JD
+    "write_extractor": 8,
+}
+
+
+def _max_steps(stage: str) -> int:
+    return _STAGE_MAX_STEPS.get(stage, _DEFAULT_MAX_STEPS)
 
 # ANSI for readable terminal stepping
 _DIM, _CYAN, _GREEN, _RED, _YELLOW, _BOLD, _RESET = (
@@ -50,6 +66,28 @@ def _brief(content, limit: int = 1200) -> str:
     """Truncate long message content for the --d view (keep it readable)."""
     s = content if isinstance(content, str) else json.dumps(content)
     return s if len(s) <= limit else s[:limit] + f"… (+{len(s) - limit} chars)"
+
+
+# Token optimization: each turn re-sends the WHOLE conversation, so big tool-result
+# dumps (HTML/JS) get re-sent every later turn — the late turns dominate the bill.
+# The LLM only needs a verbose result in the turn RIGHT AFTER it; older ones can be
+# compacted. We keep the last KEEP_FULL tool results intact and stub out older big ones.
+_KEEP_FULL_RESULTS = 2          # how many recent tool-result messages to keep verbatim
+_BIG_RESULT_CHARS = 1200        # older results longer than this get stubbed
+
+
+def _trim_history(messages: list[dict]) -> None:
+    """In place: compact OLD, large tool-result (user) messages, keep recent ones full."""
+    # indices of user messages that are tool results (the verbose ones)
+    result_idxs = [i for i, m in enumerate(messages)
+                   if m["role"] == "user" and isinstance(m["content"], str)
+                   and m["content"].startswith(("Trial result:", "read_file result:", "write_file result:"))]
+    # keep the most recent _KEEP_FULL_RESULTS untouched; compact older big ones
+    for i in result_idxs[:-_KEEP_FULL_RESULTS] if len(result_idxs) > _KEEP_FULL_RESULTS else []:
+        c = messages[i]["content"]
+        if len(c) > _BIG_RESULT_CHARS:
+            head = c.split("\n", 1)[0]   # the "Trial result:" / "...result:" label line
+            messages[i]["content"] = f"{head}\n[older result compacted — {len(c)} chars; re-run if needed]"
 
 
 @dataclass
@@ -114,7 +152,12 @@ def _structured(client, system: str, messages: list[dict], schema: dict, name: s
         print(f"{_DIM}┌─ → LLM ({last['role']}) ─\n{_indent(_brief(last['content']))}\n└─{_RESET}")
 
     resp = client.messages.create(
-        model=MODEL, max_tokens=2048, temperature=0, system=system,
+        model=MODEL, max_tokens=2048, temperature=0,
+        # Cache the (detailed, stable) system prompt across a stage's turns → the
+        # detailed guidance costs ~nothing after turn 1. This is the token-efficiency
+        # lever: rich system prompt (cached) → fewer round-trips (each re-sends the
+        # whole growing conversation, uncached). Detail up front beats blind exploration.
+        system=[{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}],
         tools=[{"name": name, "description": "Return structured data.", "input_schema": schema}],
         tool_choice={"type": "tool", "name": name},
         messages=messages,
@@ -165,7 +208,12 @@ def run_stage(client, stage: str, company: str, url: str, *, files: FileTools,
 
     say(f"{_CYAN}── stage: {stage} ──{_RESET}")
 
-    for step in range(1, MAX_STEPS + 1):
+    max_steps = _max_steps(stage)
+    for step in range(1, max_steps + 1):
+        # NOTE: history-trimming is intentionally OFF. It compacted large tool results
+        # (JS bundles) the agent still needed to re-examine, causing re-fetch LOOPS that
+        # cost more steps + tokens than the trim saved. Revisit only with a smarter
+        # "summarize-not-drop" approach. (_trim_history kept dormant for later.)
         # Transient "contacting LLM…" line — but NOT in debug (the I/O blocks print there).
         if verbose and not debug:
             print(f"{_DIM}[{stage} - step {step}] contacting LLM…{_RESET}", end="\r", flush=True)
@@ -226,14 +274,14 @@ def run_stage(client, stage: str, company: str, url: str, *, files: FileTools,
             continue
         # (Action.tool is a Literal — Pydantic rejects anything else.)
 
-    say(f"{_YELLOW}  ⚠ {stage}: hit max steps ({MAX_STEPS}) without converging{_RESET}")
-    return StageOutcome(stage=stage, ok=False, reason=f"exceeded {MAX_STEPS} steps", steps=MAX_STEPS)
+    say(f"{_YELLOW}  ⚠ {stage}: hit max steps ({max_steps}) without converging{_RESET}")
+    return StageOutcome(stage=stage, ok=False, reason=f"exceeded {max_steps} steps", steps=max_steps)
 
 
 # --------------------------------------------------------------------------- #
 # Outer Plan-and-Execute
 # --------------------------------------------------------------------------- #
-def run_agent(company: str, url: str, *, goal: str = "onboard the company (icon + write the extractor)",
+def run_agent(company: str, url: str, *, goal: str = "fully onboard the company: validate it, find the icon, discover how to list all jobs, verify a job page is a real JD, then write the extractor",
               verbose: bool = True, debug: bool = False) -> AgentOutcome:
     """Plan the stages, then execute each one's ReAct loop. Returns AgentOutcome."""
     client = _client()

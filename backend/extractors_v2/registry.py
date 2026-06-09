@@ -18,10 +18,18 @@ from __future__ import annotations
 
 from extractors_v2_base import BaseExtractorV2
 from extractors_v2.anthropic import AnthropicExtractor
+from extractors_v2.hrt import HrtExtractor
+from extractors_v2.netflix import NetflixExtractor
+from extractors_v2.openai import OpenaiExtractor
+from extractors_v2.roblox import RobloxExtractor
 
 # company slug → extractor class. The agent appends entries here (read-then-write).
 REGISTRY: dict[str, type[BaseExtractorV2]] = {
     "anthropic": AnthropicExtractor,
+    "hrt": HrtExtractor,
+    "netflix": NetflixExtractor,
+    "openai": OpenaiExtractor,
+    "roblox": RobloxExtractor,
 }
 
 

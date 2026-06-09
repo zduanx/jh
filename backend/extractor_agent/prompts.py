@@ -53,7 +53,7 @@ class AgentStep(BaseModel):
 
 # All stages the agent knows how to run (the order it should plan them in).
 # validate_company runs FIRST — a sanity gate (real company? name matches domain?).
-KNOWN_STAGES = ["validate_company", "icon", "write_extractor"]   # 8D adds: "fetch_jobs", "validate_jd"
+KNOWN_STAGES = ["validate_company", "icon", "fetch_jobs", "validate_jd", "write_extractor"]
 
 
 class Plan(BaseModel):
@@ -75,10 +75,11 @@ def plan_system_prompt() -> str:
 Available stages: {KNOWN_STAGES}
 - "validate_company": a judgment-based sanity check — is this plausibly a real company and a consistent site? ALWAYS run this FIRST for an onboarding goal — it gates the rest.
 - "icon": find the company's standalone icon image URL.
-- "write_extractor": write the extractor file + register the company.
-(Later phases add: "fetch_jobs" = discover how to list all jobs; "validate_jd" = confirm a job page parses.)
+- "fetch_jobs": discover how to list ALL of the company's jobs (the underlying ATS API), producing a working _fetch_all_jobs (each job carries its `url`).
+- "validate_jd": fetch one job's `url` via the framework's crawl + judge it's a real JD for this company (end-to-end proof the URLs work). Runs AFTER fetch_jobs.
+- "write_extractor": write the extractor file (icon + fetch logic) + register the company. Run this LAST.
 
-Choose stages based on the GOAL, in a sensible order. For onboarding, ALWAYS start with "validate_company" (so garbage input fails before anything is written), then "icon", then "write_extractor". e.g. goal "onboard the company" → ["validate_company","icon","write_extractor"]; goal "just find the icon" → ["icon"]. Return the ordered stage list + brief reasoning."""
+Choose stages based on the GOAL, in a sensible order. A FULL onboarding runs all of them IN THIS ORDER: ["validate_company","icon","fetch_jobs","validate_jd","write_extractor"] (validate gates first; validate_jd checks the discovered URLs before committing; write_extractor is last since it needs the icon + fetch results). For a narrower goal, include only what's needed — e.g. "just find the icon" → ["validate_company","icon"]. Return the ordered stage list + brief reasoning."""
 
 
 def plan_user_prompt(company: str, url: str, goal: str) -> str:
@@ -120,20 +121,97 @@ If NOT valid → return the FAIL action (tool "fail") with a clear reason — do
 You want the ICON (symbol only, no text). PREFER these sources IN THIS ORDER (icon-only first; og:image usually has the wordmark, so it's last resort):
 1. `<link rel="apple-touch-icon" ...>` — a clean square icon, no wordmark. BEST.
 2. The web app manifest: find `<link rel="manifest" href="...">`, fetch that JSON, use its largest `icons[].src` (app-tile icons — icon-only).
-3. `<link rel="icon" ...>` (favicon) — icon-only; prefer the largest `sizes`. (Also try `/favicon.ico`.)
+3. `<link rel="icon" ...>` (favicon) — icon-only; prefer the largest `sizes`.
 4. `<meta property="og:image" ...>` — LAST RESORT; usually the full logo WITH text.
 Resolve relative URLs to absolute. Verify the candidate returns an image (HTTP 200 + image content-type). Only fall back to og:image if 1-3 yield nothing (then confidence "medium").
 
+ALWAYS-AVAILABLE FALLBACK (use this BEFORE giving up — never go to step 4 of this paragraph without trying it): just GET `https://<domain>/favicon.ico` and `https://<domain>/apple-touch-icon.png` directly — these standard paths almost always exist even when the HTML is a bot-blocked JS shell. If one returns an image (200 + image content-type), USE IT.
+
+EFFICIENCY: do NOT rabbit-hole. If the homepage is bot-blocked or icon-free, do NOT try Wayback Machine, Google cache, sitemaps, or CDX APIs — those waste steps. Instead just hit the standard /favicon.ico and /apple-touch-icon.png paths directly. Solve in ≤4 trials.
+
 done result: {"icon_url":"...","source":"apple-touch-icon|manifest|favicon|og:image","confidence":"high|medium"}""",
+
+    "fetch_jobs": """STAGE: discover HOW to list ALL of the company's jobs from the given careers URL, producing a working approach that returns a list of jobs. Aim to solve in ~8 trials; each trial is expensive, so plan before you act.
+
+EFFICIENCY (read first — this is how you stay under budget):
+- ALWAYS prefer: fetch ALL jobs UNFILTERED from the source, then apply the URL's filters in YOUR python (client-side). Do NOT try to replicate the website's own server-side filtered request — that path is a rabbit hole (custom nested filter formats, etc.). Get everything, filter locally.
+- Plan your approach in `thought` before trialing. Don't repeat a failed approach with small variations — if an approach fails twice, CHANGE STRATEGY (e.g. stop fighting the server filter → get-all-then-filter-locally).
+- Reuse what earlier trials already revealed (endpoint, action, params) — don't re-fetch the same page/bundle repeatedly.
+
+KEY INSIGHT: the careers page is usually a JS app — the jobs are NOT in the visible HTML. The REAL source is almost always an underlying ATS (applicant tracking system) with a PUBLIC JSON API. Go straight for it; don't scrape rendered HTML.
+
+LADDER (try in order, stop when you get a clean job list):
+
+1. Identify the ATS. Fetch the page and grep for a signature: greenhouse, lever, ashby, eightfold, workday, smartrecruiters, jobvite. If found, you know the ATS. If the page is a tiny JS shell with NO signature, just TRY the known ATS APIs by the company slug (step 2) — they often work even with no signature.
+
+2. Hit the ATS's public JSON API (KNOWN patterns — {slug} = company slug, often the COMPANY_NAME; for some it's a custom board token found on the page):
+   - Greenhouse: https://boards-api.greenhouse.io/v1/boards/{slug}/jobs   (add ?content=true to also get `departments` and `offices` — needed if the filter is by team/location)
+   - Ashby:      https://api.ashbyhq.com/posting-api/job-board/{slug}      (jobs in `.jobs`)
+   - Lever:      https://api.lever.co/v0/postings/{slug}?mode=json
+   - Eightfold:  {careers_host}/api/apply/v2/jobs?domain={domain}&pid={pid}&start=0&num=100   (pid/domain are in the URL; positions in `.positions`, total in `.count` — PAGINATE: loop `start` until you have all `count`)
+   - Workday:    POST {host}/wday/cxs/{tenant}/{site}/jobs  (paginated)
+   Pick the matching one. Verify the count looks sane (not 0, not a tiny "talent community" decoy board, not absurd).
+
+3. If NO public ATS API works (custom site): READ THE JS, don't give up. Fetch the page's main frontend JS bundle, find the AJAX call, and reconstruct the EXACT POST it makes (url, action, ALL params).
+   CRITICAL for WordPress admin-ajax.php (a very common case): the POST needs the custom `action`, AND it almost always needs a `setting` param whose value is a DOM attribute like `data-filters-settings` (or similar `data-*-settings`) on the listing element — taken from the page HTML and HTML-UNESCAPED (the raw HTML has `&quot;` etc.; unescape to real JSON before sending).
+   - SYMPTOM → FIX: a 500 "There has been a critical error on this website" means a REQUIRED param is MISSING (almost always `setting`). An empty `[]` means your filter params are wrong — so send NO filter params (get ALL jobs), then filter client-side. The winning request is usually just: action + the unescaped `setting` blob (+ nonce if present), and an empty/absent search.
+   - Do this in ≤2 POST attempts: (a) read the page HTML for the `data-*-settings` attribute and the nonce; (b) POST action+setting+nonce with no filters. If that returns jobs, you're done — filter locally. Don't loop re-reading the bundle.
+
+4. PAGINATE if the API reports a total greater than what you fetched.
+
+5. MAP each job to our contract dict and RETURN them. Each job dict MUST be:
+   {"id": <str>, "title": <str>, "location": <str>, "url": <str>, "response_data": <the raw job object>}
+   - "url" is REQUIRED: the FULL job-detail (JD landing) page URL. It is ALREADY in the listing data — just extract it, don't construct it. Field names differ per ATS: Greenhouse `absolute_url`; Ashby `jobUrl`; Eightfold `canonicalPositionUrl`; for HTML-embedded jobs, the card's `<a href="...">`. Make it absolute.
+   - Other fields also differ per ATS — inspect the JSON: Greenhouse `id`,`title`,`location.name`; Ashby `id`,`title`,`location`; Eightfold `id`,`name`,`location`. Put the raw object in `response_data`.
+
+6. APPLY the URL's filters CLIENT-SIDE on the full list you already fetched (do NOT send the filters to the server — fetch everything, then filter in python). The input URL may have query params that narrow the list. Figure out what each param means and WHERE it lives in the job data, then filter the mapped jobs:
+   - a search query (?q=, ?search=) → match the job TITLE (substring, case-insensitive)
+   - a discipline/team/category (?disciplines=, ?Teams=, ?job-category=) → match a structured field (Greenhouse `departments[].name`, Eightfold `department`) or, for HTML-embedded jobs, a `data-term`-style attribute
+   - a location (?loc=, ?locations=) → match the office/location ("headquarters" → the main office)
+
+OUTPUT: when you have a working fetch + the mapped, filtered list, return done with:
+{"approach": "<one-line: which ATS/endpoint + how you paginate/filter>", "code": "<a complete async def _fetch_all_jobs(self) -> list[dict] body that reproduces this — using httpx, applying the same filters; it may read self.INPUT_CAREER_URL>", "sample_count": <int total before filter>, "filtered_count": <int after the URL filter>, "sample_titles": [<up to 5 titles>]}
+
+The `code` is the heart of it — the next stage writes it into the extractor. Make it self-contained (httpx only) and deterministic.
+CRITICAL constraints on the `code` (it becomes a method on a BaseExtractorV2 subclass):
+- There is NO `self.client`, `self.session`, or similar — the base class provides NONE. Create your own: `async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:`. Do NOT reference `self.<anything>` except `self.INPUT_CAREER_URL`.
+- The dicts you RETURN (the final list) must each contain `id`, `title`, `location`, `url`, `response_data` — do NOT drop `url` in the final mapping (a common mistake is capturing the url while parsing but omitting it from the returned dict). Verify your returned dicts have a non-empty `url`.
+- Whatever code you put in `code` MUST be the SAME code you verified in your trials — if a trial fixed a bug (e.g. removed `self.client`), the `code` must contain the FIXED version, not the broken one.""",
+
+    "validate_jd": """STAGE: prove the discovered extractor works end-to-end BEFORE it's written — by running it as a trial. Your trial code IS the extractor class (the same code that will be written to extractors_v2/{company}.py): define the class extending the baked-in BaseExtractorV2, instantiate it, fetch jobs, and crawl one job's url via the FRAMEWORK's crawl_raw_info. If this trial works, the written file (identical class) is guaranteed to work.
+
+In a run_trial, define + run the class (this exercises the baked-in extractors_v2_base):
+
+    import asyncio
+    from extractors_v2_base import BaseExtractorV2
+
+    class _Extractor(BaseExtractorV2):
+        COMPANY_NAME = "{company}"
+        async def _fetch_all_jobs(self):
+            <paste the EXACT fetch_jobs code you discovered>
+
+    async def run():
+        ext = _Extractor()
+        jobs = await ext._fetch_all_jobs()
+        sample = jobs[0]
+        raw = await ext.crawl_raw_info(sample["url"])   # base-class crawl (HTTP GET) of the JD page
+        return {"job_count": len(jobs), "url": sample["url"], "title": sample["title"],
+                "raw_len": len(raw), "raw_head": raw[:2500]}
+
+Then JUDGE the fetched page (confidence-based, like validate_company): does `raw_head` look like a real JOB DESCRIPTION (title, responsibilities/requirements, an apply path) for THIS company?
+- done with {"valid": true, "checked_url": "...", "confidence": "high|medium|low", "reasoning": "...", "verified_code": "<the EXACT _fetch_all_jobs body that JUST WORKED in your trial — this becomes the written extractor, so it must be the working version, including any fixes you made (e.g. using httpx.AsyncClient, not self.client)>"} if it clearly is. The `verified_code` is REQUIRED — write_extractor uses THIS, not the earlier (possibly-broken) fetch_jobs code.
+- If jobs[0]['url'] is empty, the page 404s, or it isn't a JD for this company → return the FAIL action with a clear reason (the fetch_jobs result is broken — better to fail than ship a bad extractor).
+One sample is enough — you're proving the fetch + url + crawl path works, not every job.""",
 
     "write_extractor": """STAGE: write the company's extractor file AND register it — using the read_file / write_file tools. This is multi-file editing (like a coding agent), confined to extractors_v2/.
 
-RULE: any file that already exists must be read_file'd BEFORE you write_file it (you edit real content, not a guess). The files below MAY already exist from a prior run — so read each one first; if it's already correct, you don't need to rewrite it.
+RULE: any file that already exists must be read_file'd BEFORE you write_file it (so the overwrite is allowed and you preserve unrelated content). The files MAY already exist from a PRIOR run with DIFFERENT/older code — do NOT trust the old file. The prior stages' results are the SOURCE OF TRUTH. For the `_fetch_all_jobs` body, use validate_jd's `verified_code` (the version that was PROVEN to work in a trial) if present; otherwise the fetch_jobs `code`. ALWAYS write the file with the CURRENT results; only skip the write if you've read it and confirmed it byte-for-byte matches what you would write.
 
 Do these, in order:
 
-1. read_file("extractors_v2/{company}.py") first. If it exists and is already correct, skip the write. Otherwise write_file("extractors_v2/{company}.py", <content>) where <content> is EXACTLY this shape (a subclass of BaseExtractorV2 with CLASS attributes named exactly COMPANY_NAME and ICON_URL — uppercase, as class vars, NOT module-level constants):
+1. read_file("extractors_v2/{company}.py") (required — to allow the overwrite). Then write_file("extractors_v2/{company}.py", <content>) using validate_jd's `verified_code` for _fetch_all_jobs (NOT an old file's, NOT the unverified fetch_jobs code if a verified version exists). <content> must be EXACTLY this shape (a subclass of BaseExtractorV2 with CLASS attributes named exactly COMPANY_NAME and ICON_URL — uppercase, as class vars, NOT module-level constants):
 
+import httpx
 from typing import Any
 
 from extractors_v2_base import BaseExtractorV2
@@ -142,18 +220,20 @@ from extractors_v2_base import BaseExtractorV2
 class {Company}Extractor(BaseExtractorV2):
     COMPANY_NAME = "{company}"
     ICON_URL = "{the icon_url you discovered}"
+    INPUT_CAREER_URL = "{the careers URL you were given}"
 
     async def _fetch_all_jobs(self) -> list[dict[str, Any]]:
-        raise NotImplementedError("agent has not discovered _fetch_all_jobs yet")
+        {the discovered _fetch_all_jobs body from the fetch_jobs stage — properly indented}
 
    ({Company}Extractor = the company slug Capitalized + "Extractor", e.g. anthropic → AnthropicExtractor.)
+   - Use the prior stages' results: ICON_URL = the icon_url; INPUT_CAREER_URL = the careers URL; the _fetch_all_jobs body = the `code` the fetch_jobs stage produced (indent it under the method). If a fetch_jobs result is NOT in the prior results (e.g. it wasn't planned), leave _fetch_all_jobs as `raise NotImplementedError("not discovered yet")`.
 
 2. read_file("extractors_v2/registry.py") — read the CURRENT registry (you MUST read before editing it).
 
 3. write_file("extractors_v2/registry.py", <content>): take the EXACT content you just read, and (a) add a line `from extractors_v2.{company} import {Company}Extractor` next to the other imports, and (b) add `"{company}": {Company}Extractor,` inside the REGISTRY dict. Preserve everything else verbatim.
 
-Use the prior stage's icon_url for ICON_URL. When both files are written, return done with {"wrote": ["extractors_v2/{company}.py", "extractors_v2/registry.py"]}.""",
-    # 8D will add: "fetch_jobs": ..., "validate_jd": ...
+When both files are written, return done with {"wrote": ["extractors_v2/{company}.py", "extractors_v2/registry.py"]}.""",
+    # 8D will add: "validate_jd": ...
 }
 
 

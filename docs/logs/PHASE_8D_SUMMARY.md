@@ -1,68 +1,89 @@
 # Phase 8D: List-All-Jobs Discovery (the hard task)
 
-**Status**: 📋 Planning
+**Status**: ✅ Completed
 **Date**: June 9, 2026
-**Goal**: Scale the proven 8C agent to the **real, hard task**: autonomously discover a company's "list all jobs" mechanism (which API/endpoint, headers, pagination), produce a working `_fetch_all_jobs()` returning `list[dict]`, verify it, and have the agent write it into the company's extractor for human review.
+**Goal**: Scale the proven 8C agent to the **real, hard task** — autonomously discover a company's "list all jobs" mechanism (which API/endpoint, headers, pagination), produce a working `_fetch_all_jobs()` returning the contract dicts, **verify it end-to-end**, and have the agent write the verified code into the company's extractor for review.
 
-> Same machinery as 8C (plan-execute · sandbox · read/write file tools · registry) — a much
-> harder *task* requiring real trial-and-error discovery. **No new infrastructure** — new STAGES.
+> **Result:** the agent onboarded **5 real companies across 4 different ATS systems** — including cracking a **custom WordPress endpoint** (HRT) and **pagination** (Netflix) — each producing **verified, runnable, production-usable** extractors. Counts matched manual verification.
 
 ---
 
-## What 8D adds (on top of 8A–8C)
+## Results — 5 companies, 4 ATSs, all verified via `elist`
 
-8C already built the agent (plan-execute, sandboxed `run_trial`, `read_file`/`write_file` tools,
-the registry, Pydantic validation, `jcompany`/`elogo`). 8D is mostly **two new stages** + their
-prompts + two verification verbs.
+| Company | ATS / mechanism | Discovery difficulty | Filtered jobs | `elist` works |
+|---|---|---|---|---|
+| **anthropic** | Greenhouse (`boards-api...`) | easy (signature in HTML) | 375 | ✅ |
+| **openai** | Ashby (`posting-api...`, tried blind) | medium | 128 | ✅ |
+| **roblox** | Greenhouse `?content=true` (blind slug) | medium | 110 | ✅ |
+| **netflix** | Eightfold (`/api/apply/v2/jobs`, **paginated** 533) | harder | 120 | ✅ |
+| **hrt** | **custom WP plugin** (`admin-ajax.php`, read the JS bundle + `setting` DOM blob) | hardest | ~8–11 | ✅ |
+
+All counts matched the manual verification done first by hand. Each generated extractor loads via the registry and returns jobs **with full job URLs** (verified by `elist <company>`).
+
+---
+
+## What 8D built (on top of 8A–8C)
+
+8C already had the agent (plan-execute, sandboxed `run_trial`, read/write file tools, registry, Pydantic validation). 8D added **new stages + the job contract + verification verbs** — **no new infrastructure**.
 
 ### New stages (entries in `_STAGE_INSTRUCTIONS`)
-- **`fetch_jobs`** — discover how to enumerate ALL jobs. The hard ReAct stage:
-  ```
-  hypothesize → write a TRIAL _fetch_all_jobs → run_trial() in Docker → observe
-    (jobs returned? 403? empty? JS-only? paginated? partial?)
-  ITERATE: rewrite the approach based on what failed   (the genuine coding loop)
-  converge → working code returning list[dict] of {id,title,location,response_data}
-  then write_file the real _fetch_all_jobs into extractors_v2/{company}.py
-  ```
-- **`validate_jd`** — confirm a sample job page fetches (`crawl_raw_info`) and **LLM-parses to a valid JD** (Pydantic). Proves the runtime-LLM parsing path (no per-company `extract_raw_info`).
+- **`fetch_jobs`** — discover how to enumerate ALL jobs. The hard ReAct stage: identify the ATS → hit its public API (or read the JS bundle for a custom endpoint) → paginate if needed → map per-ATS fields → filter client-side. Returns a `code` string (the `_fetch_all_jobs` body). Prompt encodes the **discovery ladder** + an ATS-API cheat-sheet (Greenhouse/Ashby/Eightfold/Lever/Workday) + a **symptom→fix table** for custom endpoints.
+- **`validate_jd`** — proves the discovered code works END-TO-END *before* it's written: the trial code IS the extractor class (extends the baked `BaseExtractorV2`), runs `_fetch_all_jobs`, then crawls one job's `url` via the framework's `crawl_raw_info`. The LLM judges "is this a real JD for this company?" Returns `verified_code` — the exact body that just worked. This stage also **makes `extractors_v2_base` actually used** in the sandbox (it was dead weight before).
 
-So the plan grows from `["icon","write_extractor"]` to e.g. `["icon","fetch_jobs","validate_jd","write_extractor"]` (or `fetch_jobs` writes incrementally) — the LLM plans which stages the goal needs.
+Full onboarding plan: `["validate_company","icon","fetch_jobs","validate_jd","write_extractor"]`.
 
-### Verification verbs (`elist` / `ejd`) — the agent's self-grading + human checks
-- **`elist <company>`** — load the generated extractor (via the registry), run `_fetch_all_jobs` → print the job list + count. The "did it work?" check (mirrors `elogo`).
-- **`ejd <company> <job_url>`** — fetch a job page + LLM-parse → print the JD. Verifies runtime parsing.
-- The agent calls these (or their logic) to grade its own trials; they're also human-facing dev.sh/cli verbs.
+### Contract change: explicit `url` field
+Job dicts are now `{id, title, location, url, response_data}`. The **job URL is extracted per-ATS** (Greenhouse `absolute_url`, Ashby `jobUrl`, Eightfold `canonicalPositionUrl`, HRT card `href`) — NOT constructed from a prefix. Dropped the vestigial `URL_PREFIX_JOB` (URLs are slug- or id-based and vary; they're always present in the listing data). Added `INPUT_CAREER_URL` (provenance).
 
----
+### Verification verbs (`elist` / `ejd`)
+- **`elist <company> [--all|--json]`** — load the generated extractor via the registry, run `_fetch_all_jobs` → print jobs (id · location · title · **full url**) + count. The "did it work?" check.
+- **`ejd <company> <job_url>`** — fetch a job page via `crawl_raw_info` → print the raw JD source.
 
-## The hard parts (where the real agent value is)
-- **Discovery is trial-heavy** — network inspection, header tricks, pagination, with real failures and retries. This *is* the autonomous coding loop: write → run in sandbox → observe → fix.
-- **Browser emulation**: HTTP + browser-like headers covers most career APIs (already in `BaseExtractorV2`). A purely JS-rendered site needs Playwright (an 8B sandbox add-on) — if a target needs it, that's a documented escalation ("needs custom logic → human").
-- **Parsing stays runtime-LLM** — the agent does NOT generate a parser; `validate_jd`/`ejd` prove a page LLM-parses to a JD. The agent's job is *discovery* only.
-- **Writing the real `_fetch_all_jobs`** uses the SAME read/write file tools as 8C (read-before-write, scoped to `extractors_v2/`) — now editing the method body, not just a const.
+### Per-stage step budgets
+`run_stage` is generic; it looks up the prompt + cap by stage name. Caps: validate_company=4, icon=8, fetch_jobs=18, validate_jd=5, write_extractor=8. Two-tier: prompt sets a soft target (~10), code allows more (18) so a hard stage isn't killed mid-discovery.
+
+### Prompt caching (token efficiency)
+The (detailed, stable) stage system prompt is cached (`cache_control: ephemeral`) → the rich ATS guidance costs ~nothing after turn 1, so the agent can go straight to the right API instead of exploring blindly. (Each ReAct turn re-sends the whole conversation, so cutting round-trips matters more than prompt size.)
 
 ---
 
-## Acceptance
-- [ ] For a company NOT yet in `extractors_v2/`, the agent discovers a working `_fetch_all_jobs` via sandboxed trials and writes it (+ registers the company).
-- [ ] `elist <company>` returns a sane job list (count > 0, not absurd).
-- [ ] `ejd <company> <url>` returns a valid LLM-parsed JD (Pydantic-validated).
-- [ ] Generated code (incl. the real `_fetch_all_jobs`) written to `extractors_v2/{company}.py` (uncommitted) — reviewable via git diff.
-- [ ] Gating: strong pass → confidence high; clear fail → bounded retry or report failed; genuinely-stuck (e.g. JS-only) → escalate-to-human note, **nothing garbage written** (the scope guard + validation enforce this).
-- [ ] The agent's trials are observable step-by-step (the existing `[stage - step N]` UX).
+## Key findings (debugged from real runs — see [agent-discovery-prompts.md](../learning/agent-discovery-prompts.md))
+
+Each was found by watching a run fail, then fixing the prompt or harness:
+1. **Judgment vs. control flow** — `validate_company` judged `valid:false` but returned `done` → pipeline continued. Fix: CODE enforces `valid:false → stop`; the LLM only judges.
+2. **Loose prompts for judgment** — a rigid name↔domain match false-rejected real companies (Google@abc.xyz, ATS domains). Fix: confidence-based judgment with a bias-to-allow.
+3. **Verify == ship** — `validate_jd` fixed a `self.client` bug in its trial but the OLD broken code got written. Fix: `validate_jd` emits `verified_code`; `write_extractor` writes THAT.
+4. **`self.client` hallucination** — the base class has no client. Fix: prompt says "make your own `httpx.AsyncClient()`; only `self.INPUT_CAREER_URL`."
+5. **Dropped `url`** — the agent captured the url while parsing but omitted it from the final return. Fix: `url` mandated in the returned dict.
+6. **Rabbit holes** — HRT chased the server-side filter (18 steps); OpenAI's icon chased Wayback/cache. Fix: encode the shortcut ("fetch-all-then-filter-locally"; "try /favicon.ico directly, don't over-explore").
+7. **Custom-endpoint unlock** — HRT's WP `admin-ajax` needed the `setting` DOM blob; a 500 = missing param. Fix: a symptom→fix table in the prompt.
+8. **Context trimming backfired** — compacting old JS-bundle results forced re-fetches. Fix: trimming OFF (correctness first).
 
 ---
 
-## Decisions / open questions
-- **Gating thresholds** — what job count is "sane"? (varies per company — use ">0 and not absurd" + human review for borderline).
-- **Bounded iterations** — the existing `MAX_STEPS` cap per stage; then escalate, to avoid runaway cost.
-- **Escalation** — JS-only / weird-auth sites: report "needs custom logic" rather than force a bad extractor (honesty over coverage; some sites genuinely need hand-coding).
-- **Demo target** — pick a company with a clean JSON API (likely one already in v1 `extractors/` or `trials/`) for the end-to-end demo; note JS-heavy sites are the escalation case.
-- **Record file** — already built in 8C (`extractor_agent/runs/{company}-{ts}.log`, gitignored). 8D's multi-trial discovery makes that audit log even more valuable; no new work needed.
+## The hard parts (where real agent value showed)
+- **HRT** (hardest): no public API. The agent read the JS bundle, found the custom `get_hrt_jobs_handler` action, discovered the required `setting` param (a DOM `data-filters-settings` blob), reconstructed the exact POST, parsed `data-term`-encoded filters, filtered client-side — autonomously. This is the genuine "autonomous coding agent" payoff: reverse-engineering an unknown endpoint from failures + the JS.
+- **Netflix**: handled pagination (533 jobs across pages) correctly, untaught-by-example, hitting the exact 120.
+- **Parsing stays runtime-LLM** — the agent discovers *listing*; JD parsing is a separate runtime concern (`crawl_raw_info` returns raw text; `validate_jd` confirms it's a JD).
 
 ---
 
-## After 8D
-- **Demo end-to-end** (a fresh company: watch trials → converge → review the diff → `elist`/`ejd`).
-- **Wire `extractors_v2` into the backend** (a possible 8E): the registry-driven `list_companies` endpoint returning each generated extractor's `ICON_URL`, replacing v1's enum-driven list — so the agent's output plugs into production with no manual edits.
-- **Assemble PHASE_8_SUMMARY** from 8A–8D (the overall phase doc; HRT JD-coverage map → memory, not the public doc).
+## Acceptance — status
+- [x] For companies NOT in `extractors_v2/`, the agent discovers a working `_fetch_all_jobs` via sandboxed trials + writes it (+ registers). (5 companies, 4 ATSs.)
+- [x] `elist <company>` returns a sane job list with full URLs. (All 5.)
+- [x] `validate_jd` confirms a real JD for the company before writing (via the framework's `crawl_raw_info`).
+- [x] Generated code written to `extractors_v2/{company}.py` (uncommitted) — reviewable via git diff; **the written code is the VERIFIED code**.
+- [x] Failure → reported (OpenAI's first icon attempt failed cleanly at the step cap; nothing garbage written).
+- [x] Observable step-by-step (`[stage - step N]`), full LLM-I/O via `--d`, gitignored run logs.
+
+---
+
+## Known limitations / non-priorities
+- **Parallel `jcompany` → registry race** — concurrent runs read-modify-write the shared `registry.py`; a later write clobbers an earlier entry (lost update). Extractor files are fine (distinct names); only the shared registry collides. **Run sequentially.** (Not a priority; future fix: auto-discover files instead of editing a shared registry.)
+- **Netflix `elist` is slow (~28s)** — Eightfold caps page size, so ~53 sequential requests to fetch 533 jobs before filtering to 120. Correct, just slow (a caching layer could help).
+- **Playwright** — purely-JS sites with no API would need it (8B add-on); none of the 5 did.
+
+---
+
+## Next: 8E — Prompt / Context / Harness Engineering
+Systematic improvement of the agent (see [PHASE_8E_SUMMARY](PHASE_8E_SUMMARY.md)). The 8D findings are the raw material — turn the ad-hoc fixes into a deliberate methodology.

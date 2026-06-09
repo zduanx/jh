@@ -47,8 +47,9 @@ class BaseExtractorV2(ABC):
     Class members a concrete extractor defines:
       COMPANY_NAME : str              (required — the company slug, e.g. "anthropic")
       ICON_URL     : str | None       (8C — agent-discovered; None = pending)
-      URL_PREFIX_JOB : str            (used to build job-detail URLs; may be "")
-      _fetch_all_jobs()               (8D — agent-discovered; the hard part)
+      INPUT_CAREER_URL : str | None   (provenance — the careers URL used to generate this)
+      _fetch_all_jobs()               (8D — agent-discovered; the hard part; each job
+                                       dict carries its full `url`)
 
     Note: COMPANY_NAME is a plain string (NOT an enum) — companies are an open,
     growing set (the discovery agent adds new ones). The registry is the source of
@@ -58,7 +59,7 @@ class BaseExtractorV2(ABC):
     # --- PENDING members (filled by concrete subclasses / the agent) ---
     COMPANY_NAME: str
     ICON_URL: str | None = None          # 8C target
-    URL_PREFIX_JOB: str = ""             # for building job URLs from ids
+    INPUT_CAREER_URL: str | None = None  # provenance: the URL the agent was given
 
     def __init__(self, config: TitleFilters | None = None):
         if not hasattr(self.__class__, "COMPANY_NAME"):
@@ -78,10 +79,13 @@ class BaseExtractorV2(ABC):
 
         Each dict:
           {
-            "id": str,              # for building the job URL
+            "id": str,              # the job's id
             "title": str,           # for title filtering
             "location": str,        # job location
-            "response_data": Any,   # raw entry (may carry a prebuilt url/absolute_url)
+            "url": str,             # the FULL job-detail (JD landing) URL — REQUIRED.
+                                    #   the agent extracts this per-ATS; it is NOT built
+                                    #   from a prefix (URLs vary: id-based, slug-based, ...)
+            "response_data": Any,   # the raw entry (for debugging / future fields)
           }
         Should handle errors internally and return [] on failure.
         """
@@ -149,19 +153,16 @@ class BaseExtractorV2(ABC):
         return [j for j in jobs if keep(j.get("title", ""))]
 
     def _build_url(self, job: dict) -> str:
-        """Build a job-detail URL: prefer a prebuilt url in response_data, else prefix+id."""
+        """The job-detail URL. The agent now puts the full URL in the explicit `url`
+        field; fall back to common locations in response_data for older extractors."""
+        if job.get("url"):
+            return job["url"]
         rd = job.get("response_data", {})
         if isinstance(rd, dict):
-            if rd.get("absolute_url"):
-                return rd["absolute_url"]
-            if rd.get("url"):
-                return rd["url"]
-            if rd.get("job_path"):
-                return f"{self.URL_PREFIX_JOB}{rd['job_path']}"
-        job_id = job.get("id")
-        if job_id and self.URL_PREFIX_JOB:
-            return f"{self.URL_PREFIX_JOB}/{job_id}"
-        return str(job_id or "")
+            for k in ("url", "absolute_url", "canonicalPositionUrl", "jobUrl"):
+                if rd.get(k):
+                    return rd[k]
+        return str(job.get("id") or "")
 
     # Convenience: a plain browser-like GET (agent trial code can use this pattern).
     @staticmethod

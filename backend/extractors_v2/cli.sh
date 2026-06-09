@@ -68,12 +68,55 @@ print(f'icon_url: {cls.ICON_URL}')
 "
     ;;
   elist)
-    echo "elist: not implemented yet (Phase 8D)"
-    exit 1
+    # Run the GENERATED extractor's _fetch_all_jobs → print the jobs (id, location, title, url).
+    #   elist <company>         → summary: count + first 100 lines (one job per line)
+    #   elist <company> --all   → all jobs
+    #   elist <company> --json  → raw JSON of all mapped jobs
+    company="${1:-}"; shift || true
+    if [ -z "$company" ]; then echo "Usage: elist <company> [--all|--json]"; exit 1; fi
+    mode="${1:-summary}"
+    cd "$BACKEND"; source venv/bin/activate 2>/dev/null || true
+    company="$company" mode="$mode" python -c "
+import os, sys, json, asyncio
+from extractors_v2.registry import get_extractor
+company = os.environ['company']; mode = os.environ['mode']
+try:
+    cls = get_extractor(company)
+except ValueError as e:
+    print('✗', e); sys.exit(1)
+ext = cls()
+jobs = asyncio.run(ext._fetch_all_jobs())
+rows = [{'id': j['id'], 'title': j['title'].strip(), 'location': j.get('location',''),
+         'url': ext._build_url(j)} for j in jobs]
+if mode == '--json':
+    print(json.dumps(rows, indent=2)); sys.exit(0)
+print(f'{company}: {len(rows)} jobs')
+shown = rows if mode == '--all' else rows[:100]
+for r in shown:
+    print(f\"  {r['location'][:28]:28} {r['title'][:50]:50} {r['url']}\")
+if mode != '--all' and len(rows) > 100:
+    print(f'  … (+{len(rows)-100} more — use --all)')
+"
     ;;
   ejd)
-    echo "ejd: not implemented yet (Phase 8D)"
-    exit 1
+    # Fetch one job page (crawl_raw_info) and print the raw content (the JD source).
+    #   ejd <company> <job_url>
+    company="${1:-}"; joburl="${2:-}"
+    if [ -z "$company" ] || [ -z "$joburl" ]; then echo "Usage: ejd <company> <job_url>"; exit 1; fi
+    cd "$BACKEND"; source venv/bin/activate 2>/dev/null || true
+    company="$company" joburl="$joburl" python -c "
+import os, sys, asyncio
+from extractors_v2.registry import get_extractor
+company = os.environ['company']; url = os.environ['joburl']
+try:
+    cls = get_extractor(company)
+except ValueError as e:
+    print('✗', e); sys.exit(1)
+raw = asyncio.run(cls().crawl_raw_info(url))
+print(f'=== {url} ({len(raw)} chars) ===')
+print(raw[:4000])
+print('… (truncated)' if len(raw) > 4000 else '')
+"
     ;;
   ""|-h|--help|help)
     sed -n '2,14p' "${BASH_SOURCE[0]}"
