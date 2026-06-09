@@ -1893,3 +1893,15 @@ jpushapi() {
     echo -e "${GREEN}=== Backend deployment complete ===${NC}"
     echo -e "${BLUE}API Endpoint: ${API_URL}${NC}"
 }
+
+# ---------------------------------------------------------------------------
+# Extractor-agent CLI (Phase 8) — expose the `e*` verbs from
+# backend/extractors_v2_base/cli.sh as shell commands, so `source dev.sh` makes
+# them available everywhere (edocker, eclean, elogo, elist, ejd).
+# Each is a thin wrapper that runs the cli.sh dispatcher.
+# ---------------------------------------------------------------------------
+_JH_EXTRACTOR_CLI="$JH_ROOT/backend/extractors_v2_base/cli.sh"
+for _verb in edocker eclean elogo elist ejd; do
+    eval "${_verb}() { \"$_JH_EXTRACTOR_CLI\" ${_verb} \"\$@\"; }"
+done
+unset _verb

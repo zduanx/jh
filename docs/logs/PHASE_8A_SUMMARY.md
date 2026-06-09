@@ -1,14 +1,21 @@
-# Phase 8A: extractors_v2 Framework (the agent's contract)
+# Phase 8A: extractors_v2_base Framework (the agent's contract)
 
 **Status**: ✅ Completed
 **Date**: June 8, 2026
-**Goal**: A new, **self-contained** `extractors_v2/` framework that defines the contract the discovery agent codes against — minimal, import-clean (so it can be the *only* thing inside the Docker sandbox), and structured around consts that are **pending fill-in** by the agent.
+**Goal**: A new, **self-contained** framework that defines the contract the discovery agent codes against — minimal, import-clean (so it can be the *only* thing inside the Docker sandbox), and structured around consts that are **pending fill-in** by the agent.
 
-> **Result:** built + all acceptance criteria pass. `extractors_v2/` has **zero imports
+> **⚠️ Renamed after 8A (during 8C planning):** the framework folder is now
+> **`extractors_v2_base/`** (the CONTRACT, baked into the Docker image), and a separate
+> **`extractors_v2/`** holds the agent's GENERATED output (what production imports).
+> The split keeps generated code OUT of the baked image → sandbox rebuilds stay clean
+> ([ADR-034](../architecture/DECISIONS.md#adr-034-sandbox-execution--local-docker-dev-lambda-the-production-path)). Below, read "extractors_v2" as "extractors_v2_base".
+
+> **Result:** built + all acceptance criteria pass. `extractors_v2_base/` has **zero imports
 > from the rest of `backend/`** (verified) → Docker-sandbox-ready. `base.py` defines the
 > `_fetch_all_jobs` abstract contract + `LOGO_URL` const + generic wrappers; a hand-filled
 > class runs end-to-end (fetch → title-filter → build URLs). `Company`/`TitleFilters`
-> carried from v1; `companies/_template.py` is the agent's output shape; `cli.sh` stub ready.
+> carried from v1; `_template.py` is the agent's output shape; `cli.sh` ready (now with
+> edocker/eclean verbs, auto-sourced via dev.sh).
 
 > Phase 8 overview + all design decisions live across the sub-phase docs
 > (8A framework · 8B sandbox · 8C logo skeleton · 8D list-jobs). A full
@@ -26,7 +33,24 @@
 
 ## What 8A builds
 
-### Folder layout
+### Folder layout (as renamed — see banner)
+```
+backend/extractors_v2_base/    # the CONTRACT (baked into the Docker image)
+├── __init__.py
+├── base.py            # the self-contained base class (the contract)
+├── enums.py           # Company enum (carried from v1, trimmed)
+├── config.py          # TitleFilters (carried from v1 — already dependency-free)
+├── _template.py       # the shape of a GENERATED extractor (reference)
+└── cli.sh             # e* verbs (edocker/eclean/elogo/...), auto-sourced via dev.sh
+
+backend/extractors_v2/         # GENERATED output (production imports; NEVER baked)
+└── __init__.py        # {company}.py files written here by the agent (8C/8D)
+```
+(original 8A layout had everything under `extractors_v2/`; the rest of this section
+describes the framework files, now in `extractors_v2_base/`.)
+
+<details><summary>original 8A layout (pre-rename)</summary>
+
 ```
 backend/extractors_v2/
 ├── __init__.py
@@ -38,6 +62,7 @@ backend/extractors_v2/
 └── cli.sh             # local test verbs (e.g. `elogo <company>`) — added incrementally
                        #   (named cli.sh, NOT dev.sh, to avoid confusion with the root dev.sh)
 ```
+</details>
 
 ### `base.py` — the contract (stripped + self-contained)
 Carries the *essential* shape from v1's `base_extractor.py` but **dependency-free**:

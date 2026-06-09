@@ -1,12 +1,10 @@
 """
-extractors_v2 — self-contained extractor framework for the Phase 8 discovery agent.
+extractors_v2 — GENERATED company extractors (the discovery agent's output).
 
-Imports nothing from the rest of `backend/` (stdlib + httpx only), so the whole
-package can run inside the Docker sandbox. See docs/logs/PHASE_8A_SUMMARY.md.
+This package holds `{company}.py` files the Phase 8 agent produces (LOGO_URL +
+_fetch_all_jobs). Each imports the framework from `extractors_v2_base`.
+
+PRODUCTION imports usable extractors from HERE. The framework/contract lives in
+`extractors_v2_base/` (baked into the Docker sandbox image); generated output lives
+here (NEVER baked into the image — so rebuilds of the sandbox stay clean). See ADR-034.
 """
-
-from .base import BaseExtractorV2
-from .enums import Company
-from .config import TitleFilters
-
-__all__ = ["BaseExtractorV2", "Company", "TitleFilters"]

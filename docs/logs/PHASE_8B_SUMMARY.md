@@ -4,7 +4,7 @@
 **Date**: June 8, 2026
 **Goal**: A `run_trial(code) -> result` harness that runs **untrusted, LLM-written trial code** in an isolated Docker container — fetches arbitrary external sites safely, returns result via stdout — and is **proven safe in isolation before any agent depends on it.**
 
-> **Result:** built + **all 9 safety-proof tests pass**. Docker Desktop installed (v29.5.2). The `jh-extractor-sandbox` image (219MB: python-slim + httpx + extractors_v2) runs trial code with full hardening. Containment **verified**: generated code can't read secrets (`~/.aws`, env keys), can't write the filesystem (read-only), is killed on infinite loop (timeout), and the network is cuttable (`--network none`). Legit use also verified: safe code returns results, `import extractors_v2` works, real fetches succeed. The sandbox is real, not a stub.
+> **Result:** built + **all 9 safety-proof tests pass**. Docker Desktop installed (v29.5.2). The `jh-extractor-sandbox` image (219MB: python-slim + httpx + extractors_v2_base) runs trial code with full hardening. Containment **verified**: generated code can't read secrets (`~/.aws`, env keys), can't write the filesystem (read-only), is killed on infinite loop (timeout), and the network is cuttable (`--network none`). Legit use also verified: safe code returns results, `import extractors_v2_base` works, real fetches succeed. The sandbox is real, not a stub.
 
 > This is the foundation of Phase 8's "AI sandboxing" theme and the riskiest piece.
 > Build + prove it *before* the agent (8C).
@@ -24,17 +24,17 @@ Everything else in 8B depends on this.
 ## What 8B builds
 
 ```
-backend/extractor_agent/            # HOST-ONLY (separate from extractors_v2/ — the brain + launcher)
+backend/extractor_agent/            # HOST-ONLY (separate from extractors_v2_base/ — the brain + launcher)
 └── sandbox/
-    ├── Dockerfile                  # minimal image: python + httpx, bakes in extractors_v2/
-    ├── run_trial.py                # host-side: ship code → docker run → return stdout JSON
+    ├── Dockerfile                  # minimal image: python + httpx, bakes in extractors_v2_base/
+    ├── host_harness.py             # host-side: ship code → docker run → return stdout JSON
     └── __tests__/                  # the safety proof (safe snippet + malicious snippet)
 ```
 
 ### The Dockerfile
 - Base: slim python.
 - Installs **httpx** only (browser-headers approach — most career APIs need only headers, not a browser).
-- Copies in `extractors_v2/` (so trial code can `import` the base class).
+- Copies in `extractors_v2_base/` (so trial code can `import` the base class).
 - **No secrets baked in.** Entrypoint reads code from stdin, runs it, prints result to stdout.
 - *Playwright (full browser) is a documented add-on* — only if a target company needs JS rendering. Start HTTP-only (Playwright ≈ 1GB, slow).
 
@@ -80,7 +80,7 @@ Build the test before trusting the harness:
 
 ## Open questions
 - Network policy: allow all outbound, or restrict to the target domain? (Start: outbound allowed, no access to host/internal net — i.e. don't put it on a network that can reach your DB.)
-- How is `extractors_v2/` provided — baked into the image (rebuild on change) or bind-mounted read-only (faster iteration)? (Leaning: bind-mount read-only during dev for fast iteration; bake for a "release" image.)
+- How is `extractors_v2_base/` provided — baked into the image (rebuild on change) or bind-mounted read-only (faster iteration)? (Leaning: bind-mount read-only during dev for fast iteration; bake for a "release" image.)
 - Image warm-up cost vs. a warm container pool — only optimize if the agent's trial loop feels slow.
 
 ---

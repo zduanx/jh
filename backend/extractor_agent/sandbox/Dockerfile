@@ -2,7 +2,9 @@
 #
 # Design:
 #   - slim python + httpx ONLY (browser-headers approach; Playwright is a later add-on)
-#   - bakes in extractors_v2/ so trial code can `import extractors_v2` (the contract)
+#   - bakes in extractors_v2_base/ (the CONTRACT) so trial code can
+#     `import extractors_v2_base` — NOT the generated extractors_v2/ (those are the
+#     agent's OUTPUT and must never be baked in, so rebuilds stay clean — ADR-034)
 #   - NO secrets baked in; entrypoint runs a trial passed via stdin, prints to stdout
 #   - runs as an unprivileged user
 #
@@ -14,13 +16,15 @@
 
 FROM python:3.13-slim
 
-# httpx = the only dep trial code (and extractors_v2) needs.
+# httpx = the only dep trial code (and extractors_v2_base) needs.
 RUN pip install --no-cache-dir "httpx>=0.27"
 
-# Bake in the self-contained extractor framework (the contract trial code extends).
-# Build context is backend/, so this copies backend/extractors_v2 → /app/extractors_v2.
+# Bake in ONLY the self-contained framework/contract (extractors_v2_base) — the
+# stable base class trial code extends. Generated extractors (extractors_v2/) are
+# NEVER copied in → the image stays the clean contract across rebuilds (ADR-034).
+# Build context is backend/, so this copies backend/extractors_v2_base → /app/extractors_v2_base.
 WORKDIR /app
-COPY extractors_v2 /app/extractors_v2
+COPY extractors_v2_base /app/extractors_v2_base
 
 # The in-container entrypoint: reads trial code from stdin, executes it, prints result JSON.
 COPY extractor_agent/sandbox/container_entrypoint.py /app/container_entrypoint.py

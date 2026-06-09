@@ -43,7 +43,7 @@ def test_async_run_is_awaited():
 def test_can_import_extractors_v2():
     # The whole point: trial code extends the baked-in framework.
     code = (
-        "from extractors_v2 import BaseExtractorV2, Company\n"
+        "from extractors_v2_base import BaseExtractorV2, Company\n"
         "result = Company.GOOGLE.value\n"
     )
     r = run_trial(code)

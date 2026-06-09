@@ -1,5 +1,5 @@
 """
-extractors_v2 — the self-contained base class (the agent's contract).
+extractors_v2_base — the self-contained base class (the agent's contract).
 
 This is the contract the discovery agent (Phase 8C/8D) codes against. A company
 extractor is a subclass that fills in a few PENDING consts/methods:
