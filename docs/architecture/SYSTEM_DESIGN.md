@@ -612,7 +612,51 @@ detect socket close). Accepted; turn budget caps cost. See
 - **6A** — streaming runtime + >30s proof + JWT auth (deployed).
 - **6B** — Redis session state, multi-turn, user-first save, block compaction (deployed).
 - **6C** — chatbox frontend widget (deployed; verified browser→AWS incl. CORS).
-- **Phase 7** — replace the mock with the real agent + MCP server.
+
+---
+
+## Phase 7: RAG Chat Agent + MCP Server
+
+The mock chat is replaced with a real agent: a **hand-rolled ReAct loop** (native
+`stop_reason: tool_use`, no framework — ADR-029) that calls a **standalone MCP server**
+(FastMCP, its own Lambda — ADR-030) exposing job/resume tools. Retrieval is semantic
+(Voyage embeddings + pgvector HNSW). Conversation history is summarized on overflow.
+An offline **LLM-as-judge eval** (`eval/`) scores faithfulness/relevancy/warmth against
+golden fixtures — "validate the eval before trusting it" (cross-checked with Ragas).
+
+## Phase 8: Autonomous Extractor-Discovery Agent
+
+A local admin agent that, given a company + careers URL, **discovers how to list that
+company's jobs and writes a working extractor** — reviewed via `git diff` (uncommitted output).
+
+```
+jcompany <co> <url>
+  PLAN (LLM picks stages)
+   → validate_company   (judgment gate: real company + consistent site?)
+   → icon               (find the standalone icon via sandboxed trials)
+   → fetch_jobs         (discover the listing API; for custom sites, DELEGATE to a
+                         dedicated explore_site SUB-AGENT that cracks the endpoint in
+                         isolated context and returns just the facts)
+   → validate_jd        (run the discovered code; crawl one JD via the framework; judge it)
+   → write_extractor    (LLM writes extractors_v2/<co>.py + registry.py via scoped file tools)
+```
+
+Key properties:
+- **Plan-and-Execute (outer) + ReAct (inner)** — `run_stage` is a reusable isolated-context
+  loop; a sub-agent is "a stage the LLM invokes as a tool."
+- **Sandboxed execution** — untrusted LLM-generated trial code runs in Docker (no secrets,
+  read-only FS, resource limits, timeout-killed). Local Docker for dev; Lambda is the
+  production path (ADR-034).
+- **Verify == ship** — `validate_jd` proves the exact code that gets written (emits
+  `verified_code`); the LLM judges, the harness enforces the consequence.
+- **Token efficiency** — prompt-cached append-only history + the exploration sub-agent gave
+  a **measured 77% reduction in billed input tokens** on the hard case (HRT custom site).
+- **Output** — `extractors_v2/` generated extractors (5 companies, 4 ATS systems); the
+  `extractors_v2_base/` contract is baked into the sandbox image; `extractors_v2/registry.py`
+  is the source of truth (replaces a `Company` enum — an open, growing set).
+
+Lessons: [agent-discovery-prompts.md](../learning/agent-discovery-prompts.md).
+Detail: [PHASE_8A–8E summaries](../logs/).
 
 ---
 

@@ -1,21 +1,25 @@
 # Job Hunt Tracker
 
-A full-stack job application tracking system built with React and FastAPI, deployed on AWS Lambda and Vercel.
+A full-stack job application tracking system with AI-native features — semantic search, a RAG chat agent, and an **autonomous code-discovery agent** — built with React and FastAPI, deployed on AWS Lambda and Vercel. **Every component is hand-rolled and explainable cold (no agent/RAG frameworks).**
 
-**Status**: All Phases Complete
+**Status**: Phases 1–8 Complete
 
 ---
 
 ## Features
 
+**Core**
 - **Google OAuth Authentication** - Secure login with JWT tokens and email whitelist
 - **Job Ingestion Pipeline** - Automated crawling of company career pages with SimHash deduplication
 - **Hybrid Search** - Full-text and fuzzy search across job titles and descriptions
-- **Application Tracking** - Track jobs through stages (interested, applied, screening, interview, offer)
-- **Calendar View** - Visual overview of upcoming interviews and application events
-- **Resume Management** - Direct-to-S3 upload with presigned URLs
-- **Real-time Progress** - Server-Sent Events (SSE) for ingestion status updates
-- **Behavioral Interview Stories** - STAR format stories for interview preparation
+- **Application Tracking** - Stages (interested → applied → screening → interview → offer)
+- **Calendar View** · **Resume Management** (direct-to-S3 presigned uploads) · **STAR Interview Stories**
+- **Real-time Progress** - Server-Sent Events (SSE) for ingestion status
+
+**AI / Agents (the hard, hand-built parts)**
+- **Semantic Search & RAG** - Voyage embeddings + pgvector (HNSW) for resume↔job matching; hand-rolled retrieve→augment→generate
+- **Chat Agent** - A hand-written ReAct loop over a standalone **MCP server** (job/resume tools), with conversation summarization and an offline **LLM-as-judge eval** harness (faithfulness/relevancy)
+- **Autonomous Extractor-Discovery Agent (Phase 8)** - Given a company + careers URL, it **plans → runs untrusted LLM-generated code in a Docker sandbox → reverse-engineers the company's job-listing API → writes a verified, runnable extractor (multi-file)** for human review (git diff). Cracked 4 different ATS systems + a custom WordPress endpoint across 5 companies. A **dedicated sub-agent** isolates heavy site exploration; prompt caching + the sub-agent gave a **measured 77% reduction in billed tokens** on the hard case.
 
 ---
 
@@ -33,10 +37,17 @@ A full-stack job application tracking system built with React and FastAPI, deplo
 - Hosted on AWS Lambda + API Gateway
 
 ### Infrastructure
-- **Database**: PostgreSQL (Neon - serverless)
+- **Database**: PostgreSQL (Neon - serverless) + **pgvector** (HNSW) for embeddings
 - **Queue**: AWS SQS FIFO (rate-limited crawling)
 - **Storage**: AWS S3 (raw HTML, resumes)
 - **Real-time**: Server-Sent Events (SSE)
+
+### AI / Agents
+- **LLMs**: Anthropic Claude (chat agent, discovery agent, eval judge) — with prompt caching
+- **Embeddings**: Voyage AI (1024-dim) over pgvector
+- **MCP**: a standalone Model Context Protocol server (FastMCP) exposing job/resume tools
+- **Sandbox**: Docker (isolated, no-secrets, resource-limited) for running untrusted LLM-generated code
+- **No frameworks**: the ReAct loop, RAG, MCP client, plan-and-execute, sub-agents, and eval are all hand-rolled (ADR-029) — explainable without framework magic
 
 ---
 
@@ -121,25 +132,30 @@ A full-stack job application tracking system built with React and FastAPI, deplo
 jh/
 ├── backend/
 │   ├── main.py              # FastAPI app + Lambda handler
-│   ├── template.yaml        # AWS SAM infrastructure
-│   ├── requirements.txt     # Python dependencies
+│   ├── template.yaml        # AWS SAM infrastructure (API, worker, MCP server Lambdas)
 │   ├── api/                 # API routes
 │   ├── auth/                # Authentication logic
 │   ├── config/              # Settings (Pydantic)
 │   ├── models/              # SQLAlchemy models
-│   ├── extractors/          # Company career page extractors
+│   ├── extractors/          # v1 company career-page extractors
+│   ├── mcp_server/          # standalone MCP server (FastMCP) — job/resume tools (Phase 7)
+│   ├── extractor_agent/     # Phase 8: the autonomous discovery agent
+│   │   ├── discover.py      #   plan-and-execute + ReAct loop, sub-agent, caching, instrumentation
+│   │   ├── prompts.py       #   Pydantic-validated structured output + per-stage prompts
+│   │   ├── tools.py         #   scoped read/write file tools (read-before-write)
+│   │   └── sandbox/         #   Docker harness (run untrusted trial code safely)
+│   ├── extractors_v2_base/  #   the agent's contract (baked into the sandbox image)
+│   ├── extractors_v2/       #   the agent's GENERATED extractors + registry
 │   └── alembic/             # Database migrations
+├── chat/                    # chat agent (Node): hand-rolled ReAct loop + MCP client (Phase 7)
+├── eval/                    # offline LLM-as-judge eval harness (Phase 7E)
 ├── frontend/
-│   ├── src/
-│   │   ├── App.js           # Main app + routing
-│   │   ├── pages/           # Page components
-│   │   └── components/      # Shared components
-│   └── package.json
+│   └── src/ { App.js, pages/, components/ }
 ├── docs/
-│   ├── architecture/        # System design, API specs, ADRs
+│   ├── architecture/        # System design, API specs, ADRs (34)
 │   ├── deployment/          # Deployment guides
-│   ├── learning/            # Tech learning notes
-│   └── logs/                # Phase summaries
+│   ├── learning/            # Tech learning notes (RAG/eval, agent engineering)
+│   └── logs/                # Phase summaries (1–8)
 └── dev.sh                   # Development shortcuts
 ```
 
@@ -213,8 +229,11 @@ See [VERCEL_DEPLOYMENT.md](docs/deployment/VERCEL_DEPLOYMENT.md) for detailed gu
 | ADR-017 | SimHash deduplication | Fuzzy content matching for unchanged pages |
 | ADR-020 | SQS FIFO + MessageGroupId | Per-company rate limiting |
 | ADR-024 | Presigned URLs for uploads | Bypass Lambda memory/timeout limits |
+| ADR-029 | Hand-roll the agent loop (no LangChain/Vercel AI SDK) | Explainable cold; own the mechanics |
+| ADR-030 | Standalone MCP server (multi-client) | Tools across a process boundary |
+| ADR-034 | Local Docker sandbox (dev) → Lambda the prod path | The sub-step that runs untrusted code |
 
-See [DECISIONS.md](docs/architecture/DECISIONS.md) for all 24 ADRs.
+See [DECISIONS.md](docs/architecture/DECISIONS.md) for all 34 ADRs.
 
 ---
 
@@ -227,8 +246,11 @@ See [DECISIONS.md](docs/architecture/DECISIONS.md) for all 24 ADRs.
 | 3 | Search page with fuzzy search | Complete |
 | 4 | Job tracking, events, resume upload, calendar | Complete |
 | 5 | Behavioral interview stories (STAR format) | Complete |
+| 6 | Vector embeddings + semantic search (pgvector/HNSW) | Complete |
+| 7 | RAG chat agent — hand-rolled ReAct loop, MCP server, summarization, eval | Complete |
+| 8 | **Autonomous extractor-discovery agent** — sandboxed code gen, sub-agent, 77% token reduction | Complete |
 
-Phase summaries: [docs/logs/](docs/logs/)
+Phase summaries: [docs/logs/](docs/logs/). Agent-engineering lessons: [agent-discovery-prompts.md](docs/learning/agent-discovery-prompts.md), [vectors-rag-eval.md](docs/learning/vectors-rag-eval.md).
 
 ---
 

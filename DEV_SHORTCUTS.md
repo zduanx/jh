@@ -39,10 +39,23 @@ jkillall           # Kill both
 
 ### Utilities
 ```bash
-jready             # Check all prerequisites (venv, deps, .env files, ports)
+jready             # Check all prerequisites (venv, deps, .env files, ports, Docker)
 jstatus            # Check what's running
 jhelp              # Show all commands
 ```
+
+### Extractor-Discovery Agent (Phase 8)
+```bash
+jdocker            # ensure Docker daemon is up + sandbox image built (before jcompany)
+jcompany <co> <careers_url> [--d]   # run the agent: discover + write extractors_v2/<co>.py
+                                    #   --d = verbose (full LLM I/O + trial code + tokens)
+elogo  <co>        # load the generated extractor → print its ICON_URL
+elist  <co> [--all|--json]   # run the generated _fetch_all_jobs → print jobs + full URLs
+ejd    <co> <job_url>        # crawl a job page (the JD source)
+edocker / eclean   # check/start Docker / clean up sandbox containers + image
+jkillall           # stop all services + remove sandbox containers + image
+```
+Example: `jdocker && jcompany anthropic https://www.anthropic.com/careers/jobs && elist anthropic`
 
 ---
 
