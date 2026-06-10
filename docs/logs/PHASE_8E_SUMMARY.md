@@ -1,59 +1,121 @@
 # Phase 8E: Prompt / Context / Harness Engineering
 
-**Status**: 📋 Planning (discuss before building)
+**Status**: 📋 Planning (scope finalized — build harness items; context as backlog)
 **Date**: June 9, 2026
-**Goal**: Turn the **ad-hoc agent fixes from 8C/8D into a deliberate, systematic methodology** for making the extractor-discovery agent more reliable, efficient, and observable. 8D worked, but every improvement was reactive (watch a run fail → patch the prompt). 8E is about making that *systematic*.
+**Goal**: Systematic improvement of the extractor-discovery agent across three dimensions — **prompt, context, harness**. 8C/8D proved the agent CAN do the task; 8E is about doing it *well* (fewer trials, leaner context, deeper understanding) and demonstrating the agent-engineering taxonomy explicitly.
 
-> Framing: 8C/8D proved the agent CAN do the task. 8E is about doing it *well* — fewer trials,
-> fewer tokens, fewer silent failures, and a repeatable process for improving the agent.
-
----
-
-## Three pillars
-
-### 1. Prompt engineering — the agent's instructions
-What we did ad-hoc; what to systematize:
-- **Symptom→fix tables** (worked great for HRT's `setting` param) — generalize: a small library of "if you see X error, the fix is usually Y" per ATS / failure mode.
-- **Shortcut-over-explore** — encode the efficient path explicitly (fetch-all-then-filter; /favicon.ico direct) so the agent doesn't rabbit-hole. **Open question:** how to detect/prevent NEW rabbit holes we haven't seen? (a meta-instruction: "if an approach fails twice, change strategy" — already added; is it enough?)
-- **Few-shot examples?** — we currently give *patterns* (ATS URLs), not full worked examples. Would 1-2 complete worked traces (e.g. "here's how Greenhouse discovery looks end-to-end") reduce trials further? Tradeoff: token cost vs. fewer round-trips.
-- **Prompt regression** — when we change a prompt to fix company X, does it break company Y? Right now we find out by re-running. **Idea:** a small eval suite (the 5 companies as golden cases) that re-runs after prompt changes and checks counts match (375/128/110/120/~10). This is the "validate the eval before trusting it" discipline (7E) applied to the agent.
-
-### 2. Context engineering — what the agent sees each turn
-The ~200K-tokens/run problem + the trim that backfired:
-- **Summarize-don't-drop** — the trim failed because it removed content the agent re-examined. The right version: when a tool result is "consumed," replace the raw HTML/JS dump with a SHORT SUMMARY of what was learned ("found greenhouse slug=X, 3 decoy jobs"), keeping the conclusion, dropping the bytes. Needs an LLM summarization step (like the chat agent's history summarizer) or a structured "notes" the agent maintains.
-- **Working memory / scratchpad** — instead of re-deriving facts from re-fetched pages, have the agent maintain a running "what I know" note (endpoint, action, params, slug) that persists compactly across turns. Reduces re-fetches (HRT re-read the JS bundle 7×).
-- **Selective context** — does every turn need the FULL system prompt + all history? Caching handles the system prompt; the history is the cost. Per-turn context budgeting.
-- **Measure first** — instrument token usage per stage/turn (we only have the Anthropic dashboard total now). Know where the 200K goes before optimizing.
-
-### 3. Harness engineering — the deterministic scaffolding around the LLM
-The "judgment vs. control flow" split + verification:
-- **Verified-code propagation** (done in 8D) — generalize the principle: any stage that *fixes* code in a trial must emit the fixed version downstream. Audit other stages for the same divergence risk.
-- **Structured gates** (done: `valid:false → stop`) — are there other places the harness should enforce a consequence the LLM might mis-route? (e.g. low-confidence results → flag for human, don't silently proceed.)
-- **Retry / self-repair loops** — when a stage fails, should the harness auto-retry with the failure reason injected (a fresh attempt), vs. just escalating? Bounded self-repair.
-- **Container concurrency cap** — a semaphore on `run_trial` (Docker is fine, but oversubscription throttles). Low priority.
-- **Registry write safety** — the parallel-write race (8D). Options: file lock, or make the registry AUTO-DISCOVER `extractors_v2/*.py` instead of being edited (removes the shared-file write entirely). The auto-discover version also fixes "the agent forgot to register" failures.
-- **Cost/step guards** — a hard token or step budget per *run* (not just per stage), with graceful escalation.
+> The framing itself is the value: most "I built an agent" work is one undifferentiated blob.
+> Naming the three pillars — and knowing which technique lives where — is what separates
+> *agent engineering* from *agent usage*.
 
 ---
 
-## Candidate concrete work items (to prioritize tomorrow)
-1. **Agent eval harness** — the 5 companies as golden cases; re-run after prompt changes, assert counts. (Highest-value: makes prompt iteration safe + measurable.)
-2. **Summarize-don't-drop context** — a working-memory note the agent maintains; cut the re-fetch loops + the 200K tokens.
-3. **Registry auto-discovery** — scan `extractors_v2/*.py` instead of editing a shared file. Fixes the race AND the "forgot to register" class. (Also unblocks parallel runs.)
-4. **Token/step instrumentation** — measure per-stage cost before optimizing.
-5. **Symptom→fix library + retry-with-reason** — generalize the HRT-style fixes; bounded self-repair.
+## The three pillars (and which technique lives where)
+
+The key conceptual move: **categorize a technique by what you MODIFY, not by what it benefits.** Several context *problems* are best solved by *harness* changes — prevention beats cleanup.
+
+| Pillar | What you modify | Example techniques |
+|---|---|---|
+| **Prompt** | the instructions | failure-driven tuning, symptom→fix tables, shortcuts-over-explore |
+| **Context** | what's IN the window | summarize-on-consume, retrieval, working memory |
+| **Harness** | the machinery (tools, loop, gates) | sub-agents, tool granularity, scoped guards, grep tool |
 
 ---
 
-## Open questions for discussion
-- Is the agent's job DONE at "discover + verify + write," or should 8E also cover the **runtime JD parsing** (LLM-parse a job page → structured JD) and **wiring into the backend** (registry → the `list_companies` endpoint, replacing v1's enum)? Those might be their own phase.
-- How much to invest in token optimization vs. just accepting ~200K/run (it's a local admin tool run occasionally, not a hot path)?
-- Few-shot worked examples vs. patterns — worth the token cost?
-- Eval harness: assert exact counts (brittle as sites change) vs. "count in a sane range + JD validates" (robust but looser)?
+## 1. Prompt engineering — DONE (covered in 8C/8D)
+
+This pillar is already strong. Across 8C/8D the prompts were tuned **failure-driven**: watch a real run fail → diagnose the root cause from trial logs → encode a *targeted* fix → verify. Captured in [agent-discovery-prompts.md](../learning/agent-discovery-prompts.md):
+- symptom→fix tables (HRT's `setting` param), shortcuts-over-"think-harder" (fetch-all-then-filter; /favicon.ico direct), the ATS discovery ladder, judgment-vs-control-flow split.
+- The deeper skill shown: deciding **prompt-vs-harness boundary** — some "prompt problems" were correctly fixed in *code* (the `valid:false → stop` gate, verified-code propagation).
+
+**No major new work here.** A `grep`/`search` tool (below, under harness) is the one addition — but its benefit is *context* (read less), not prompt.
+
+---
+
+## 2. Harness engineering — BUILD THIS (the headline)
+
+### (a) Batch READ tool — `read_files([...])`  ← build
+- Reading is fetching context; the agent often reads several files in separate turns (`write_extractor` did read hrt.py → read registry.py → ... = multiple round-trips).
+- A `read_files([paths])` tool returns them in ONE call → fewer round-trips (each turn re-sends the whole conversation, so cutting turns helps).
+- **Reads only — writes stay GRANULAR (one file per `write_file`).** This matches industry coding agents (Claude Code / Cursor / Aider): per-file writes preserve observability (`[step N]` UX), reviewability (git diff per file), the read-before-write guarantee, and error isolation. Batching writes trades those away; batching reads is low-risk (no side effects).
+
+### (b) Sub-agent — `spawn_agent(task) -> summary`  ← build (the most impressive item)
+- A sub-agent is a **nested agent loop** with its OWN fresh context. The parent calls it like a tool; the parent's context receives only the sub-agent's **summary result**, never its internal trials.
+- **Why it matters:** it's the PREVENTIVE answer to context bloat — the heavy content never enters the parent context. (Contrast: summarize-on-consume is the *reactive* answer — clean up what's already there. Prevention > cleanup.) So a context problem is solved by a *harness* change.
+- **Where it helps here:** the `fetch_jobs` site/JS-bundle exploration (HRT re-read the 23KB bundle 7× → context bloat). A sub-agent: *"explore this site + bundle, return {endpoint, action, required_params}"* → reads the bundle in ITS context, returns 3 facts. The main agent never holds the 23KB.
+- **Why our architecture is ready:** `run_stage` is already a self-contained, isolated-context agent loop — a sub-agent in all but name (each stage starts with fresh `messages` + only prior *results*). Agents are naturally recursive; `run_stage` IS the recursive unit. Adding a sub-agent = let a stage spawn another stage-like loop as a tool.
+- **Resume value:** building a working sub-agent (isolated context, summary-only return, the recursive loop) demonstrates the deepest understanding of agent architecture — the central pattern of modern multi-agent systems (Claude Code's Task tool, research agents).
+- **⚠️ The handoff is where sub-agents DRIFT** (a known failure mode): when the parent passes a complex/vague requirement down, the sub-agent — lacking the parent's full context — produces omissions/imprecision. Mitigation: keep the delegated task **crisp + self-contained** with a **tight return schema** (e.g. "find the AJAX endpoint, action, and required params in this bundle" → `{endpoint, method, action, required_params}`), NOT "go figure out the jobs." Narrow task in, structured facts out.
+
+### (c) ~~grep/search tool~~ — DROPPED
+- The agent reads its OWN generated files + fetched web content, not a large codebase — there's nothing to grep. No real use here; cut.
+
+### Note: harness depth scales INVERSELY with model strength
+- A strong, large-context model (Opus, 1M) needs LESS harness — it can hold the whole task in one conversation. Weaker/cheaper models need MORE harness (sub-agents, compaction, gates) to compensate. So harness engineering is partly *compensating for model limits* — worth stating, and a reason the agent could run leaner on a stronger model.
+
+---
+
+## 3. Context engineering — BACKLOG (understood + partially built elsewhere)
+
+We did NOT build in-loop summarization for the discovery agent (its runs are short enough). But the mechanism is understood, and a version is **already built in the chat agent** (the Redis history summarizer, Phase 7). So this is backlog, not a gap.
+
+### Summarize-on-consume (the technique, with a concrete trace)
+
+The insight: some tool results are needed only TRANSIENTLY — to *extract a fact*, then they're dead weight that keeps getting re-sent every turn. After the fact is extracted, REWRITE that result in history to a short summary (keep the conclusion, drop the bytes).
+
+**Concrete message-history trace** (the HRT bundle case):
+
+```
+turn N    assistant → action: read_file("frontend-bundle.min.js")     # the request
+turn N+1  user      → "<23 KB of minified JS>"                         # the big raw result
+turn N+2  assistant → "Found the AJAX call: action='get_hrt_jobs_handler',
+                       POST to admin-ajax.php, requires a `setting` param
+                       (the data-filters-settings DOM blob)."          # CONSUMES the result
+          ──► At this moment the HARNESS rewrites turn N+1 IN PLACE:
+              messages[N+1].content =
+                "[read_file frontend-bundle.min.js — summarized: AJAX action
+                 'get_hrt_jobs_handler', POST admin-ajax.php, needs `setting`]"
+turn N+3  user → next input.  The LLM is now sent history where turn N+1
+                is the 30-token SUMMARY, NOT the 23 KB. All FUTURE turns
+                re-send the summary, so context stops growing by 23 KB/turn.
+```
+
+**Why it must be summarize, NOT drop** (the lesson from the 8D trim that backfired): the failed 8D trim *dropped* large results → the agent could no longer see the bundle → it RE-FETCHED it (7× re-reads). The fix is to leave the **conclusion** behind so the agent doesn't need to re-derive it. *Compaction preserves knowledge; truncation destroys it and forces re-work.*
+
+**Two ways to produce the summary:**
+1. **Cheap (no extra LLM call):** use the assistant's OWN next `thought`/`summary` (turn N+2) as the replacement for turn N+1 — the model already stated what it learned. Zero added cost.
+2. **Robust (extra call):** a small LLM summarization step (like the chat agent's summarizer) when results pile up.
+
+**When to add it:** when a run gets long enough that re-sent context dominates the bill — i.e. if the agent gains more/longer stages, or sub-agents aren't enough. For the current 5-company scope, runs are short; this is backlog.
+
+### Related context backlog
+- **Working-memory scratchpad** — a compact running "what I know" note the agent maintains (endpoint, slug, params) so it re-reads the *note*, not the *files*.
+- **Retrieval-not-preload** — index the codebase, retrieve only relevant snippets per step (the Cursor model). Overkill for this agent.
+
+---
+
+## Finalized scope for 8E
+
+**Build:**
+1. **`spawn_agent(task)` sub-agent** for site/bundle exploration in `fetch_jobs` — harness; THE headline (nested loop, isolated context, summary return). Keep the delegated task crisp + structured return (avoid the drift failure mode).
+2. **`read_files([...])` batch read** (writes stay granular) — harness; minor, quick.
+
+(grep/search dropped — the agent has no large codebase to navigate.)
+
+**Backlog (documented, understood, partially built in the chat agent):**
+- Summarize-on-consume context compaction (trace above) — add when runs get long.
+- Working-memory scratchpad; retrieval-not-preload.
+- Agent eval harness (5 companies as golden cases — regression-safe prompt iteration).
+- Registry auto-discovery (fixes the parallel-write race + "forgot to register").
+
+---
+
+## The one-sentence framing (for interviews / resume)
+> "I improved the agent across three pillars: **prompt** (failure-driven instruction tuning), **harness** (tool granularity — batch reads but granular writes like industry coding agents; a **sub-agent** for heavy exploration; a grep tool to read less), and **context** (summarize-on-consume to compact transient tool results — I'd learned from a trim that *dropped* content and caused re-fetches that you must *summarize*, not drop). The key insight: **context problems are often best solved in the harness** — prevent the bloat structurally (sub-agents) rather than clean it up."
 
 ---
 
 ## Relation to other work
-- Builds directly on [PHASE_8C_SUMMARY](PHASE_8C_SUMMARY.md) + [PHASE_8D_SUMMARY](PHASE_8D_SUMMARY.md).
-- The eval-harness idea reuses the 7E discipline ([vectors-rag-eval.md](../learning/vectors-rag-eval.md)) — "validate the validator," golden cases, pin the judge.
-- Lessons captured in [agent-discovery-prompts.md](../learning/agent-discovery-prompts.md).
+- Builds on [PHASE_8C_SUMMARY](PHASE_8C_SUMMARY.md) + [PHASE_8D_SUMMARY](PHASE_8D_SUMMARY.md); lessons in [agent-discovery-prompts.md](../learning/agent-discovery-prompts.md).
+- Summarize-on-consume mirrors the chat agent's history summarizer (Phase 7, [redis.js]/summarize.js).
+- The eval-harness backlog reuses the 7E "validate the validator" discipline ([vectors-rag-eval.md](../learning/vectors-rag-eval.md)).

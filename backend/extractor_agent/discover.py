@@ -260,6 +260,19 @@ def run_stage(client, stage: str, company: str, url: str, *, files: FileTools,
                 messages.append({"role": "user", "content": f"read_file error: {e}"})
             continue
 
+        if action.tool == "read_files":
+            # Batch read several known files in ONE round-trip (each marks the file as
+            # read, so write-after a batched read is allowed — same as read_file).
+            results = []
+            for p in (action.paths or []):
+                try:
+                    results.append(files.read_file(p))
+                except FileToolError as e:
+                    results.append({"ok": False, "path": p, "error": str(e)})
+            say(f"  {_DIM}→ read_files {action.paths} ({len(results)} files){_RESET}")
+            messages.append({"role": "user", "content": f"read_files result:\n{json.dumps(results)}"})
+            continue
+
         if action.tool == "write_file":
             try:
                 if debug:

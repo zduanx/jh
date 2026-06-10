@@ -19,9 +19,10 @@ from pydantic import BaseModel, Field
 
 class Action(BaseModel):
     """What the agent does this step."""
-    tool: Literal["run_trial", "read_file", "write_file", "done", "fail"] = Field(
+    tool: Literal["run_trial", "read_file", "read_files", "write_file", "done", "fail"] = Field(
         description=("run_trial = execute python in the sandbox; "
-                     "read_file = read a file under extractors_v2/; "
+                     "read_file = read ONE file under extractors_v2/; "
+                     "read_files = read SEVERAL known files at once (one round-trip — use when you already know the set, e.g. {company}.py + registry.py); "
                      "write_file = write a file under extractors_v2/ (read it first if it exists); "
                      "done = finished with a result; fail = give up.")
     )
@@ -32,6 +33,10 @@ class Action(BaseModel):
     path: Optional[str] = Field(
         default=None,
         description="For read_file / write_file: the path under extractors_v2/ (e.g. 'extractors_v2/anthropic.py' or 'extractors_v2/registry.py').",
+    )
+    paths: Optional[list[str]] = Field(
+        default=None,
+        description="For read_files: the list of paths under extractors_v2/ to read in one call.",
     )
     content: Optional[str] = Field(
         default=None,
@@ -205,7 +210,7 @@ One sample is enough — you're proving the fetch + url + crawl path works, not 
 
     "write_extractor": """STAGE: write the company's extractor file AND register it — using the read_file / write_file tools. This is multi-file editing (like a coding agent), confined to extractors_v2/.
 
-RULE: any file that already exists must be read_file'd BEFORE you write_file it (so the overwrite is allowed and you preserve unrelated content). The files MAY already exist from a PRIOR run with DIFFERENT/older code — do NOT trust the old file. The prior stages' results are the SOURCE OF TRUTH. For the `_fetch_all_jobs` body, use validate_jd's `verified_code` (the version that was PROVEN to work in a trial) if present; otherwise the fetch_jobs `code`. ALWAYS write the file with the CURRENT results; only skip the write if you've read it and confirmed it byte-for-byte matches what you would write.
+RULE: any file that already exists must be read BEFORE you write_file it (so the overwrite is allowed and you preserve unrelated content). TIP: you know both target files up front — read them BOTH at once with `read_files(["extractors_v2/{company}.py", "extractors_v2/registry.py"])` (one round-trip) instead of two separate read_file calls. The files MAY already exist from a PRIOR run with DIFFERENT/older code — do NOT trust the old file. The prior stages' results are the SOURCE OF TRUTH. For the `_fetch_all_jobs` body, use validate_jd's `verified_code` (the version that was PROVEN to work in a trial) if present; otherwise the fetch_jobs `code`. ALWAYS write the file with the CURRENT results; only skip the write if you've read it and confirmed it byte-for-byte matches what you would write.
 
 Do these, in order:
 
