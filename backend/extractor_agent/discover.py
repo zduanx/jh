@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from dataclasses import dataclass, field
 
 import anthropic
@@ -134,9 +135,46 @@ def _say(verbose: bool, s: str):
         print(s)
 
 
+# Rolling 60s token window — track rate-limited input tokens (fresh + cache writes;
+# cache reads are EXCLUDED by Anthropic) so we can see when a run approaches the
+# Tier-1 30K/min input limit and which step blows it.
+_usage_window: list[tuple[float, int]] = []   # (timestamp, counted_tokens)
+
+
+def _record_usage(counted: int) -> None:
+    now = time.monotonic()
+    _usage_window.append((now, counted))
+    cutoff = now - 60.0
+    while _usage_window and _usage_window[0][0] < cutoff:
+        _usage_window.pop(0)
+
+
+def _window_total() -> int:
+    return sum(c for _, c in _usage_window)
+
+
 # --------------------------------------------------------------------------- #
 # Structured LLM turns (validated via Pydantic; retry on malformed)
 # --------------------------------------------------------------------------- #
+def _with_history_cache_breakpoint(messages: list[dict]) -> list[dict]:
+    """
+    Return a copy of `messages` with a cache_control breakpoint on the LAST message,
+    so Anthropic caches the whole [system + history] prefix. We DON'T mutate the stored
+    `messages` (the rest of the code reads `.content` as plain strings) — only the copy
+    sent to the API carries the cache marker. Content is converted to block form (a
+    list with one text block) because cache_control attaches to a content block.
+    """
+    if not messages:
+        return messages
+    out = list(messages)
+    last = dict(out[-1])
+    content = last["content"]
+    text = content if isinstance(content, str) else json.dumps(content)
+    last["content"] = [{"type": "text", "text": text, "cache_control": {"type": "ephemeral"}}]
+    out[-1] = last
+    return out
+
+
 def _structured(client, system: str, messages: list[dict], schema: dict, name: str,
                 *, debug: bool = False) -> dict:
     """One forced-structured LLM turn → raw dict matching `schema`.
@@ -151,17 +189,31 @@ def _structured(client, system: str, messages: list[dict], schema: dict, name: s
         last = messages[-1]
         print(f"{_DIM}┌─ → LLM ({last['role']}) ─\n{_indent(_brief(last['content']))}\n└─{_RESET}")
 
+    # CACHING (two breakpoints): the system prompt AND the conversation history.
+    # We append-only to `messages`, so each turn the prior messages are an UNCHANGED
+    # PREFIX — Anthropic caches up to a breakpoint, so marking the LAST message makes
+    # [system + all prior messages] a cache hit next turn. The big re-sent history
+    # (trial results, large API JSON) then counts as CACHE READS — 0.1x cost AND
+    # excluded from the 30K/min input rate limit (Tier 1). Only the new message is fresh.
+    cached_messages = _with_history_cache_breakpoint(messages)
+
     resp = client.messages.create(
         model=MODEL, max_tokens=2048, temperature=0,
-        # Cache the (detailed, stable) system prompt across a stage's turns → the
-        # detailed guidance costs ~nothing after turn 1. This is the token-efficiency
-        # lever: rich system prompt (cached) → fewer round-trips (each re-sends the
-        # whole growing conversation, uncached). Detail up front beats blind exploration.
         system=[{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}],
         tools=[{"name": name, "description": "Return structured data.", "input_schema": schema}],
         tool_choice={"type": "tool", "name": name},
-        messages=messages,
+        messages=cached_messages,
     )
+
+    # Token instrumentation — print what THIS call cost against the rate limit.
+    # Rate-limited input = input_tokens + cache_creation (cache READS are excluded).
+    u = resp.usage
+    fresh = u.input_tokens + (u.cache_creation_input_tokens or 0)
+    cread = u.cache_read_input_tokens or 0
+    _record_usage(fresh)   # rolling 60s window → warn if approaching 30K/min
+    print(f"{_DIM}    [tokens] counted={fresh} (fresh={u.input_tokens} +write={u.cache_creation_input_tokens or 0}) "
+          f"cache_read={cread} out={u.output_tokens} | ~{_window_total()}/30K in last 60s{_RESET}")
+
     for block in resp.content:
         if block.type == "tool_use" and block.name == name:
             if debug:

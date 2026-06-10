@@ -45,3 +45,4 @@ build/
 
 # Trials (API response snapshots for development)
 trials/
+.claude/scheduled_tasks.lock
