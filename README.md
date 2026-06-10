@@ -233,7 +233,7 @@ See [VERCEL_DEPLOYMENT.md](docs/deployment/VERCEL_DEPLOYMENT.md) for detailed gu
 | ADR-030 | Standalone MCP server (multi-client) | Tools across a process boundary |
 | ADR-034 | Local Docker sandbox (dev) → Lambda the prod path | The sub-step that runs untrusted code |
 
-See [DECISIONS.md](docs/architecture/DECISIONS.md) for all 34 ADRs.
+See [DECISIONS.md](docs/architecture/DECISIONS.md) for all 33 ADRs (001–034; 007 unused).
 
 ---
 
