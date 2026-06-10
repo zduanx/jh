@@ -142,21 +142,32 @@ turn N+3  user → next input.  The LLM is now sent history where turn N+1
 
 ## Next (Tier 2): token-reduction measurement — the resume artifact
 A controlled before/after experiment to QUANTIFY the caching + sub-agent wins (the
-instrumentation is already built; just sum `counted` tokens per run). Run the SAME
-hard company (HRT) through three configs:
-1. **Baseline** — caching OFF, sub-agent OFF (bundle re-sent uncached every turn)
-2. **+ history caching** — re-sent history becomes free cache reads
-3. **+ sub-agent** (current) — bundle never enters the parent context
+instrumentation is already built; just sum `counted` tokens per run). Ran the SAME hard
+company (HRT — custom-site discovery) through three configs, toggled via env flags
+(`EXTRACTOR_NO_CACHE`, `EXTRACTOR_NO_SUBAGENT`):
 
-→ a small table: "Token usage per onboard (HRT, the hard case): baseline X → +caching Y
-→ +sub-agent Z = N% reduction." This is a concrete, credible resume number (token
-efficiency = the core economic lever of AI products). Needs Tier 2 to run the 3 HRT
-passes without the 30K/min 429 friction.
+### ✅ MEASURED RESULT (HRT onboard; `counted` = billed/rate-limited input tokens = fresh + cache writes)
+
+| Config | counted tokens | reduction vs baseline |
+|---|---:|---:|
+| Baseline (no cache, no sub-agent) | **186,444** | — |
+| + history caching | **69,680** | **−62%** |
+| + sub-agent (current) | **42,272** | **−77%** |
+
+- **Caching alone: −62%** — append-only history is a stable prefix; a cache breakpoint on
+  the last message turns the re-sent history into *cache reads* (0.1× cost, excluded from
+  the per-minute rate limit). The bulk of the 186K was the 20KB JS bundle re-sent uncached.
+- **Sub-agent adds −39% more** (on top of caching) — the bundle is read in the explorer's
+  isolated context and never enters the parent's history at all.
+- **Combined: −77% (≈4.4× fewer billed tokens).** A concrete, credible efficiency number
+  (token cost = the core economic lever of AI products). *(Counts vary run-to-run with the
+  agent's trial count; a separate baseline run hit 282K — so the reduction is directional
+  and large, not a fixed constant.)*
 
 ---
 
 ## The one-sentence framing (for interviews / resume)
-> "I improved the agent across three pillars: **prompt** (failure-driven instruction tuning), **harness** (tool granularity — batch reads but granular writes like industry coding agents; a **sub-agent** for heavy exploration), and **context** (I prompt-cached the conversation history to fix a Tier-1 rate-limit 429 — append-only history is a stable prefix, so a cache breakpoint on the last message turns the re-sent history into free cache reads, 0.1× cost and excluded from the per-minute limit; plus token instrumentation to *see* it; summarize-on-consume is the next lever). The key insight: **context problems are often best solved in the harness** — prevent the bloat structurally (sub-agents, caching) rather than clean it up."
+> "I improved the agent across three pillars and **measured a 77% reduction in billed input tokens** (186K→42K on the hard discovery case): **prompt** (failure-driven instruction tuning), **harness** (tool granularity — batch reads, granular writes; a dedicated **sub-agent** that explores custom sites in isolated context so the 20KB JS bundle never enters the main history — −39% on top of caching), and **context** (prompt-cached the append-only conversation history — a cache breakpoint on the last message turns re-sent history into free cache reads at 0.1× cost, excluded from the rate limit — −62% alone; plus token instrumentation to *measure* it). The key insight: **context problems are often best solved in the harness** — prevent the bloat structurally (sub-agents, caching) rather than clean it up."
 
 ---
 

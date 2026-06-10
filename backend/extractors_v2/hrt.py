@@ -10,86 +10,84 @@ class HrtExtractor(BaseExtractorV2):
     INPUT_CAREER_URL = "https://www.hudsonrivertrading.com/careers/?job-type=full-time-experienced%2Cparent_full-time-experienced%2C&job-category=software-engineeringpython%2Cparent_software-engineeringc%2C&locations=new-york%2C"
 
     async def _fetch_all_jobs(self) -> list[dict[str, Any]]:
-        import re
-        import html
-        import json
         from urllib.parse import urlparse, parse_qs
 
-        async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
-            # Step 1: Fetch careers page to get nonce and setting
-            resp = await client.get('https://www.hudsonrivertrading.com/careers/')
-            text = resp.text
+        # Parse filter params from the input URL
+        parsed = urlparse(self.INPUT_CAREER_URL)
+        params = parse_qs(parsed.query)
 
-            # Extract nonce from inline hrtJobsAjax JS variable
-            nonce_match = re.search(r'hrtJobsAjax\s*=\s*(\{[^}]+\})', text)
-            nonce = None
-            if nonce_match:
-                ajax_data = json.loads(nonce_match.group(1))
-                nonce = ajax_data.get('nonce')
+        raw_job_types = [s.strip().rstrip(',') for s in ','.join(params.get('job-type', [])).split(',') if s.strip().rstrip(',')]
+        raw_job_cats = [s.strip().rstrip(',') for s in ','.join(params.get('job-category', [])).split(',') if s.strip().rstrip(',')]
+        raw_locations = [s.strip().rstrip(',') for s in ','.join(params.get('locations', [])).split(',') if s.strip().rstrip(',')]
 
-            # Extract setting from data-filters-settings attribute (HTML-escaped)
-            setting_match = re.search(r'data-filters-settings=["\']([^"\']+)["\']', text)
-            setting = html.unescape(setting_match.group(1)) if setting_match else '{}'
-
-            # Step 2: POST to get ALL jobs (no server-side filters)
-            post_data = {
-                'action': 'get_hrt_jobs_handler',
-                'setting': setting,
-                'nonce': nonce
+        def slug_to_job_type(slug):
+            slug = slug.lower().replace('parent_', '')
+            mapping = {
+                'full-time-experienced': 'Full-Time: Experienced',
+                'full-time-new-grad': 'Full-Time: New Grad',
+                'temporary': 'Temporary',
             }
-            resp2 = await client.post(
-                'https://www.hudsonrivertrading.com/wp-admin/admin-ajax.php',
-                data=post_data
-            )
-            jobs_raw = resp2.json()
+            return mapping.get(slug)
 
-            # Step 3: Parse each job from HTML content
-            def parse_job(job):
-                content = job['content']
-                # Extract data-term (===separated taxonomy slugs)
-                term_match = re.search(r'data-term=["\']([^"\']*)["\']', content)
-                terms = set(term_match.group(1).split('===')) if term_match else set()
-                # Extract data-jobid
-                jobid_match = re.search(r'data-jobid=["\']([^"\']*)["\']', content)
-                jobid = jobid_match.group(1) if jobid_match else str(job['ID'])
-                # Extract job URL from hrt-card-title anchor
-                url_match = re.search(r'class=["\']hrt-card-title["\'][^>]+href=["\']([^"\']+)["\']', content)
-                if not url_match:
-                    url_match = re.search(r'href=["\']([^"\']+)["\']', content)
-                job_url = url_match.group(1) if url_match else ''
-                # Extract location display names from first list of card info items
-                loc_items = re.findall(r'<li class=["\']hrt-card-info-item["\']><span>([^<]+)</span></li>', content)
-                location = ', '.join(loc_items[:3]) if loc_items else ''
-                # Unescape HTML entities in title
-                title = html.unescape(job['title'])
-                return {
-                    'id': jobid,
-                    'title': title,
-                    'location': location,
-                    'url': job_url,
-                    '_terms': terms,
-                }
+        def slug_to_job_category(slug):
+            slug = slug.lower().replace('parent_', '')
+            mapping = {
+                'software-engineeringpython': 'Software Engineering:Python',
+                'software-engineeringc': 'Software Engineering:C++',
+                'finance': 'Finance',
+                'hardware-engineering': 'Hardware Engineering',
+                'information-security': 'Information Security',
+                'legal-compliance': 'Legal & Compliance',
+                'people-operations': 'People Operations',
+                'risk': 'Risk',
+                'strategy-development': 'Strategy Development',
+                'systems-and-networking': 'Systems and Networking',
+                'trade-operations': 'Trade Operations',
+                'business-development': 'Business Development',
+            }
+            return mapping.get(slug)
 
-            all_jobs = [parse_job(j) for j in jobs_raw]
+        filter_job_types = set(filter(None, (slug_to_job_type(s) for s in raw_job_types)))
+        filter_job_cats = set(filter(None, (slug_to_job_category(s) for s in raw_job_cats)))
+        filter_locations = [s.replace('-', ' ').lower() for s in raw_locations]
 
-            # Step 4: Apply URL filters client-side
-            parsed = urlparse(self.INPUT_CAREER_URL)
-            qs = parse_qs(parsed.query)
+        async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
+            resp = await client.get('https://boards-api.greenhouse.io/v1/boards/wehrtyou/jobs?content=true')
+            resp.raise_for_status()
+            data = resp.json()
 
-            job_types = [s for s in qs.get('job-type', [''])[0].split(',') if s]
-            job_cats  = [s for s in qs.get('job-category', [''])[0].split(',') if s]
-            locations = [s for s in qs.get('locations', [''])[0].split(',') if s]
+        jobs = data.get('jobs', [])
 
-            def matches(job, filter_slugs):
-                return not filter_slugs or bool(job['_terms'] & set(filter_slugs))
+        def get_meta_values(job, field_name):
+            for meta in job.get('metadata', []):
+                if meta['name'] == field_name and meta['value']:
+                    return meta['value']
+            return []
 
-            filtered = [
-                j for j in all_jobs
-                if matches(j, job_types) and matches(j, job_cats) and matches(j, locations)
-            ]
+        def matches_location(job, loc_filters):
+            if not loc_filters:
+                return True
+            loc = job['location']['name'].lower()
+            return any(lf in loc for lf in loc_filters)
 
-            # Remove internal _terms key before returning
-            for j in filtered:
-                j.pop('_terms', None)
+        results = []
+        for job in jobs:
+            if filter_job_types:
+                jt_vals = get_meta_values(job, 'Job Type')
+                if not any(v in filter_job_types for v in jt_vals):
+                    continue
+            if filter_job_cats:
+                jc_vals = get_meta_values(job, 'Job Category')
+                if not any(v in filter_job_cats for v in jc_vals):
+                    continue
+            if not matches_location(job, filter_locations):
+                continue
+            results.append({
+                'id': str(job['id']),
+                'title': job['title'],
+                'location': job['location']['name'],
+                'url': job['absolute_url'],
+                'response_data': job,
+            })
 
-            return filtered
+        return results

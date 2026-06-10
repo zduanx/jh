@@ -36,6 +36,13 @@ from .tools import FileTools, FileToolError
 
 MODEL = os.environ.get("EXTRACTOR_AGENT_MODEL", "claude-sonnet-4-6")
 
+# Experiment flags — toggle the optimizations off to measure their token impact.
+_NO_CACHE = os.environ.get("EXTRACTOR_NO_CACHE") == "1"        # disable prompt caching
+_NO_SUBAGENT = os.environ.get("EXTRACTOR_NO_SUBAGENT") == "1"  # disable the explore_site sub-agent
+
+# Per-run token totals (reset at the start of run_agent) — for the reduction experiment.
+_run_totals = {"counted": 0, "cache_read": 0, "output": 0}
+
 # Per-stage HARD step cap (the outer code gate). The PROMPT sets a tighter soft budget
 # ("aim to solve within N trials, else escalate") so the agent stays efficient; this is
 # the backstop so a hard stage (fetch_jobs) isn't killed mid-discovery. (validate~2,
@@ -199,14 +206,20 @@ def _structured(client, system: str, messages: list[dict], schema: dict, name: s
     # [system + all prior messages] a cache hit next turn. The big re-sent history
     # (trial results, large API JSON) then counts as CACHE READS — 0.1x cost AND
     # excluded from the 30K/min input rate limit (Tier 1). Only the new message is fresh.
-    cached_messages = _with_history_cache_breakpoint(messages)
+    # Caching ON by default; EXTRACTOR_NO_CACHE=1 disables it (for the baseline experiment).
+    if _NO_CACHE:
+        out_messages = messages
+        out_system = system
+    else:
+        out_messages = _with_history_cache_breakpoint(messages)
+        out_system = [{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}]
 
     resp = client.messages.create(
         model=MODEL, max_tokens=2048, temperature=0,
-        system=[{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}],
+        system=out_system,
         tools=[{"name": name, "description": "Return structured data.", "input_schema": schema}],
         tool_choice={"type": "tool", "name": name},
-        messages=cached_messages,
+        messages=out_messages,
     )
 
     # Token instrumentation — print what THIS call cost against the rate limit.
@@ -215,6 +228,9 @@ def _structured(client, system: str, messages: list[dict], schema: dict, name: s
     fresh = u.input_tokens + (u.cache_creation_input_tokens or 0)
     cread = u.cache_read_input_tokens or 0
     _record_usage(fresh)   # rolling 60s window → warn if approaching 30K/min
+    _run_totals["counted"] += fresh
+    _run_totals["cache_read"] += cread
+    _run_totals["output"] += u.output_tokens
     print(f"{tag}{_DIM}    [tokens] counted={fresh} (fresh={u.input_tokens} +write={u.cache_creation_input_tokens or 0}) "
           f"cache_read={cread} out={u.output_tokens} | ~{_window_total()}/30K in last 60s{_RESET}")
 
@@ -350,10 +366,22 @@ def run_stage(client, stage: str, company: str, url: str, *, files: FileTools,
             # PREVENTIVE context lever: the bundle never enters the parent's history.
             site = action.url or url
             say(f"  {_MAGENTA}→ explore_site:{_RESET} {_DIM}{site}{_RESET}")
-            sub = _run_subagent(client, EXPLORE_SITE_SYSTEM, explore_site_task(site),
-                                verbose=verbose, debug=debug)
+            sub, transcript = _run_subagent(client, EXPLORE_SITE_SYSTEM, explore_site_task(site),
+                                            verbose=verbose, debug=debug)
             say(f"  {_MAGENTA}← explorer returned:{_RESET} {_DIM}{json.dumps(sub)[:180]}{_RESET}")
-            messages.append({"role": "user", "content": f"explore_site result:\n{json.dumps(sub)}"})
+            if _NO_SUBAGENT:
+                # BASELINE (no isolation): fold the explorer's FULL transcript (incl. the
+                # 20KB bundle reads) into the PARENT context as ONE user message —
+                # simulating the agent having done the exploration inline. This is the
+                # variable the experiment isolates (the bloat the sub-agent normally hides).
+                dump = "\n".join(
+                    (m["content"] if isinstance(m["content"], str) else json.dumps(m["content"]))
+                    for m in transcript
+                )
+                messages.append({"role": "user", "content": f"exploration log (inline):\n{dump}\n\nresult: {json.dumps(sub)}"})
+            else:
+                # Isolation ON: only the compact facts enter the parent context.
+                messages.append({"role": "user", "content": f"explore_site result:\n{json.dumps(sub)}"})
             continue
         # (Action.tool is a Literal — Pydantic rejects anything else.)
 
@@ -369,11 +397,12 @@ def run_stage(client, stage: str, company: str, url: str, *, files: FileTools,
 _SUBAGENT_MAX_STEPS = int(os.environ.get("EXTRACTOR_SUBAGENT_MAX_STEPS", "10"))
 
 
-def _run_subagent(client, system: str, task: str, *, verbose: bool = True, debug: bool = False) -> dict:
+def _run_subagent(client, system: str, task: str, *, verbose: bool = True, debug: bool = False) -> tuple[dict, list[dict]]:
     """
     Run a sub-agent: a focused ReAct loop with its OWN messages (isolated context),
-    run_trial only. Returns its final result dict (or {"found": false, "error": ...}).
-    The parent never sees the sub-agent's internal trials — only this return value.
+    run_trial only. Returns (result_dict, transcript). Normally the caller uses ONLY
+    the result (isolation); the transcript is returned so the NO_SUBAGENT baseline can
+    dump it into the parent context (to measure the isolation win).
     """
     def say(s):
         # Every sub-agent line is prefixed with ┊sub┊ so it's never confused with the main loop.
@@ -400,11 +429,11 @@ def _run_subagent(client, system: str, task: str, *, verbose: bool = True, debug
         if action.tool == "done":
             result = action.result or {}
             say(f"{_MAGENTA}  ✓ done:{_RESET} {json.dumps(result)[:200]}")
-            return result
+            return result, messages
         if action.tool == "fail":
             reason = action.reason or "sub-agent gave up"
             say(f"{_RED}  ✗ failed:{_RESET} {reason}")
-            return {"found": False, "error": reason}
+            return {"found": False, "error": reason}, messages
         if action.tool == "run_trial":
             code = action.code or ""
             say(f"  {_DIM}→ run_trial ({len(code)} chars) in sandbox…{_RESET}")
@@ -420,7 +449,7 @@ def _run_subagent(client, system: str, task: str, *, verbose: bool = True, debug
         # sub-agent only has run_trial/done/fail; other tools → nudge
         messages.append({"role": "user", "content": "Use run_trial, done, or fail only."})
 
-    return {"found": False, "error": f"sub-agent exceeded {_SUBAGENT_MAX_STEPS} steps"}
+    return {"found": False, "error": f"sub-agent exceeded {_SUBAGENT_MAX_STEPS} steps"}, messages
 
 
 # --------------------------------------------------------------------------- #
@@ -432,8 +461,13 @@ def run_agent(company: str, url: str, *, goal: str = "fully onboard the company:
     client = _client()
     files = FileTools()   # one read/write session shared across stages (read-before-write)
 
+    _run_totals.update(counted=0, cache_read=0, output=0)   # reset per-run token totals
+
     _say(verbose, f"{_CYAN}{_BOLD}=== extractor agent: {company} ({url}) ==={_RESET}")
-    _say(verbose, f"{_DIM}goal: {goal}{_RESET}")
+    cfg = []
+    if _NO_CACHE: cfg.append("NO_CACHE")
+    if _NO_SUBAGENT: cfg.append("NO_SUBAGENT")
+    _say(verbose, f"{_DIM}goal: {goal}{(' | config: ' + ','.join(cfg)) if cfg else ''}{_RESET}")
     if verbose and not debug:
         print(f"{_DIM}planning…{_RESET}", end="\r", flush=True)
     plan = _make_plan(client, company, url, goal, debug=debug)
@@ -467,5 +501,11 @@ def run_agent(company: str, url: str, *, goal: str = "fully onboard the company:
             break
         if so.result:
             prior.update(so.result)        # later stages see earlier results (8D)
+
+    # Per-run token TOTAL (the experiment metric) — counted = fresh + cache_writes
+    # (what's billed/rate-limited); cache_read shown separately (0.1x, free vs limit).
+    t = _run_totals
+    _say(verbose, f"{_BOLD}[run total]{_RESET} counted={t['counted']} cache_read={t['cache_read']} "
+                  f"output={t['output']}  {_DIM}(config: {','.join(cfg) if cfg else 'caching+subagent ON'}){_RESET}")
 
     return outcome
