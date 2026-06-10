@@ -29,6 +29,7 @@ from .prompts import (
     ACTION_SCHEMA, PLAN_SCHEMA, AgentStep, Plan,
     plan_system_prompt, plan_user_prompt,
     stage_system_prompt, stage_user_prompt,
+    EXPLORE_SITE_SYSTEM, explore_site_task,
 )
 from .sandbox.host_harness import run_trial
 from .tools import FileTools, FileToolError
@@ -56,6 +57,8 @@ def _max_steps(stage: str) -> int:
 _DIM, _CYAN, _GREEN, _RED, _YELLOW, _BOLD, _RESET = (
     "\033[2m", "\033[36m", "\033[32m", "\033[31m", "\033[33m", "\033[1m", "\033[0m"
 )
+_MAGENTA = "\033[35m"   # sub-agent — visually distinct from the main loop
+_SUB = f"{_MAGENTA}┊sub┊{_RESET} "   # prefix so you ALWAYS know you're inside a sub-agent
 
 
 def _indent(s: str, prefix: str = "│ ") -> str:
@@ -176,11 +179,12 @@ def _with_history_cache_breakpoint(messages: list[dict]) -> list[dict]:
 
 
 def _structured(client, system: str, messages: list[dict], schema: dict, name: str,
-                *, debug: bool = False) -> dict:
+                *, debug: bool = False, tag: str = "") -> dict:
     """One forced-structured LLM turn → raw dict matching `schema`.
 
     debug=True: print the LLM I/O — the system prompt (first turn), the latest message
     the orchestrator sent, and the raw structured object the LLM returned.
+    tag: a prefix (e.g. ┊sub┊) so sub-agent token/IO lines are distinguishable.
     """
     if debug:
         # Show what the ORCHESTRATOR sends the LLM this turn.
@@ -211,7 +215,7 @@ def _structured(client, system: str, messages: list[dict], schema: dict, name: s
     fresh = u.input_tokens + (u.cache_creation_input_tokens or 0)
     cread = u.cache_read_input_tokens or 0
     _record_usage(fresh)   # rolling 60s window → warn if approaching 30K/min
-    print(f"{_DIM}    [tokens] counted={fresh} (fresh={u.input_tokens} +write={u.cache_creation_input_tokens or 0}) "
+    print(f"{tag}{_DIM}    [tokens] counted={fresh} (fresh={u.input_tokens} +write={u.cache_creation_input_tokens or 0}) "
           f"cache_read={cread} out={u.output_tokens} | ~{_window_total()}/30K in last 60s{_RESET}")
 
     for block in resp.content:
@@ -223,10 +227,10 @@ def _structured(client, system: str, messages: list[dict], schema: dict, name: s
     raise RuntimeError("model did not return structured output")
 
 
-def _ask_step(client, system: str, messages: list[dict], *, retries: int = 1, debug: bool = False) -> AgentStep:
+def _ask_step(client, system: str, messages: list[dict], *, retries: int = 1, debug: bool = False, tag: str = "") -> AgentStep:
     """One inner-loop turn → a VALIDATED AgentStep (retry on schema-invalid)."""
     for attempt in range(retries + 1):
-        raw = _structured(client, system, messages, ACTION_SCHEMA, "step", debug=debug)
+        raw = _structured(client, system, messages, ACTION_SCHEMA, "step", debug=debug, tag=tag)
         try:
             return AgentStep.model_validate(raw)
         except ValidationError as e:
@@ -337,10 +341,86 @@ def run_stage(client, stage: str, company: str, url: str, *, files: FileTools,
                 say(f"  {_RED}→ write_file refused: {e}{_RESET}")
                 messages.append({"role": "user", "content": f"write_file error: {e}"})
             continue
+
+        if action.tool == "explore_site":
+            # DEDICATED SUB-AGENT (site explorer): runs a focused ReAct loop in ISOLATED
+            # context with its OWN specialized system prompt (the JS-bundle / setting-param
+            # expertise lives THERE, not here). The heavy reading (page + 20KB+ bundle)
+            # stays in the sub-agent's context — the parent gets only the compact facts.
+            # PREVENTIVE context lever: the bundle never enters the parent's history.
+            site = action.url or url
+            say(f"  {_MAGENTA}→ explore_site:{_RESET} {_DIM}{site}{_RESET}")
+            sub = _run_subagent(client, EXPLORE_SITE_SYSTEM, explore_site_task(site),
+                                verbose=verbose, debug=debug)
+            say(f"  {_MAGENTA}← explorer returned:{_RESET} {_DIM}{json.dumps(sub)[:180]}{_RESET}")
+            messages.append({"role": "user", "content": f"explore_site result:\n{json.dumps(sub)}"})
+            continue
         # (Action.tool is a Literal — Pydantic rejects anything else.)
 
     say(f"{_YELLOW}  ⚠ {stage}: hit max steps ({max_steps}) without converging{_RESET}")
     return StageOutcome(stage=stage, ok=False, reason=f"exceeded {max_steps} steps", steps=max_steps)
+
+
+# --------------------------------------------------------------------------- #
+# SUB-AGENT runner — a focused ReAct loop (run_trial only) in ISOLATED context.
+# Reusable: callers pass a SPECIALIZED system prompt (the expertise lives with the
+# dedicated sub-agent, e.g. EXPLORE_SITE_SYSTEM), and a thin task (just the inputs).
+# --------------------------------------------------------------------------- #
+_SUBAGENT_MAX_STEPS = int(os.environ.get("EXTRACTOR_SUBAGENT_MAX_STEPS", "10"))
+
+
+def _run_subagent(client, system: str, task: str, *, verbose: bool = True, debug: bool = False) -> dict:
+    """
+    Run a sub-agent: a focused ReAct loop with its OWN messages (isolated context),
+    run_trial only. Returns its final result dict (or {"found": false, "error": ...}).
+    The parent never sees the sub-agent's internal trials — only this return value.
+    """
+    def say(s):
+        # Every sub-agent line is prefixed with ┊sub┊ so it's never confused with the main loop.
+        if verbose:
+            print(_SUB + s)
+
+    if debug:
+        print(f"{_MAGENTA}╔══ sub-agent ══ task: {_RESET}{_DIM}{task[:160]}{_RESET}")
+
+    messages: list[dict] = [{"role": "user", "content": task}]
+    for step in range(1, _SUBAGENT_MAX_STEPS + 1):
+        if verbose and not debug:
+            print(f"{_SUB}{_DIM}[step {step}] contacting LLM…{_RESET}", end="\r", flush=True)
+        turn = _ask_step(client, system, messages, debug=debug, tag=_SUB)
+        if verbose and not debug:
+            print("\033[2K", end="\r")
+        action = turn.action
+
+        say(f"{_MAGENTA}[step {step}]{_RESET} {turn.summary}")
+        if turn.thought:
+            say(f"  {_DIM}thought: {turn.thought if debug else turn.thought[:140]}{_RESET}")
+        messages.append({"role": "assistant", "content": turn.model_dump_json()})
+
+        if action.tool == "done":
+            result = action.result or {}
+            say(f"{_MAGENTA}  ✓ done:{_RESET} {json.dumps(result)[:200]}")
+            return result
+        if action.tool == "fail":
+            reason = action.reason or "sub-agent gave up"
+            say(f"{_RED}  ✗ failed:{_RESET} {reason}")
+            return {"found": False, "error": reason}
+        if action.tool == "run_trial":
+            code = action.code or ""
+            say(f"  {_DIM}→ run_trial ({len(code)} chars) in sandbox…{_RESET}")
+            if debug:
+                say(f"{_DIM}--- trial code ---\n{code}\n------------------{_RESET}")
+            tr = run_trial(code)
+            obs = {"ok": tr.ok, "result": tr.result, "stdout": (tr.stdout or "")[:1500],
+                   "error": tr.error, "timed_out": tr.timed_out}
+            outcome_str = "ok" if tr.ok else ("timeout" if tr.timed_out else f"error: {tr.error}")
+            say(f"  {_DIM}← {outcome_str}{(': ' + json.dumps(tr.result)[:120]) if tr.ok and tr.result is not None else ''}{_RESET}")
+            messages.append({"role": "user", "content": f"Trial result:\n{json.dumps(obs)}"})
+            continue
+        # sub-agent only has run_trial/done/fail; other tools → nudge
+        messages.append({"role": "user", "content": "Use run_trial, done, or fail only."})
+
+    return {"found": False, "error": f"sub-agent exceeded {_SUBAGENT_MAX_STEPS} steps"}
 
 
 # --------------------------------------------------------------------------- #

@@ -19,11 +19,12 @@ from pydantic import BaseModel, Field
 
 class Action(BaseModel):
     """What the agent does this step."""
-    tool: Literal["run_trial", "read_file", "read_files", "write_file", "done", "fail"] = Field(
+    tool: Literal["run_trial", "read_file", "read_files", "write_file", "explore_site", "done", "fail"] = Field(
         description=("run_trial = execute python in the sandbox; "
                      "read_file = read ONE file under extractors_v2/; "
                      "read_files = read SEVERAL known files at once (one round-trip — use when you already know the set, e.g. {company}.py + registry.py); "
                      "write_file = write a file under extractors_v2/ (read it first if it exists); "
+                     "explore_site = delegate to the dedicated site-explorer sub-agent (pass `url`): it reverse-engineers how a custom careers site loads jobs in ISOLATED context and returns the request facts — keeps YOUR context small; "
                      "done = finished with a result; fail = give up.")
     )
     code: Optional[str] = Field(
@@ -45,6 +46,10 @@ class Action(BaseModel):
     result: Optional[dict] = Field(
         default=None,
         description='For done: the final answer, e.g. {"icon_url": "...", "source": "apple-touch-icon", "confidence": "high"}.',
+    )
+    url: Optional[str] = Field(
+        default=None,
+        description="For explore_site: the careers URL to hand the explorer sub-agent.",
     )
     reason: Optional[str] = Field(default=None, description="For fail: why you're giving up.")
 
@@ -157,10 +162,7 @@ LADDER (try in order, stop when you get a clean job list):
    - Workday:    POST {host}/wday/cxs/{tenant}/{site}/jobs  (paginated)
    Pick the matching one. Verify the count looks sane (not 0, not a tiny "talent community" decoy board, not absurd).
 
-3. If NO public ATS API works (custom site): READ THE JS, don't give up. Fetch the page's main frontend JS bundle, find the AJAX call, and reconstruct the EXACT POST it makes (url, action, ALL params).
-   CRITICAL for WordPress admin-ajax.php (a very common case): the POST needs the custom `action`, AND it almost always needs a `setting` param whose value is a DOM attribute like `data-filters-settings` (or similar `data-*-settings`) on the listing element — taken from the page HTML and HTML-UNESCAPED (the raw HTML has `&quot;` etc.; unescape to real JSON before sending).
-   - SYMPTOM → FIX: a 500 "There has been a critical error on this website" means a REQUIRED param is MISSING (almost always `setting`). An empty `[]` means your filter params are wrong — so send NO filter params (get ALL jobs), then filter client-side. The winning request is usually just: action + the unescaped `setting` blob (+ nonce if present), and an empty/absent search.
-   - Do this in ≤2 POST attempts: (a) read the page HTML for the `data-*-settings` attribute and the nonce; (b) POST action+setting+nonce with no filters. If that returns jobs, you're done — filter locally. Don't loop re-reading the bundle.
+3. If NO public ATS API works (custom site, e.g. a WordPress careers page): DELEGATE to the dedicated explorer sub-agent with `explore_site` (pass just the careers URL). It reads the page + (often 20KB+) JS bundle in ISOLATED context — keeping YOUR context small — and returns the facts: {found, endpoint, method, action, required_params, notes}. Use those to write the actual fetch (typically POST that endpoint with the action + required params, no filters, then filter client-side). Don't read the JS bundle yourself — that's the sub-agent's job.
 
 4. PAGINATE if the API reports a total greater than what you fetched.
 
@@ -240,6 +242,34 @@ class {Company}Extractor(BaseExtractorV2):
 When both files are written, return done with {"wrote": ["extractors_v2/{company}.py", "extractors_v2/registry.py"]}.""",
     # 8D will add: "validate_jd": ...
 }
+
+
+# ===========================================================================
+# DEDICATED SUB-AGENT: site explorer. A concretely-defined sub-task (reverse-
+# engineer how a custom careers site loads jobs) → its own SPECIALIZED system
+# prompt, so the expertise lives WHERE THE WORK HAPPENS (not in a generic task
+# string the parent has to write — which would drift). The parent just passes
+# the URL. The heavy reading (page + 20KB+ JS bundle) stays in THIS sub-agent's
+# isolated context; only the compact facts return → big token savings.
+# ===========================================================================
+EXPLORE_SITE_SYSTEM = """You are a SITE-EXPLORATION sub-agent. Given a careers URL whose jobs are NOT served by a known public ATS API, reverse-engineer HOW the page loads its jobs, and return the request facts. You run in ISOLATED context — do the heavy reading here; the caller sees ONLY your final result.
+
+Tools: run_trial (execute python in a sandbox; set `result = <json-able>` or `async def run(): ...`; import httpx, json, re). IMPORTANT: when a fetch returns a big blob (HTML page, JS bundle), do NOT return the raw blob — print/return only the EXTRACTED bits (regex matches: the ajax url, the action name, attribute values). Keep every trial's output small.
+
+How custom careers sites usually work:
+1. Fetch the page. Find the main frontend JS bundle (`<script src="...frontend-bundle...js">` or similar) and any inline config (e.g. `var XxxAjax = {"ajaxurl":..., "nonce":...}`).
+2. Fetch the JS bundle. grep it for the AJAX call: the endpoint, method (usually POST), and the `action` name (e.g. `action: "get_xxx_jobs_handler"`), and what params it sends (`data`, `setting`, `queryparams`, `nonce`).
+3. WordPress admin-ajax.php is the most common case. The POST needs the custom `action` AND almost always a `setting` param whose value is a DOM attribute like `data-filters-settings` (or `data-*-settings`) on the listing element — taken from the page HTML and HTML-UNESCAPED (raw HTML has `&quot;`; unescape to real JSON before sending).
+4. VERIFY with ≤2 POST attempts: (a) read the page HTML for the `data-*-settings` attribute + nonce; (b) POST action+setting+nonce with NO filters. SYMPTOMS: a 500 "There has been a critical error" = a REQUIRED param is missing (usually `setting`); an empty `[]` = wrong/extra filter params (send none, filter later). Once it returns jobs, you've confirmed the request — stop.
+
+When confident, return done with:
+{"found": true, "endpoint": "<full url>", "method": "POST|GET", "action": "<action name or null>", "required_params": ["setting", "nonce", ...], "param_sources": {"setting": "data-filters-settings attr on .xxx, html-unescaped", "nonce": "XxxAjax.nonce in page HTML"}, "job_shape": "<one line: jobs come back as JSON array of {ID,title,content-html with data-term...}>", "notes": "<anything the caller needs to build _fetch_all_jobs + filter>"}
+
+If you genuinely can't (e.g. needs JS execution / a real browser), return {"tool":"fail","reason":"..."}. Keep `summary` short."""
+
+
+def explore_site_task(url: str) -> str:
+    return f"Careers URL: {url}\n\nReverse-engineer how this page loads its jobs and return the request facts."
 
 
 def stage_system_prompt(stage: str) -> str:
