@@ -80,6 +80,24 @@ From doing 5 companies by hand first, then teaching the agent:
 - Each manual solve revealed a wrinkle the prompt then encoded: signature-in-HTML (Anthropic) → blind-API (OpenAI) → pagination (Netflix) → custom-endpoint-read-the-bundle (HRT) → same-ATS-different-params (Roblox `?content=true`).
 - **General rule:** you can't write good agent guidance for a task you haven't done yourself. Manual exploration *is* the prompt research.
 
+## 10. Prompt caching: append makes history cacheable; the BREAKPOINT makes it cached
+
+**Lesson:** an agent that re-sends its whole growing conversation every turn (ReAct is chat-like) hits the **input-tokens-per-minute rate limit** — we hit Anthropic Tier-1's 30K/min mid-`fetch_jobs` (the large Greenhouse JSON re-sent each turn). The fix is prompt caching, but two things must both be true:
+
+- **The history must be a STABLE PREFIX** — we append-only to `messages`, so prior turns never change → cacheable. (Necessary.)
+- **You must place a `cache_control` BREAKPOINT** — Anthropic caches only up to a breakpoint. We had one on the *system prompt* only; the *history* (the big part) was uncached and re-sent as fresh input. Adding a breakpoint on the **last message** each turn makes `[system + all prior messages]` cache. (Sufficient.) Append alone is necessary but NOT sufficient — you have to *point* the cache at the history.
+- **The rate limit math:** `counted = input_tokens + cache_creation` — cache **reads are EXCLUDED** ("excluding cache reads" in the console). So once history is a cache read, it's both ~10× cheaper (0.1×) AND free against the per-minute limit. Result: roblox went from 429 → peak 13.5K/30K.
+- **Caveat — cache WRITES still count:** the FIRST time a huge result enters context it's a write (1.25×, counted). So a single giant payload on one turn can still spike the limit; the deeper fix is to not pull more than you need into context (e.g. don't fetch full job descriptions when you only need departments/offices to filter).
+- **General rule:** for a re-sending agent loop, cache the history (breakpoint on the last message). It's the technique the rate-limit pricing is *designed* to reward — cheaper and unblocks the limit at once.
+
+## 11. Instrument before you optimize — you can't tune what you can't see
+
+**Lesson:** we *speculated* about which step blew the token budget; we couldn't confirm it until we printed the numbers. The run log (without `--d`) didn't even contain the large payloads (they went to the API, not stdout), so the log alone couldn't answer "tokens per step."
+
+- Added a per-call `[tokens] counted=… cache_read=… | ~X/30K in last 60s` line from the response's `usage` (input / cache_creation / cache_read / output) + a rolling-60s window.
+- That window IS the time-aware metric (a sliding 60s sum) — it shows the per-minute accumulation directly, so you *see* the exact step that approaches the limit, and *see* caching working (cache_read climbing while counted stays small).
+- **General rule:** add cheap observability (token usage, timing) before optimizing context/cost. The instrumentation turned "why is it 429ing?" from a guess into a measurement — and revealed the fix was already working (peak 13.5K), not that more cuts were needed.
+
 ---
 
 ## Cross-cutting principle

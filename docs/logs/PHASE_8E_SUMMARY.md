@@ -55,9 +55,18 @@ This pillar is already strong. Across 8C/8D the prompts were tuned **failure-dri
 
 ---
 
-## 3. Context engineering — BACKLOG (understood + partially built elsewhere)
+## 3. Context engineering — partially BUILT (history caching) + backlog (summarization)
 
-We did NOT build in-loop summarization for the discovery agent (its runs are short enough). But the mechanism is understood, and a version is **already built in the chat agent** (the Redis history summarizer, Phase 7). So this is backlog, not a gap.
+### ✅ BUILT: prompt-cache the conversation history (fixes the rate limit + cuts cost)
+ReAct re-sends the whole growing conversation every turn, so on **Anthropic Tier-1 (Sonnet 30K input-tokens/min)** a run hit a **429 mid-`fetch_jobs`** (the large Greenhouse JSON re-sent each turn). Fix:
+- Added a `cache_control` breakpoint on the **last message** each turn (we already cached the system prompt). Because we append-only, `[system + all prior messages]` is a stable prefix → cache hit next turn.
+- The re-sent history then counts as **cache READS** — 0.1× cost AND **excluded from the per-minute input limit** ("excluding cache reads"). Rate-limited input = `input_tokens + cache_creation`; reads are free.
+- **Measured:** roblox went from 429 → peak **13.5K/30K** in the rolling-60s window. ✅
+- **Caveat:** cache *writes* still count, so a single huge payload's FIRST appearance can still spike — the deeper fix is to not pull more than needed (e.g. avoid fetching full job descriptions when only departments/offices are needed to filter). → backlog.
+- Also added **token instrumentation**: per-call `[tokens] counted=… cache_read=… | ~X/30K in last 60s` (a sliding-60s window from `usage`) — so you SEE the per-minute accumulation + caching working. (Lesson: instrument before optimizing.)
+
+### BACKLOG: summarize-on-consume (reduce tokens at the source)
+Caching makes re-sends free, but the *first* arrival of a big result still counts. Summarize-on-consume reduces the *total*: after a tool result is consumed, compact it. Understood + a version is **already built in the chat agent** (the Redis history summarizer, Phase 7).
 
 ### Summarize-on-consume (the technique, with a concrete trace)
 
@@ -96,9 +105,12 @@ turn N+3  user → next input.  The LLM is now sent history where turn N+1
 
 ## Finalized scope for 8E
 
-**Build:**
+**Done:**
+- ✅ **`read_files([...])` batch read** (writes stay granular) — harness. Saves a round-trip in write_extractor.
+- ✅ **History caching** (cache_control breakpoint on the last message) + **token instrumentation** — context. Fixed the Tier-1 429; measured peak 13.5K/30K.
+
+**Still to build:**
 1. **`spawn_agent(task)` sub-agent** for site/bundle exploration in `fetch_jobs` — harness; THE headline (nested loop, isolated context, summary return). Keep the delegated task crisp + structured return (avoid the drift failure mode).
-2. **`read_files([...])` batch read** (writes stay granular) — harness; minor, quick.
 
 (grep/search dropped — the agent has no large codebase to navigate.)
 
@@ -111,7 +123,7 @@ turn N+3  user → next input.  The LLM is now sent history where turn N+1
 ---
 
 ## The one-sentence framing (for interviews / resume)
-> "I improved the agent across three pillars: **prompt** (failure-driven instruction tuning), **harness** (tool granularity — batch reads but granular writes like industry coding agents; a **sub-agent** for heavy exploration; a grep tool to read less), and **context** (summarize-on-consume to compact transient tool results — I'd learned from a trim that *dropped* content and caused re-fetches that you must *summarize*, not drop). The key insight: **context problems are often best solved in the harness** — prevent the bloat structurally (sub-agents) rather than clean it up."
+> "I improved the agent across three pillars: **prompt** (failure-driven instruction tuning), **harness** (tool granularity — batch reads but granular writes like industry coding agents; a **sub-agent** for heavy exploration), and **context** (I prompt-cached the conversation history to fix a Tier-1 rate-limit 429 — append-only history is a stable prefix, so a cache breakpoint on the last message turns the re-sent history into free cache reads, 0.1× cost and excluded from the per-minute limit; plus token instrumentation to *see* it; summarize-on-consume is the next lever). The key insight: **context problems are often best solved in the harness** — prevent the bloat structurally (sub-agents, caching) rather than clean it up."
 
 ---
 
