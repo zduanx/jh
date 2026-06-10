@@ -20,7 +20,7 @@ Phase 2L adds a "Force Ingestion" mode that:
 - Backend API: New `force` parameter in `/api/ingestion/start`
 - IngestionWorker: Pass `force` flag to CrawlerQueue messages
 - CrawlerWorker: Skip SimHash check when `force=true`, always proceed to S3+extraction
-- Run metadata: Store `force` flag for debugging/visibility
+- Run metadata: store the `force` flag in `run_metadata` **only when force=true** (`{"force": true}`); normal runs leave it empty — so a force run stays identifiable for debugging/visibility
 
 **Explicitly excluded**:
 - Force mode for individual companies (all-or-nothing)

@@ -45,13 +45,23 @@ This pillar is already strong. Across 8C/8D the prompts were tuned **failure-dri
 > system prompt (`EXPLORE_SITE_SYSTEM` — the WP/admin-ajax/`setting`-param expertise),
 > so the knowledge lives WHERE the work happens; the parent passes only the `url`.
 >
-> **Demonstrated end-to-end on HRT (2026-06-10):** fetch_jobs hit the decoy Greenhouse
-> board → "no public ATS" → called `explore_site(hrt_url)` → the explorer cracked the
-> WP `admin-ajax` endpoint + `setting`/`nonce` params in its OWN 10-step isolated
-> context → returned just `{endpoint, action, required_params}` → the parent wrote
-> `_fetch_all_jobs` (77 jobs → 9 filtered) with **the 20KB JS bundle NEVER entering the
-> parent context.** hrt onboarded + verified. Sub-agent output is `┊sub┊`-prefixed +
-> token-instrumented so its cost is distinguishable from the parent's.
+> **Why HRT is the hard case:** its careers page only advertises a Greenhouse board
+> `hrttalentcommunity` — which is a **DECOY (3 fake "talent community" entries)**. The
+> *real* 77-job source is HIDDEN: it's reachable BOTH via a custom WordPress
+> `admin-ajax.php` endpoint (needs reading the JS bundle + a `setting` DOM param) AND via
+> a non-obvious second Greenhouse board `wehrtyou` (a board name NOT on the page, NOT the
+> company slug). So the demonstrable skill is **isolating an unknown real source past a
+> decoy** — deep exploration either way.
+>
+> **Demonstrated end-to-end on HRT (2026-06-10):** fetch_jobs found the `hrttalentcommunity`
+> decoy → recognized 3 jobs ≠ real → delegated to `explore_site(hrt_url)` → the explorer
+> did the heavy reverse-engineering (page + 20KB JS bundle) in its OWN ~10-step **isolated
+> context**, returning just the compact facts → the parent wrote `_fetch_all_jobs` (77 jobs
+> → ~9 filtered) **with the 20KB bundle NEVER entering the parent context.** The exploration
+> — not the specific endpoint — is the point: across runs the agent converged on whichever
+> 77-job source it found (the custom WP endpoint in the sub-agent demo commit `4ed18cf`; the
+> `wehrtyou` Greenhouse board in a later run — the current `hrt.py`). Sub-agent output is
+> `┊sub┊`-prefixed + token-instrumented so its cost is distinguishable from the parent's.
 >
 > **Scope decision (important):** we delegate ONLY the narrow exploration sub-task, NOT
 > the whole fetch_jobs stage — because (1) the common ATS path is light (no bloat to
