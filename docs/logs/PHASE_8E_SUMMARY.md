@@ -1,6 +1,6 @@
 # Phase 8E: Prompt / Context / Harness Engineering
 
-**Status**: 📋 Planning (scope finalized — build harness items; context as backlog)
+**Status**: ✅ Completed (read_files + history caching + token instrumentation + dedicated sub-agent, demonstrated on HRT). Optional Tier-2 follow-up: quantify the token reduction.
 **Date**: June 9, 2026
 **Goal**: Systematic improvement of the extractor-discovery agent across three dimensions — **prompt, context, harness**. 8C/8D proved the agent CAN do the task; 8E is about doing it *well* (fewer trials, leaner context, deeper understanding) and demonstrating the agent-engineering taxonomy explicitly.
 
@@ -39,7 +39,27 @@ This pillar is already strong. Across 8C/8D the prompts were tuned **failure-dri
 - A `read_files([paths])` tool returns them in ONE call → fewer round-trips (each turn re-sends the whole conversation, so cutting turns helps).
 - **Reads only — writes stay GRANULAR (one file per `write_file`).** This matches industry coding agents (Claude Code / Cursor / Aider): per-file writes preserve observability (`[step N]` UX), reviewability (git diff per file), the read-before-write guarantee, and error isolation. Batching writes trades those away; batching reads is low-risk (no side effects).
 
-### (b) Sub-agent — `spawn_agent(task) -> summary`  ← build (the most impressive item)
+### (b) Sub-agent — `explore_site(url) -> facts`  ✅ BUILT + DEMONSTRATED (the headline)
+> **Built as a DEDICATED sub-agent** (not a generic `spawn_agent(task)`). A concretely-
+> defined sub-task (reverse-engineer a custom careers site) gets its OWN specialized
+> system prompt (`EXPLORE_SITE_SYSTEM` — the WP/admin-ajax/`setting`-param expertise),
+> so the knowledge lives WHERE the work happens; the parent passes only the `url`.
+>
+> **Demonstrated end-to-end on HRT (2026-06-10):** fetch_jobs hit the decoy Greenhouse
+> board → "no public ATS" → called `explore_site(hrt_url)` → the explorer cracked the
+> WP `admin-ajax` endpoint + `setting`/`nonce` params in its OWN 10-step isolated
+> context → returned just `{endpoint, action, required_params}` → the parent wrote
+> `_fetch_all_jobs` (77 jobs → 9 filtered) with **the 20KB JS bundle NEVER entering the
+> parent context.** hrt onboarded + verified. Sub-agent output is `┊sub┊`-prefixed +
+> token-instrumented so its cost is distinguishable from the parent's.
+>
+> **Scope decision (important):** we delegate ONLY the narrow exploration sub-task, NOT
+> the whole fetch_jobs stage — because (1) the common ATS path is light (no bloat to
+> isolate), (2) fetch_jobs produces the code artifact the main agent owns, (3) a narrow
+> task drifts less than a varied one, (4) "explore a custom site" is concrete+recurring
+> (a good sub-agent) while "do fetch_jobs" is varied (the main agent's job). *Delegate
+> the smallest, most concrete, most context-heavy chunk — not the whole step.*
+
 - A sub-agent is a **nested agent loop** with its OWN fresh context. The parent calls it like a tool; the parent's context receives only the sub-agent's **summary result**, never its internal trials.
 - **Why it matters:** it's the PREVENTIVE answer to context bloat — the heavy content never enters the parent context. (Contrast: summarize-on-consume is the *reactive* answer — clean up what's already there. Prevention > cleanup.) So a context problem is solved by a *harness* change.
 - **Where it helps here:** the `fetch_jobs` site/JS-bundle exploration (HRT re-read the 23KB bundle 7× → context bloat). A sub-agent: *"explore this site + bundle, return {endpoint, action, required_params}"* → reads the bundle in ITS context, returns 3 facts. The main agent never holds the 23KB.
@@ -103,22 +123,35 @@ turn N+3  user → next input.  The LLM is now sent history where turn N+1
 
 ---
 
-## Finalized scope for 8E
+## Finalized scope for 8E — DONE
 
 **Done:**
 - ✅ **`read_files([...])` batch read** (writes stay granular) — harness. Saves a round-trip in write_extractor.
 - ✅ **History caching** (cache_control breakpoint on the last message) + **token instrumentation** — context. Fixed the Tier-1 429; measured peak 13.5K/30K.
-
-**Still to build:**
-1. **`spawn_agent(task)` sub-agent** for site/bundle exploration in `fetch_jobs` — harness; THE headline (nested loop, isolated context, summary return). Keep the delegated task crisp + structured return (avoid the drift failure mode).
+- ✅ **Dedicated `explore_site` sub-agent** — harness; THE headline. Demonstrated end-to-end on HRT (the 20KB bundle stayed in the sub-agent's isolated context; the parent got only the facts).
 
 (grep/search dropped — the agent has no large codebase to navigate.)
 
-**Backlog (documented, understood, partially built in the chat agent):**
-- Summarize-on-consume context compaction (trace above) — add when runs get long.
-- Working-memory scratchpad; retrieval-not-preload.
-- Agent eval harness (5 companies as golden cases — regression-safe prompt iteration).
-- Registry auto-discovery (fixes the parallel-write race + "forgot to register").
+**Backlog (documented, understood — not needed for the current scope):**
+- Summarize-on-consume context compaction — largely SUPERSEDED by caching + the sub-agent (the main bloat case, HRT's bundle, is now isolated). Add only if runs grow much longer.
+- Working-memory scratchpad; retrieval-not-preload — overkill for this agent.
+- Agent eval harness (5 companies as golden cases — regression-safe prompt iteration) — a worthwhile *separate* effort ("8F"), not core 8E.
+- Registry auto-discovery (fixes the parallel-write race) — minor, de-prioritized.
+
+---
+
+## Next (Tier 2): token-reduction measurement — the resume artifact
+A controlled before/after experiment to QUANTIFY the caching + sub-agent wins (the
+instrumentation is already built; just sum `counted` tokens per run). Run the SAME
+hard company (HRT) through three configs:
+1. **Baseline** — caching OFF, sub-agent OFF (bundle re-sent uncached every turn)
+2. **+ history caching** — re-sent history becomes free cache reads
+3. **+ sub-agent** (current) — bundle never enters the parent context
+
+→ a small table: "Token usage per onboard (HRT, the hard case): baseline X → +caching Y
+→ +sub-agent Z = N% reduction." This is a concrete, credible resume number (token
+efficiency = the core economic lever of AI products). Needs Tier 2 to run the 3 HRT
+passes without the 30K/min 429 friction.
 
 ---
 
