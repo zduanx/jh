@@ -339,7 +339,7 @@ jgit() {
 # Mirrors jpushapi's discipline (git clean-state check, confirm, build, deploy,
 # verify), minus backend-only steps (Python codegen, template/env generation).
 # Requires chat/samconfig.toml (cp from chat/samconfig.toml.example first).
-jpushchat() {
+jpushchat_sam() {
     echo -e "${BLUE}=== Deploying Chat (Node) Lambda → jh-chat-stack ===${NC}"
     echo ""
 
@@ -1636,7 +1636,7 @@ jdbpush() {
 # Show help on load
 echo -e "${GREEN}Job Hunter dev shortcuts loaded!${NC} Type ${BLUE}jhelp${NC} for commands."
 # Deploy backend to AWS Lambda via SAM
-jpushapi() {
+jpushapi_sam() {
     echo -e "${BLUE}=== Deploying Backend to AWS ===${NC}"
     echo ""
 
@@ -1999,3 +1999,6 @@ jcompany() {
     cd "$JH_ROOT" || return 1
     return $rc
 }
+
+# Phase 9A: Terraform-based deploy commands (jpushapi/jpushchat/jtfplan)
+[ -f "$JH_ROOT/dev_terraform.sh" ] && source "$JH_ROOT/dev_terraform.sh"
