@@ -2002,3 +2002,6 @@ jcompany() {
 
 # Phase 9A: Terraform-based deploy commands (jpushapi/jpushchat/jtfplan)
 [ -f "$JH_ROOT/dev_terraform.sh" ] && source "$JH_ROOT/dev_terraform.sh"
+
+# Phase 9C: Branch/PR workflow commands (jbranch/jsave/jpr/jland/jprstatus/jprco)
+[ -f "$JH_ROOT/dev_git.sh" ] && source "$JH_ROOT/dev_git.sh"
