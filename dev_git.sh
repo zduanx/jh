@@ -41,13 +41,29 @@ _jh_current_pr() {
 
 # --- commands --------------------------------------------------------------
 
-# jbranch "name" — start fresh: clean dirty tree, pull main, create+switch branch.
+# jbranch "name" — create+switch a branch off fresh main.
+# If you've already edited on main, those edits are CARRIED onto the new branch
+# (git checkout -b moves uncommitted changes with you) — nothing is reverted.
+# (Dirty on a non-main branch → prompt stash/commit/abort, since pulling main first
+#  would strand them.)
 jbranch() {
   local name="$1"
   [ -z "$name" ] && { echo -e "${RED:-}✗ usage: jbranch \"branch-name\"${NC:-}"; return 1; }
   cd "$_JH_GIT_ROOT" || return 1
-  _jh_handle_dirty || return 1
   echo -e "${BLUE:-}=== jbranch: $name ===${NC:-}"
+
+  local cur; cur="$(git branch --show-current)"
+  if _jh_dirty && [ "$cur" = "main" ]; then
+    # On main with edits → carry them straight onto the new branch (no pull; that would
+    # strand the edits). Branches off your CURRENT main, edits come along.
+    echo -e "${YELLOW:-}  carrying your uncommitted edits from main onto '$name'${NC:-}"
+    git checkout -b "$name" 2>&1 | tail -1 || return 1
+    echo -e "${GREEN:-}✓ on '$name' (edits carried over — jsave to commit)${NC:-}"
+    return 0
+  fi
+
+  # Clean (or dirty on another branch): start off FRESH main.
+  _jh_handle_dirty || return 1
   git checkout main >/dev/null 2>&1 || { echo -e "${RED:-}✗ can't switch to main${NC:-}"; return 1; }
   git pull --ff-only origin main 2>&1 | tail -1
   git checkout -b "$name" 2>&1 | tail -1 || return 1
@@ -55,15 +71,28 @@ jbranch() {
 }
 
 # jsave "msg" — commit current work; auto-push if a PR already exists.
+# Smart guard: if you forgot to jbranch and are on main, it OFFERS to auto-create a
+# branch and commit there (carrying your edits) — so a forgotten jbranch isn't a dead end.
 jsave() {
   local msg="$1"
   [ -z "$msg" ] && { echo -e "${RED:-}✗ usage: jsave \"commit message\"${NC:-}"; return 1; }
   cd "$_JH_GIT_ROOT" || return 1
   local branch; branch="$(git branch --show-current)"
   if [ "$branch" = "main" ]; then
-    echo -e "${YELLOW:-}  ⚠ you're on main. jsave is for branch work — run jbranch first,${NC:-}"
-    echo -e "${YELLOW:-}    or use jgit for an intentional direct-to-main commit.${NC:-}"
-    return 1
+    echo -e "${YELLOW:-}  ⚠ you're on main (forgot jbranch?).${NC:-}"
+    echo -n "  Auto-create a branch for this + commit there? [Y]es / [g]it-to-main / [n]o: "
+    read -r ans
+    case "$ans" in
+      ""|y|Y)
+        # slugify the message into a branch name
+        local slug; slug="$(echo "$msg" | tr '[:upper:] ' '[:lower:]-' | tr -cd 'a-z0-9-' | cut -c1-40)"
+        [ -z "$slug" ] && slug="wip"
+        jbranch "work/$slug" || return 1   # carries the edits onto the new branch
+        branch="$(git branch --show-current)"
+        ;;
+      g|G) echo "  → using jgit (direct to main)"; jgit --m "$msg"; return $? ;;
+      *)   echo "  aborted"; return 1 ;;
+    esac
   fi
   git add -A
   if git diff --cached --quiet; then echo "  nothing to commit"; return 0; fi
