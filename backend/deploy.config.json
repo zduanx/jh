@@ -1,0 +1,17 @@
+{
+  "stack": "backend",
+  "target": "terraform",
+  "terraform_dir": "backend/terraform",
+  "secrets": [
+    "DATABASE_URL",
+    "TEST_DATABASE_URL",
+    "SECRET_KEY",
+    "GOOGLE_CLIENT_ID",
+    "GOOGLE_CLIENT_SECRET",
+    "MCP_SERVICE_TOKEN",
+    "VOYAGE_API_KEY",
+    "ALLOWED_EMAILS",
+    "ALLOWED_ORIGINS"
+  ],
+  "_comment": "Per-stack deploy manifest (Phase 9B). target=terraform → CD runs `terraform apply` in terraform_dir; secrets[] = the env-var names this stack needs (UPPERCASE; map to TF_VAR_<lowercase>). tfvars.sh reads this to grep the right PROD_VALUEs from the unified root .env.local; 9E's CD reads it to inject the right GitHub Secrets. Single source of truth for 'which stack needs which secrets + where it deploys'."
+}

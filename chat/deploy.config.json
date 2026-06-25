@@ -1,0 +1,14 @@
+{
+  "stack": "chat",
+  "target": "terraform",
+  "terraform_dir": "chat/terraform",
+  "secrets": [
+    "SECRET_KEY",
+    "ANTHROPIC_API_KEY",
+    "MCP_SERVICE_TOKEN",
+    "MCP_SERVER_URL",
+    "UPSTASH_REDIS_REST_URL",
+    "UPSTASH_REDIS_REST_TOKEN"
+  ],
+  "_comment": "target=terraform → CD runs `terraform apply` in terraform_dir. SECRET_KEY and MCP_SERVICE_TOKEN are shared with backend (same value in the unified root .env.local). secrets[] = env-var names → TF_VAR_<lowercase>."
+}

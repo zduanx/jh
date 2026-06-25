@@ -1,117 +1,108 @@
-# Phase 9D: Continuous Deployment (Terraform via GitHub Actions)
+# Phase 9D: Continuous Integration (GitHub Actions)
 
 **Status**: 📋 Planning
-**Date**: June 25, 2026
-**Goal**: Run **`terraform apply`** in a GitHub Actions workflow on merge to `main` — deploying the backend + chat stacks automatically, **gated** by a manual approval, with `TF_VAR_*` from GitHub Secrets and a **post-deploy smoke test + rollback**.
+**Date**: June 24, 2026
+**Goal**: Run the backend (pytest) + chat (Jest) test suites automatically on every push/PR — a **secret-free, free-tier** CI gate that blocks broken code from reaching `main`.
 
-> The capstone of Phase 9. Builds on **9A** (deployment is now Terraform — `terraform apply`
-> deploys infra *and* code), **9B** (the merge that triggers it), and **9C** (CI green gates the
-> PR). This is the only sub-phase that touches **production** and uses **secrets**.
+> Builds on **9B** (the branch/PR flow). The CI checks produced here are what `jprstatus`
+> displays and what `jland` + branch protection gate on. **No secrets, no AWS, no
+> production** — runs against mocks + a throwaway Postgres in the runner.
 
 ---
 
 ## Overview
 
-Because 9A migrated deployment to **Terraform**, CD becomes simple and standard: on merge to
-`main`, GitHub Actions runs **`terraform apply`** for each stack. This is the industry-standard
-IaC CD pattern (`plan` on PR for review, `apply` on merge), and it's far cleaner than the old
-SAM-generator pipeline would have been.
+The repo has ~20 real test files (backend pytest, chat Jest) but **no automated CI** — tests only
+run when someone remembers to run them locally. 9C adds `.github/workflows/ci.yml`: on every push
+and PR to `main`, GitHub spins up a fresh runner, runs the suites, and reports pass/fail. Combined
+with **branch protection** on `main`, a red PR cannot be merged.
 
-The friction we hit migrating locally (Docker for Lambda builds, ARM-vs-x86 wheels, the
-`--platform` dance) **disappears in CD**: the GitHub runner is **Linux x86_64**, so the Lambda
-module's `pip install` produces correct wheels natively, and Docker is pre-installed. So the
-local environment was the *hard* case; CD is the easy one.
+The defining constraint is **CI must be free, fast, deterministic, and secret-free**. Two design
+decisions enforce this:
 
-The frontend is **already CD** (Vercel auto-deploys on push). The new work is the backend + chat
-Terraform apply workflows.
-
-Deploys are **gated** (a GitHub Environment with a required reviewer) — on merge, the workflow
-runs `terraform plan`, waits for approval, then `apply`. After apply, a **smoke test** hits
-`/health` (+ representative endpoints); on failure the workflow **rolls back** (re-apply the
-previous known-good package / Terraform state) so a bad deploy never stays live.
+1. **Database tests get a runner-local Postgres, not a real one.** The 5 db/mcp_server tests are
+   *integration* tests — they hit a real Postgres+pgvector on purpose (real SQL, real Alembic
+   migrations, real vector search; none of which can be mocked). CI spins up a **Postgres service
+   container inside the runner**, so `TEST_DATABASE_URL` is a hardcoded `localhost` value — **not a
+   secret.** The rest of the suite is fully mocked.
+2. **Paid/LLM code is excluded from CI.** The only money-burning scripts (`eval/run_eval*.py`,
+   the discovery agent) are *not* test files (not collected by pytest) and are **never** added to
+   the auto-run CI. They stay behind the manual `workflow_dispatch` / local path. So CI never spends
+   API credits.
 
 **Included in this phase**:
-- `.github/workflows/deploy-backend.yml` + `deploy-chat.yml` — on merge to `main`:
-  `terraform init` → `plan` → (gated approval) → `apply`
-- **`TF_VAR_*` from GitHub Secrets** (`TF_VAR_database_url`, etc.) — the CD analogue of the local
-  `tfvars.sh` (which reads `.env.local`); 9E centralizes the source
-- **AWS creds** via GitHub Secrets (or OIDC) for Terraform + the S3 state backend
-- **GitHub Environments** (`backend`, `chat`) with required-reviewer gates
-- **Post-deploy smoke test + rollback** (deploy is self-verifying)
-- `plan`-on-PR: post the Terraform plan as a PR comment for review (infra diff, like code)
-- New ADR: **ADR-036** (Terraform CD: `apply` on merge, gated, smoke-test + rollback)
+- `.github/workflows/ci.yml`:
+  - Triggers on `push` + `pull_request` to `main`
+  - **backend job**: Postgres+pgvector service container → run Alembic migrations → `pytest backend/`
+  - **chat job**: `npm test` (Jest)
+  - **frontend job**: `npm run build` (build check)
+  - Explicitly scoped to `__tests__/` — excludes `eval/` and the agent
+- **Branch protection** on `main` (one-time GitHub UI step) — require the CI check green to merge
+- New ADR: **ADR-037** (CI design: secret-free, Postgres-in-runner, paid-code excluded)
 
 **Explicitly excluded**:
-- Frontend deploy work — already CD via Vercel
-- Fully-automatic (ungated) prod deploys — kept gated
-- Re-implementing deploy logic — CD reuses the *same* `.tf` + module the local `jpushapi` uses
+- Any deploy (that's 9E)
+- Any secret in CI (the whole point — `localhost` Postgres, mocked externals)
+- Path-based selective test runs (the suite is small/fast; run all)
+- Linting/formatting gates (could be added later; not in scope)
 
 ---
 
 ## Key Achievements (planned)
 
-### 1. Terraform apply workflows (per stack)
-- Trigger: `push` to `main` (on merge), targeting the stack's Environment (gated)
-- Steps: `terraform init` (S3 backend) → `plan` → approval → `apply` → smoke test
-- The Lambda module builds in the runner (Linux → no Docker/arch friction)
-- Reference: **ADR-036**
+### 1. The CI workflow
+- Three parallel jobs (backend / chat / frontend), each on a clean Ubuntu runner
+- backend: `services: postgres` (with pgvector) → migrate → `pytest backend/`
+- chat: install + `npm test`
+- frontend: install + `npm run build`
+- Reference: **ADR-037**
 
-### 2. Secrets via GitHub Secrets → TF_VAR_*
-- `TF_VAR_database_url`, `TF_VAR_secret_key`, … set from GitHub Secrets in the workflow `env`
-- Same variables the local `tfvars.sh` exports from `.env.local` — Terraform reads `var.*`
-  identically whether the value came from local env or GitHub Secrets
-- AWS creds (for apply + S3 state) also from Secrets / OIDC
+### 2. Secret-free by construction
+- `TEST_DATABASE_URL` = `postgresql://postgres:postgres@localhost:5432/test` (hardcoded, non-secret)
+- All external services (LLM, AWS, Voyage) are mocked in the included tests
+- The one live LLM test auto-skips without `ANTHROPIC_API_KEY` (which CI does not provide)
+- `eval/` paid scripts are not pytest-collected → never run in CI
 
-### 3. plan-on-PR + gated apply
-- On the PR: `terraform plan` posted as a comment (the infra diff, reviewable like code)
-- On merge: gated `apply` (required reviewer on the Environment) — preserves human control
-
-### 4. Deploy → smoke-test → rollback
-- After `apply`: assert `/health` (+ representative endpoints) return 200
-- On failure: roll back (re-apply prior state / known-good package), exit non-zero
-
-### 5. The full pipeline
-```
-jbranch → jsave → jpr → [CI 9C: tests + terraform plan on PR] → review → jland (merge)
-                                                                    ├─ Vercel auto-deploys frontend
-                                                                    ├─ deploy-backend.yml → (approve) → terraform apply → smoke → ✓/rollback
-                                                                    └─ deploy-chat.yml    → (approve) → terraform apply → smoke → ✓/rollback
-```
+### 3. The merge gate (turns CI from "report" into "enforce")
+- Branch protection on `main`: "require status checks to pass before merging"
+- Now `jland` (9B) is backed server-side — a red PR's merge button is disabled
+- A failing PR can sit on its branch but cannot reach `main`
 
 ---
 
 ## Highlights
 
-- **CD reuses 9A's Terraform unchanged** — the same `.tf` + lambda module the local `jpushapi`
-  runs; CD just runs `terraform apply` in a runner with `TF_VAR_*` from Secrets. No new deploy code.
-- **The local environment was the hard case** — Docker/ARM/`--platform` friction we fought in 9A
-  is absent in CD (Linux runner). So the painful local migration *de-risks* CD.
-- **`terraform apply` deploying every run is correct for CD** — each CD run is a merge (an
-  intended change); we want the merged code deployed. (This is why 9A chose *not* to
-  `ignore_source_code_hash`.)
-- **State is shared via S3** — the runner reads the same `s3://jh-terraform-state-…` state the
-  local deploys use, so CD and local stay consistent.
+- **CI runs *after* the commit, not before.** Pushing doesn't block — CI reports pass/fail on the
+  commit/PR. The *enforcement* point is the **PR merge** (via branch protection), which is why the
+  branch/PR flow (9B) is the prerequisite for CI to actually protect `main`.
+- **Integration tests need a DB, not a secret.** Spinning up Postgres *in the runner* gives each
+  run a fresh, isolated database with a public `localhost` URL — keeping CI secret-free while still
+  exercising the real SQL/pgvector path the db/mcp tests require.
+- **Cost safety is structural, not incidental.** The paid code (`eval/`, agent) is excluded *by
+  not being test files* and *by never being added to the workflow* — so an accidental push can't
+  trigger an API-spend. Paid work stays manual (`workflow_dispatch`), write-access-gated.
+- **Free on minutes.** Public repo → unlimited Actions minutes; private → 2,000/month (≈400 runs
+  at ~5 min/run — far beyond solo usage). Either way, effectively free.
 
 ---
 
 ## Testing & Validation (planned)
 
-**Manual**:
-- [ ] PR shows `terraform plan` as a comment (infra diff reviewable)
-- [ ] Merge a trivial backend change → `deploy-backend.yml` runs, waits at the approval gate
-- [ ] Approve → `terraform apply` → backend Lambdas updated; smoke test `/health` 200
-- [ ] Force a bad deploy → smoke fails → rollback → prod healthy, workflow exits non-zero
-- [ ] Chat change → `deploy-chat.yml` gated → approve → chat updated → smoke ✓
-- [ ] Frontend still auto-deploys via Vercel
-- [ ] Confirm Terraform state in S3 stays consistent between CD and local runs
+**Manual** (prove the gate works):
+- [ ] Push a branch → CI runs, all suites green
+- [ ] Open a PR with a deliberately failing test → CI red → merge button blocked
+- [ ] `jprstatus` (9B) now shows real check results
+- [ ] Fix the test, push → CI re-runs green → merge unblocked
+- [ ] Confirm no `ANTHROPIC_API_KEY` / AWS creds are referenced anywhere in `ci.yml`
+- [ ] Confirm `eval/` and the agent are not invoked by the workflow
 
 ---
 
 ## Next Steps → Phase 9E
 
-Secret re-architecture — replace the per-stack `.env.local` PROD_VALUE source (`tfvars.sh`) with
-a **root `.env.local`** + a `jsyncsecrets` push to **GitHub Secrets**, so local and CD pull from
-one consistent place. (9E is the original 9A scope, deferred behind the Terraform migration.)
+Continuous Deployment — run **`terraform apply`** (the deploy mechanism from 9A) in GitHub
+Actions on merge to `main`, with `TF_VAR_*` from GitHub Secrets. CI (9D) gates the PR; CD (9E)
+ships the merged result. The frontend is already CD via Vercel's GitHub integration.
 
 ---
 
@@ -119,34 +110,29 @@ one consistent place. (9E is the original 9A scope, deferred behind the Terrafor
 
 ```
 jh/
-├── .github/workflows/
-│   ├── deploy-backend.yml   # merge → init → plan → (gated) apply → smoke/rollback
-│   └── deploy-chat.yml
-├── backend/terraform/       # the .tf CD runs (from 9A)
-└── chat/terraform/
+└── .github/
+    └── workflows/
+        └── ci.yml    # push/PR → backend pytest (+ runner Postgres) | chat Jest | frontend build
 ```
 
 **Key files**:
-- [backend/terraform/](../../backend/terraform/) — the Terraform CD applies (unchanged from 9A)
-- [tfvars.sh](../../tfvars.sh) — local TF_VAR source; CD uses GitHub Secrets instead
+- `.github/workflows/ci.yml` — the CI workflow (new)
+- [backend/db/__tests__/conftest.py](../../backend/db/__tests__/conftest.py) — the DB fixture CI satisfies via runner Postgres
 
 ---
 
 ## Key Learnings
 
-- **Terraform makes CD trivial** — `plan` on PR + gated `apply` on merge is the standard IaC CD
-  pattern, and 9A's migration set it up for free. The hard part was 9A (the migration), not 9D.
-- **CD's Linux runner removes local packaging pain** — the cross-platform Lambda-build friction
-  is a local-dev problem, not a CD one.
-- **Secret injection lives in the deploy workflow, never in the PR flow** — `jpr`/`jland` (9B)
-  touch no secrets; CD sets `TF_VAR_*` from GitHub Secrets at apply time.
-- **A deploy isn't done until verified** — smoke-test + rollback turns `terraform apply` into a
-  *safe* deploy (the pipeline catches a bad deploy, not a user hitting a 500).
+- **CI reports; branch protection enforces.** Tests run after the commit; the merge gate is what
+  keeps `main` green — which is why the PR flow (9B) had to come first.
+- **A database is not a secret.** Integration tests need a real Postgres, but a runner-local one
+  has a public `localhost` URL → CI stays secret-free. Reserve real secrets for deploy (9E).
+- **Cost control belongs in CI scope.** Keep paid/slow/non-deterministic work (LLM eval, the agent)
+  out of auto-CI and behind manual, write-access-gated triggers — so automated runs are always free.
 
 ---
 
 ## References
 
-- Terraform in GitHub Actions: https://developer.hashicorp.com/terraform/tutorials/automation/github-actions
-- GitHub Environments + required reviewers: https://docs.github.com/actions/deployment/targeting-different-environments/using-environments-for-deployment
-- setup-terraform action: https://github.com/hashicorp/setup-terraform
+- GitHub Actions services (Postgres in runner): https://docs.github.com/actions/using-containerized-services/creating-postgresql-service-containers
+- Branch protection rules: https://docs.github.com/repositories/configuring-branches-and-merges-in-your-repository/managing-protected-branches

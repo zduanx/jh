@@ -1,109 +1,97 @@
-# Phase 9B: Branch/PR Workflow (`dev.sh` commands)
+# Phase 9B: Secret Re-Architecture (root `.env.local` + GitHub Secrets → TF_VAR)
 
 **Status**: 📋 Planning
-**Date**: June 24, 2026
-**Goal**: Replace direct-to-`main` commits (`jgit`) with a native-GitHub branch→PR→merge workflow, wrapped in short `dev.sh` commands — so every change goes through a reviewable, CI-gateable PR.
+**Date**: June 25, 2026
+**Goal**: Replace the per-stack `.env.local` PROD_VALUE source (read by `tfvars.sh` today) with a **single root `.env.local`** as the local source of truth and **GitHub Secrets** as the CI/CD source — both feeding Terraform's `TF_VAR_*` consistently.
 
-> Independent of **9A** (Terraform migration) — pure local git/PR tooling, no secrets, no
-> AWS, no production. The CI *gate* lights up in **9C**; 9B's commands are built to no-op
-> gracefully until then. (Phase 9: 9A Terraform → 9B PR flow → 9C CI → 9D CD → 9E secrets.)
+> The original 9A-scope secret work, now 9B (after the Terraform migration took 9A). Adapts to
+> Terraform: clean, consistent TF_VAR_* for local (tfvars.sh) and CD (GitHub Secrets).
+> (the new 9A). It now adapts to Terraform: the target is clean, consistent `TF_VAR_*` for both
+> local (`tfvars.sh`) and CD (9D's GitHub-Secrets workflow).
 
 ---
 
 ## Overview
 
-The project currently commits straight to `main` via `jgit`. That works solo but has no review
-gate and no place for CI to block bad changes. 9B introduces the **native-GitHub model**
-(Option A, chosen over Meta-style stacked diffs for solo simplicity): **one branch = one PR =
-many commits**, squash-merged together. The commits stack incrementally on a branch; the PR is
-the reviewable unit; merge folds them into `main` as one clean commit.
+Today (after 9A) secrets live in **per-stack `.env.local`** files, and `tfvars.sh` reads each
+stack's PROD_VALUEs to export `TF_VAR_*` for local `terraform apply`. That works but has the same
+fragility the original 9A flagged: each `.env.local` is the sole local copy, buried in the tree,
+and split across stacks. And for **CD (9D)**, secrets must also exist in **GitHub Secrets**.
 
-This is a deliberate translation of the Meta muscle-memory workflow (grab dev → commit → submit →
-land) onto GitHub primitives — *not* stacked PRs (which need extra tooling like Sapling/Graphite
-and don't pay off for a single developer).
+9E unifies the secret story around Terraform's `TF_VAR_*`:
 
-The commands wrap `git` + the GitHub CLI (`gh`). They are guarded and idempotent (safe to
-re-run), match the existing `dev.sh` conventions (color vars, `JH_ROOT`, status echoes), and
-**never silently lose uncommitted work** — `jbranch`/`jprco` dirty-check and offer
-stash/commit/abort before switching.
+- **Local**: a single **root `.env.local`** (the one local cache, branch-safe, copy-able) →
+  `tfvars.sh` reads it → exports `TF_VAR_*` for local deploys
+- **CI/CD (9D)**: **GitHub Secrets** → the workflow sets `TF_VAR_*` from them → `terraform apply`
+- **Sync**: `jsyncsecrets` pushes the root file's values to GitHub Secrets (one-way; GitHub
+  secrets are write-only)
+
+So the same `TF_VAR_x` is satisfied from the root `.env.local` locally and from GitHub Secrets in
+CD — Terraform's `var.x` doesn't care which; only the *source of the env var* differs per
+environment.
 
 **Included in this phase**:
-- `jbranch "name"` — dirty-check → pull fresh `main` → create+switch branch
-- `jsave "msg"` — commit (auto-push if a PR already exists for the branch)
-- `jpr "title"` — push branch + open a PR (`gh pr create`)
-- `jprstatus` — show the PR + its CI checks (the signal; no-ops cleanly pre-9C)
-- `jland [--f]` — CI-gated squash-merge + delete branch + back to fresh `main`
-- `jprco <N>` — checkout an existing PR (by number) to resume work on it
-- Update `DEV_SHORTCUTS.md`
+- A single **root `.env.local`** (merge the per-stack files; shared vars — `SECRET_KEY`,
+  `MCP_SERVICE_TOKEN` — dedupe to one definition)
+- Update **`tfvars.sh`** to read the root file (it currently reads per-stack `<stack>/.env.local`)
+- Update the **app loaders** that still read per-stack `.env.local` (backend `config/settings.py`,
+  `chat/local.js`) to the root file — verified to fall back to Lambda env vars in prod (unchanged)
+- **`jsyncsecrets`** — push the root file's PROD_VALUEs → GitHub Secrets (for 9D)
+- (Optional) **AWS Secrets Manager** as a durable source of truth + `jpullsecrets` to regenerate
+  the root cache — the "central store, pull on demand" model
+- New ADR: **ADR-037** (single local secret source → TF_VAR_*; GitHub Secrets for CD)
 
 **Explicitly excluded**:
-- Stacked PRs / Sapling / Graphite (Meta-style per-commit diffs) — deferred; not worth it solo
-- Branch *protection* setup (a one-time GitHub UI step) — documented in 9C where the CI gate exists
-- Auto-deploy on merge — that's 9D
+- Anything Terraform-deploy-related (done in 9A)
+- The CD workflow itself (9D) — 9E just makes the secret *source* consistent for it
 
 ---
 
 ## Key Achievements (planned)
 
-### 1. The lifecycle commands
-| Command | Wraps | Role (Meta analogue) |
-|---------|-------|----------------------|
-| `jbranch "name"` | `git checkout main && pull && checkout -b` | grab a dev / start work |
-| `jsave "msg"` | `git add -A && commit` (+ push if PR exists) | commit (incrementally) |
-| `jpr "title"` | `git push -u` + `gh pr create` | submit for review |
-| `jprstatus` | `gh pr view` + `gh pr checks` | watch the CI signal |
-| `jland [--f]` | `gh pr merge --squash --delete-branch` + sync main | land / ship |
-| `jprco <N>` | `gh pr checkout N` | resume an existing PR |
+### 1. Root `.env.local` (one local source)
+- Merge `backend/`, `chat/`, `frontend/` `.env.local` into one root file (shared vars dedupe)
+- Branch-safe (sits above per-stack code), copy-able, single place to edit
+- Reference: **ADR-037**
 
-### 2. Safety: never lose uncommitted work
-- `jbranch` / `jprco` run `git status --porcelain` first; if dirty → prompt **stash / commit / abort**
-- Untracked files are flagged (carried along by git, but warned so they don't sneak into a PR)
-- `--f` on `jland` is an explicit override; without it, a non-green PR is refused client-side (and
-  branch protection refuses it server-side once 9C lands)
+### 2. tfvars.sh + app loaders read the root file
+- `tfvars.sh`: `<stack>/.env.local` → root `.env.local` (one source for all stacks' TF_VARs)
+- backend `config/settings.py` + `chat/local.js`: per-stack → root path (prod unaffected — both
+  fall back to Lambda env vars when the file is absent)
 
-### 3. Graceful pre-CI behavior
-- `jprstatus` + `jland`'s gate degrade cleanly when **no checks exist** (before 9C) — they don't
-  error; `jland` simply merges (same as today). The gate logic is present, waiting for 9C's CI to
-  produce checks.
+### 3. GitHub Secrets sync for CD
+- `jsyncsecrets` reads the root file's PROD_VALUEs → `gh secret set` (one-way push)
+- 9D's workflow then sets `TF_VAR_*` from those secrets
+
+### 4. (Optional) AWS Secrets Manager source of truth
+- Store secrets in SM; `jpullsecrets` regenerates the root `.env.local` (disposable cache)
+- The big-company "central store, pull on demand" model, right-sized
 
 ---
 
 ## Highlights
 
-- **`jsave` is separate from `jpr`** — matches the real lifecycle (commit repeatedly, submit once),
-  and fixes the ordering trap of "open a PR before there's anything to merge."
-- **`jsave` auto-pushes once a PR exists** → the PR updates automatically (the "amend" need, handled
-  without a separate command). New commits on the branch *are* the PR update.
-- **`jland` squash-merges** → the branch's N WIP commits collapse into one clean `main` commit
-  ("ship everything together," the Meta "land" semantics).
-- **One branch = one PR.** Not "multiple stacked diffs" — that's a different (Phabricator/Sapling)
-  model. On native GitHub, the branch is the unit and its commits merge as a whole.
-- **Prereq: `gh` CLI** (`brew install gh && gh auth login`) — the `jpr`/`jland`/`jprstatus`/`jprco`
-  commands wrap it. `jbranch`/`jsave` are pure git and work without it.
+- **Terraform unifies the consumer**: both local and CD satisfy the same `TF_VAR_*`, so the only
+  thing 9E changes is *where the env var's value comes from* (root file vs GitHub Secrets) — the
+  `.tf` and `var.*` declarations are identical across environments.
+- **Secrets in three homes, one value each** — local (root `.env.local`), CI/CD (GitHub Secrets),
+  prod runtime (Lambda env vars, set by Terraform from `TF_VAR_*`). 9E makes the *local* one a
+  single file and adds the *sync* to GitHub.
+- **One-way sync only** — `.env.local` (or AWS SM) is the source; pushed to GitHub Secrets (which
+  can't be read back). Never sync down.
 
 ---
 
 ## Testing & Validation (planned)
 
-**Manual** (end-to-end loop on a throwaway branch):
-- [ ] `jbranch test/x` off a clean tree → on new branch, branched from fresh main
-- [ ] `jbranch` with a dirty tree → prompts stash/commit/abort (no silent carry)
-- [ ] `jsave "wip"` ×2 → two commits on the branch
-- [ ] `jpr "Test"` → PR opened, URL printed; re-running reports the existing PR (idempotent)
-- [ ] `jsave` after `jpr` → auto-pushes, PR updates
-- [ ] `jprstatus` → shows the PR (and "no checks" pre-9C, without erroring)
-- [ ] `jprco <N>` from a clean tree → checks out that PR
-- [ ] `jland` → squash-merges, deletes branch, returns to fresh main
-- [ ] Switching branches never touches the root `.env.local` (9A win, re-verified)
-
----
-
-## Next Steps → Phase 9C
-
-The CI workflow (`.github/workflows/ci.yml`) — runs the test suites on every push/PR. Once it
-exists, `jprstatus` shows real check results and `jland`'s gate (plus branch protection) actually
-blocks merging red PRs. The commands built here need no changes — the CI just populates the
-checks they already read.
+**Manual**:
+- [ ] `tfvars.sh backend` loads `TF_VAR_*` from the **root** `.env.local`; `terraform plan` clean
+- [ ] `tfvars.sh chat` likewise
+- [ ] Backend + chat boot locally reading the root `.env.local`
+- [ ] `jpushapi` / `jpushchat` deploy using the root-file TF_VARs
+- [ ] `jsyncsecrets` → values present in GitHub Secrets (`gh secret list`)
+- [ ] Delete root `.env.local` → (if SM) `jpullsecrets` regenerates it
+- [ ] Switching git branches never disturbs the root `.env.local`
 
 ---
 
@@ -111,31 +99,33 @@ checks they already read.
 
 ```
 jh/
-└── dev.sh    # jbranch, jsave, jpr, jprstatus, jland, jprco
-                (+ existing jgit kept for quick main-direct work)
-DEV_SHORTCUTS.md  # commands table updated
+├── .env.local              # ROOT: single local secret source (gitignored, branch-safe)
+├── tfvars.sh               # reads root .env.local → exports TF_VAR_*
+├── dev_terraform.sh        # + jsyncsecrets (push to GitHub Secrets)
+├── backend/config/settings.py   # reads ../.env.local
+└── chat/local.js                # reads ../.env.local
 ```
 
 **Key files**:
-- [dev.sh](../../dev.sh) — the new branch/PR commands (matching existing `j*` conventions)
-- [DEV_SHORTCUTS.md](../../DEV_SHORTCUTS.md) — reference table
+- [tfvars.sh](../../tfvars.sh) — repoint to root `.env.local`
+- [backend/config/settings.py](../../backend/config/settings.py) · [chat/local.js](../../chat/local.js) — app loaders
 
 ---
 
 ## Key Learnings
 
-- **Branch vs PR:** a branch is an independent line of commits (pure git); a PR is a GitHub request
-  to merge one branch into another, wrapping it with a diff + CI + review. The branch *holds* the
-  work; the PR is the reviewed doorway into `main`.
-- **Meta vs GitHub models differ.** Meta = "commit = diff, diffs stack, land the stack" (needs
-  Sapling/Graphite to replicate on GitHub). Native GitHub = "branch = PR (many commits), merge one
-  PR." 9B chooses the native model and collapses a "stack" into one squash-merged PR.
-- **The commands must never silently misplace WIP** — the dirty-check + stash bridge is the core of
-  safe branch-switching.
+- **Terraform's `TF_VAR_*` is the unifying interface** — once deploy is Terraform (9A), the secret
+  question reduces to "how does each environment set `TF_VAR_*`": root file locally, GitHub Secrets
+  in CD. Same variable, different source.
+- **A secret file's location is a local-only concern** — prod reads Lambda env vars (set by
+  Terraform), so moving the local file to root is invisible to deploy.
+- **The big-company model, right-sized** — AWS Secrets Manager + `jpullsecrets` makes the local
+  file a disposable cache, but for solo scale the root `.env.local` + `jsyncsecrets` is enough.
 
 ---
 
 ## References
 
-- GitHub CLI (`gh`): https://cli.github.com/manual/
-- `gh pr create` / `gh pr merge`: https://cli.github.com/manual/gh_pr
+- Terraform `TF_VAR_` env vars: https://developer.hashicorp.com/terraform/language/values/variables#environment-variables
+- GitHub encrypted secrets: https://docs.github.com/actions/security-guides/encrypted-secrets
+- `gh secret set`: https://cli.github.com/manual/gh_secret_set

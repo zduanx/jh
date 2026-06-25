@@ -1,39 +1,59 @@
 #!/usr/bin/env bash
-# Load TF_VAR_* for a Terraform stack from that stack's .env.local PROD_VALUEs.
-# Phase 9A/9E: the `var.x` declared in variables.tf reads from TF_VAR_x, which we
-# export here from the matching `# X_PROD_VALUE=` comment in .env.local.
+# Load TF_VAR_* for a stack from the unified root .env.local PROD_VALUEs (Phase 9B).
+#
+# Generic, manifest-driven: the stack's deploy.config.json `secrets[]` lists which
+# env-var names it needs; we grep each one's `# NAME_PROD_VALUE=` from the unified
+# root .env.local and export it as TF_VAR_<lowercase>. So adding a var to a stack is
+# a deploy.config.json edit — no change here.
+#
+# Secrets source precedence:
+#   1. root .env.local        (Phase 9B unified source — preferred)
+#   2. <stack>/.env.local     (fallback, pre-9B per-stack files)
 #
 # Usage:  source tfvars.sh <stack>     (stack = backend | chat)
-# Then `terraform apply` (or jpushapi/jpushchat) picks up the exported TF_VAR_*.
-#
-# Maps TF_VAR_database_url  ->  # DATABASE_URL_PROD_VALUE=...  in <stack>/.env.local.
+# Then `terraform apply` (jpushapi/jpushchat) picks up the exported TF_VAR_*.
 
 _jh_load_tfvars() {
   local stack="$1"
-  # This file lives at the repo root. Each stack co-locates its Terraform under
-  # <stack>/terraform/ and its secrets under <stack>/.env.local.
   local self="${BASH_SOURCE[0]:-${(%):-%x}}"
   local root; root="$(cd "$(dirname "$self")" && pwd)"
-  local envfile="$root/$stack/.env.local"
-  local varsfile="$root/$stack/terraform/variables.tf"
+  local manifest="$root/$stack/deploy.config.json"
 
-  if [ ! -f "$envfile" ]; then echo "✗ no $envfile" >&2; return 1; fi
-  if [ ! -f "$varsfile" ]; then echo "✗ no $varsfile" >&2; return 1; fi
+  if [ ! -f "$manifest" ]; then echo "✗ no $manifest" >&2; return 1; fi
 
-  local count=0 missing="" upper val
-  # for each `variable "x" {` in variables.tf, export TF_VAR_x from X_PROD_VALUE
-  while IFS= read -r tfvar; do
-    upper="$(echo "$tfvar" | tr '[:lower:]' '[:upper:]')"
-    val="$(grep "^# ${upper}_PROD_VALUE=" "$envfile" | head -1 | cut -d= -f2-)"
+  # Secrets file: prefer the unified root .env.local; fall back to the per-stack one.
+  local envfile
+  if [ -f "$root/.env.local" ]; then
+    envfile="$root/.env.local"
+  elif [ -f "$root/$stack/.env.local" ]; then
+    envfile="$root/$stack/.env.local"
+  else
+    echo "✗ no root .env.local or $stack/.env.local" >&2; return 1
+  fi
+
+  # The var names this stack needs come from deploy.config.json `secrets[]`.
+  # Parse with python if available (robust), else a grep fallback.
+  local names
+  if command -v python3 >/dev/null 2>&1; then
+    names="$(python3 -c "import json,sys; print('\n'.join(json.load(open('$manifest')).get('secrets',[])))" 2>/dev/null)"
+  else
+    names="$(grep -oE '"[A-Z_]+"' "$manifest" | tr -d '"')"
+  fi
+
+  local count=0 missing="" name val tfvar
+  while IFS= read -r name; do
+    [ -z "$name" ] && continue
+    val="$(grep "^# ${name}_PROD_VALUE=" "$envfile" | head -1 | cut -d= -f2-)"
+    tfvar="$(echo "$name" | tr '[:upper:]' '[:lower:]')"
     if [ -n "$val" ]; then
       export "TF_VAR_${tfvar}=${val}"
       count=$((count + 1))
     else
       missing="$missing $tfvar"
     fi
-  done < <(grep -E '^variable ' "$varsfile" | grep -oE '"[a-z_]+"' | tr -d '"')
+  done <<< "$names"
 
-  echo "✓ loaded $count TF_VAR_* for '$stack'${missing:+ (no PROD_VALUE for:$missing — using defaults)}"
+  echo "✓ loaded $count TF_VAR_* for '$stack' from $(basename "$(dirname "$envfile")")/.env.local${missing:+ (no PROD_VALUE for:$missing — using defaults)}"
 }
 
 # allow `source tfvars.sh <stack>` to load immediately

@@ -1,0 +1,10 @@
+{
+  "stack": "frontend",
+  "target": "vercel",
+  "build_vars": [
+    "REACT_APP_API_URL",
+    "REACT_APP_CHAT_URL",
+    "REACT_APP_GOOGLE_CLIENT_ID"
+  ],
+  "_comment": "target=vercel → CD skips terraform/AWS entirely (Vercel auto-deploys on push via its GitHub integration). build_vars[] = REACT_APP_* baked into the static bundle at build time (public, shipped to the browser — NOT secrets). The orchestrator (CD / jpush*) branches on target: terraform → terraform apply; vercel → Vercel handles it."
+}

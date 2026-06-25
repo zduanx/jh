@@ -68,6 +68,20 @@ wheels for compiled libs like numpy/cryptography/psycopg2), packages, and deploy
 - `create_role=false` + `lambda_role` reuse the imported IAM roles;
   `use_existing_cloudwatch_log_group=true` adopts the existing log groups
 
+### 2b. Build once, deploy 5× (perf fix)
+- The backend stack has **5 Lambda functions** (API + 3 workers + MCP) sharing the **same
+  `backend/` code** (only the handler differs). Initially each function module built the
+  identical package independently → **5 parallel Docker builds** pegged the CPU and made
+  `jpushapi` take 3–5 min.
+- Fix: a single **`builder` module** (`create_function=false`) builds + uploads to S3 **once**;
+  the 5 function modules reference it via **`s3_existing_package`** (no rebuild). `jpushapi` →
+  **~27 s** (1 build). It also delivered the "compare + early-exit": the module's deterministic
+  **content hash** (path + content, patterns-filtered, **no timestamps/.pyc**) skips the build
+  when source is unchanged → `terraform apply` shows **"No changes."**
+- The co-located `terraform/` dir had to be **excluded from the build** (it was zipping
+  `.terraform/`'s ~665 MB of provider binaries) — for both stacks (backend patterns + chat
+  archive excludes).
+
 ### 3. S3 remote state + co-located stacks
 - State in `s3://jh-terraform-state-…/{backend,chat}/terraform.tfstate` (encrypted, versioned)
 - Terraform co-located under each stack (`backend/terraform/`, `chat/terraform/`)
