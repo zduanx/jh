@@ -7,8 +7,12 @@ data "archive_file" "chat" {
   source_dir  = "${path.module}/.."
   output_path = "${path.module}/.build/chat.zip"
   excludes = [
+    # the co-located terraform/ dir — incl. .terraform/ provider binaries (~665MB!)
+    # that's what pushed the package over Lambda's 50MB direct-upload limit (413).
+    "terraform",
     ".aws-sam", "node_modules/.cache", "__tests__",
-    ".env.local", ".env", "samconfig.toml", "*.test.js",
+    ".env.local", ".env", "samconfig.toml", "samconfig.toml.example",
+    "*.test.js", ".git", "server.log",
   ]
 }
 
