@@ -1,126 +1,146 @@
-# Phase 9B: Secret Re-Architecture (root `.env.local` + GitHub Secrets → TF_VAR)
+# Phase 9B: Secret Re-Architecture (unified root `.env.local` + manifest-driven config)
 
-**Status**: 📋 Planning
+**Status**: ✅ Completed
 **Date**: June 25, 2026
-**Goal**: Replace the per-stack `.env.local` PROD_VALUE source (read by `tfvars.sh` today) with a **single root `.env.local`** as the local source of truth and **GitHub Secrets** as the CI/CD source — both feeding Terraform's `TF_VAR_*` consistently.
+**Goal**: Collapse the three per-stack `.env.local` files into a **single unified root `.env.local`** (one source for local dev + tests + Terraform deploys), with a per-stack **`deploy.config.json`** manifest that orchestrates *which* secrets and *which* deploy target each stack uses.
 
-> The original 9A-scope secret work, now 9B (after the Terraform migration took 9A). Adapts to
-> Terraform: clean, consistent TF_VAR_* for local (tfvars.sh) and CD (GitHub Secrets).
-> (the new 9A). It now adapts to Terraform: the target is clean, consistent `TF_VAR_*` for both
-> local (`tfvars.sh`) and CD (9D's GitHub-Secrets workflow).
+> The original 9A-scope secret work, now **9B** (the Terraform migration took 9A). Adapts to
+> Terraform: one local secret source → `TF_VAR_*`, and a manifest that makes both `tfvars.sh`
+> and (later) 9E's CD generic. Phase 9: 9A Terraform → **9B secrets** → 9C branch/PR → 9D CI → 9E CD.
 
 ---
 
 ## Overview
 
-Today (after 9A) secrets live in **per-stack `.env.local`** files, and `tfvars.sh` reads each
-stack's PROD_VALUEs to export `TF_VAR_*` for local `terraform apply`. That works but has the same
-fragility the original 9A flagged: each `.env.local` is the sole local copy, buried in the tree,
-and split across stacks. And for **CD (9D)**, secrets must also exist in **GitHub Secrets**.
+After 9A, secrets lived in **three per-stack `.env.local`** files (`backend/`, `chat/`,
+`frontend/`), each the sole local copy, with shared vars (`SECRET_KEY`, `MCP_SERVICE_TOKEN`)
+**duplicated** across stacks. 9B unifies them into **one root `.env.local`** and makes the
+tooling read it through a per-stack **manifest** rather than hardcoded paths.
 
-9E unifies the secret story around Terraform's `TF_VAR_*`:
+The manifest — `deploy.config.json` per stack — is the **orchestrator**: it declares the stack's
+**`target`** (`terraform` vs `vercel`, so CD routes correctly) and its **`secrets[]`** (which
+env-var names the stack needs). `tfvars.sh` reads the manifest to grep exactly those vars'
+PROD_VALUEs from the root `.env.local` and export `TF_VAR_*` — so adding a var to a stack is a
+manifest edit, not a shell change. The same manifest will drive 9E's CD (which GitHub Secrets to
+inject, whether to run `terraform apply` or let Vercel handle it).
 
-- **Local**: a single **root `.env.local`** (the one local cache, branch-safe, copy-able) →
-  `tfvars.sh` reads it → exports `TF_VAR_*` for local deploys
-- **CI/CD (9D)**: **GitHub Secrets** → the workflow sets `TF_VAR_*` from them → `terraform apply`
-- **Sync**: `jsyncsecrets` pushes the root file's values to GitHub Secrets (one-way; GitHub
-  secrets are write-only)
-
-So the same `TF_VAR_x` is satisfied from the root `.env.local` locally and from GitHub Secrets in
-CD — Terraform's `var.x` doesn't care which; only the *source of the env var* differs per
-environment.
+Crucially, **every live reader** was repointed to the root file: the app loaders (so local dev
+uses it), the test conftest, and `tfvars.sh` (for deploy). Prod is unaffected — in Lambda no file
+exists, so Pydantic/dotenv read the Terraform-set OS env vars (unchanged).
 
 **Included in this phase**:
-- A single **root `.env.local`** (merge the per-stack files; shared vars — `SECRET_KEY`,
-  `MCP_SERVICE_TOKEN` — dedupe to one definition)
-- Update **`tfvars.sh`** to read the root file (it currently reads per-stack `<stack>/.env.local`)
-- Update the **app loaders** that still read per-stack `.env.local` (backend `config/settings.py`,
-  `chat/local.js`) to the root file — verified to fall back to Lambda env vars in prod (unchanged)
-- **`jsyncsecrets`** — push the root file's PROD_VALUEs → GitHub Secrets (for 9D)
-- (Optional) **AWS Secrets Manager** as a durable source of truth + `jpullsecrets` to regenerate
-  the root cache — the "central store, pull on demand" model
-- New ADR: **ADR-037** (single local secret source → TF_VAR_*; GitHub Secrets for CD)
+- **Unified root `.env.local`** — merged from the 3 per-stack files; shared vars deduped
+  (line-based dedup; gitignored, never committed)
+- Per-stack **`deploy.config.json`** — `{ target, secrets[] }` (or `build_vars[]` for frontend):
+  the orchestrator manifest (deploy routing + which secrets the stack needs)
+- **Generic `tfvars.sh`** — reads the manifest's `secrets[]`, greps from root `.env.local`,
+  exports `TF_VAR_*` (root preferred; per-stack fallback for safety)
+- **App loaders → root**: `backend/config/settings.py`, `chat/local.js`,
+  `backend/db/__tests__/conftest.py` prefer the root `.env.local` (legacy per-stack fallback)
+- **`jsyncsecrets`** — push the manifest's secrets (PROD_VALUEs from root) → GitHub Secrets as
+  `TF_VAR_*` (one-way; for 9E's CD)
+- Removed the per-stack `.env.local` files (backed up to gitignored `.env-backups-9b/`)
+- New ADR: **ADR-035** (unified root secret source + per-stack deploy.config.json manifest)
 
 **Explicitly excluded**:
-- Anything Terraform-deploy-related (done in 9A)
-- The CD workflow itself (9D) — 9E just makes the secret *source* consistent for it
+- AWS Secrets Manager / `jpullsecrets` — deferred (the root file + `jsyncsecrets` is enough at
+  solo scale); could be a future "central store, pull on demand" upgrade
+- Deleting the dead SAM deploy path (`jpushapi_sam`, `generate_*.py`) — unused (Terraform
+  replaced it), left in place to avoid risky edits to the 2000-line `dev.sh`
 
 ---
 
-## Key Achievements (planned)
+## Key Achievements
 
-### 1. Root `.env.local` (one local source)
-- Merge `backend/`, `chat/`, `frontend/` `.env.local` into one root file (shared vars dedupe)
-- Branch-safe (sits above per-stack code), copy-able, single place to edit
-- Reference: **ADR-037**
+### 1. Unified root `.env.local` (one source)
+- Merged the 3 per-stack files; `SECRET_KEY` + `MCP_SERVICE_TOKEN` (identical across stacks) appear
+  **once**. The root file feeds local dev, tests, and deploys.
+- Reference: **ADR-035**
 
-### 2. tfvars.sh + app loaders read the root file
-- `tfvars.sh`: `<stack>/.env.local` → root `.env.local` (one source for all stacks' TF_VARs)
-- backend `config/settings.py` + `chat/local.js`: per-stack → root path (prod unaffected — both
-  fall back to Lambda env vars when the file is absent)
+### 2. deploy.config.json — the orchestrator manifest
+- `backend` / `chat`: `{ target: "terraform", secrets: [VAR names...] }`
+- `frontend`: `{ target: "vercel", build_vars: [REACT_APP_*...] }`
+- Single source of truth for **which stack deploys where** + **which secrets it needs** — used by
+  `tfvars.sh` now and 9E's CD later (routing + secret injection)
 
-### 3. GitHub Secrets sync for CD
-- `jsyncsecrets` reads the root file's PROD_VALUEs → `gh secret set` (one-way push)
-- 9D's workflow then sets `TF_VAR_*` from those secrets
+### 3. Generic, manifest-driven `tfvars.sh`
+- Reads `deploy.config.json secrets[]` → greps each `# NAME_PROD_VALUE=` from root `.env.local` →
+  exports `TF_VAR_<lowercase>`. Adding a var = a manifest edit, no shell change.
+- Root preferred; per-stack fallback (so it worked before and after the merge)
 
-### 4. (Optional) AWS Secrets Manager source of truth
-- Store secrets in SM; `jpullsecrets` regenerates the root `.env.local` (disposable cache)
-- The big-company "central store, pull on demand" model, right-sized
+### 4. App loaders read the root file
+- `settings.py` / `local.js` / `conftest.py` prefer root `.env.local` → local dev + tests use the
+  unified source too (not just deploy). Prod unchanged (reads Lambda env vars).
+
+### 5. jsyncsecrets (root → GitHub Secrets)
+- Manifest-driven push of PROD_VALUEs → GitHub Secrets as `TF_VAR_*` (one-way; gh-auth-gated)
 
 ---
 
 ## Highlights
 
-- **Terraform unifies the consumer**: both local and CD satisfy the same `TF_VAR_*`, so the only
-  thing 9E changes is *where the env var's value comes from* (root file vs GitHub Secrets) — the
-  `.tf` and `var.*` declarations are identical across environments.
-- **Secrets in three homes, one value each** — local (root `.env.local`), CI/CD (GitHub Secrets),
-  prod runtime (Lambda env vars, set by Terraform from `TF_VAR_*`). 9E makes the *local* one a
-  single file and adds the *sync* to GitHub.
-- **One-way sync only** — `.env.local` (or AWS SM) is the source; pushed to GitHub Secrets (which
-  can't be read back). Never sync down.
+- **The manifest decouples "what each stack needs" from the tooling** — `tfvars.sh` and CD are
+  generic; per-stack specifics live in `deploy.config.json`. `target` lets CD route
+  `terraform apply` vs Vercel without special-casing.
+- **One value, three homes** — local (root `.env.local`), CI/CD (GitHub Secrets via `jsyncsecrets`),
+  prod runtime (Lambda env vars set by Terraform). 9B makes the local one a single file.
+- **A secret file's path is a local-only concern** — moving to root is invisible to deploy (prod
+  reads OS env vars), which is why repointing the loaders was safe.
+- **Blast radius was bigger than "3 files"** — the full sweep touched app loaders, the test
+  conftest, and `tfvars.sh`; the dead SAM path still references the removed files but is unused.
 
 ---
 
-## Testing & Validation (planned)
+## Testing & Validation
 
-**Manual**:
-- [ ] `tfvars.sh backend` loads `TF_VAR_*` from the **root** `.env.local`; `terraform plan` clean
-- [ ] `tfvars.sh chat` likewise
-- [ ] Backend + chat boot locally reading the root `.env.local`
-- [ ] `jpushapi` / `jpushchat` deploy using the root-file TF_VARs
-- [ ] `jsyncsecrets` → values present in GitHub Secrets (`gh secret list`)
-- [ ] Delete root `.env.local` → (if SM) `jpullsecrets` regenerates it
-- [ ] Switching git branches never disturbs the root `.env.local`
+**Manual** (verified):
+- ✅ `tfvars.sh backend` / `chat` load `TF_VAR_*` from root `.env.local` (8 / 6 vars)
+- ✅ Root-loaded values match the per-stack originals (no merge corruption)
+- ✅ Backend boots reading root (`DATABASE_URL`/`SECRET_KEY`/`VOYAGE_API_KEY` loaded)
+- ✅ Chat resolves root `.env.local`; conftest reads `TEST_DATABASE_URL` from root
+- ✅ `jpushchat` deploys via root (`loaded 6 TF_VAR from jh/.env.local`), chat healthy
+- ✅ Per-stack files removed; backend still boots (root only)
+- ✅ `jsyncsecrets` loads + stops cleanly when `gh` not authed
 
 ---
 
-## File Structure (planned)
+## File Structure
 
 ```
 jh/
-├── .env.local              # ROOT: single local secret source (gitignored, branch-safe)
-├── tfvars.sh               # reads root .env.local → exports TF_VAR_*
-├── dev_terraform.sh        # + jsyncsecrets (push to GitHub Secrets)
-├── backend/config/settings.py   # reads ../.env.local
-└── chat/local.js                # reads ../.env.local
+├── .env.local                   # ROOT: unified secret source (gitignored)
+├── tfvars.sh                    # manifest-driven: deploy.config.json → root .env.local → TF_VAR_*
+├── dev_terraform.sh             # + jsyncsecrets (root → GitHub Secrets)
+├── backend/deploy.config.json   # { target: terraform, secrets: [...] }
+├── chat/deploy.config.json      # { target: terraform, secrets: [...] }
+├── frontend/deploy.config.json  # { target: vercel, build_vars: [...] }
+├── backend/config/settings.py   # reads root .env.local
+├── chat/local.js                # reads root .env.local
+└── backend/db/__tests__/conftest.py  # reads root .env.local
 ```
 
 **Key files**:
-- [tfvars.sh](../../tfvars.sh) — repoint to root `.env.local`
-- [backend/config/settings.py](../../backend/config/settings.py) · [chat/local.js](../../chat/local.js) — app loaders
+- [tfvars.sh](../../tfvars.sh) · [backend/deploy.config.json](../../backend/deploy.config.json)
+- [backend/config/settings.py](../../backend/config/settings.py) · [chat/local.js](../../chat/local.js)
+
+---
+
+## Next Steps → Phase 9C
+
+Branch/PR `dev.sh` commands (`jbranch`/`jsave`/`jpr`/`jland`) — the workflow layer that 9D's CI
+gates and 9E's CD deploys from. (GitHub setup: `gh auth login` for the PR commands; branch
+protection on `main` for the CI gate.)
 
 ---
 
 ## Key Learnings
 
-- **Terraform's `TF_VAR_*` is the unifying interface** — once deploy is Terraform (9A), the secret
-  question reduces to "how does each environment set `TF_VAR_*`": root file locally, GitHub Secrets
-  in CD. Same variable, different source.
-- **A secret file's location is a local-only concern** — prod reads Lambda env vars (set by
-  Terraform), so moving the local file to root is invisible to deploy.
-- **The big-company model, right-sized** — AWS Secrets Manager + `jpullsecrets` makes the local
-  file a disposable cache, but for solo scale the root `.env.local` + `jsyncsecrets` is enough.
+- **A manifest makes the tooling generic** — `deploy.config.json` (`target` + `secrets`) lets one
+  `tfvars.sh` (and one CD workflow) serve all stacks; per-stack knowledge lives in data, not code.
+- **Unify the consumer, then unify the source** — since Terraform reads `TF_VAR_*` regardless of
+  origin, collapsing to one root `.env.local` + one manifest format was low-risk.
+- **Fix every reader before deleting the source** — app loaders, tests, and deploy all had to point
+  at root before removing the per-stack files (else local dev breaks).
 
 ---
 
