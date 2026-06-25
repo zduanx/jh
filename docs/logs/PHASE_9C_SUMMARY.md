@@ -1,12 +1,12 @@
-# Phase 9C: Branch/PR Workflow (`dev.sh` commands)
+# Phase 9C: Branch/PR Workflow (`dev.sh` commands) + branch-protected `main`
 
-**Status**: 📋 Planning
-**Date**: June 24, 2026
-**Goal**: Replace direct-to-`main` commits (`jgit`) with a native-GitHub branch→PR→merge workflow, wrapped in short `dev.sh` commands — so every change goes through a reviewable, CI-gateable PR.
+**Status**: ✅ Completed
+**Date**: June 25, 2026
+**Goal**: Replace direct-to-`main` commits (`jgit`) with a native-GitHub branch→PR→merge workflow, wrapped in short `dev.sh` commands — and **protect `main`** (merge-only) so every change goes through a reviewable, CI-gateable PR.
 
-> Independent of **9A** (Terraform migration) — pure local git/PR tooling, no secrets, no
-> AWS, no production. The CI *gate* lights up in **9D**; 9B's commands are built to no-op
-> gracefully until then. (Phase 9: 9A Terraform → 9B PR flow → 9C CI → 9D CD → 9E secrets.)
+> Pure local git/PR tooling + a one-time GitHub branch-protection setting. The CI *gate*
+> lights up in **9D** (commands no-op gracefully until then). Phase 9: 9A Terraform →
+> 9B secrets → **9C PR flow** → 9D CI → 9E CD.
 
 ---
 
@@ -43,7 +43,7 @@ stash/commit/abort before switching.
 
 ---
 
-## Key Achievements (planned)
+## Key Achievements
 
 ### 1. The lifecycle commands
 | Command | Wraps | Role (Meta analogue) |
@@ -59,7 +59,7 @@ stash/commit/abort before switching.
 - `jbranch` / `jprco` run `git status --porcelain` first; if dirty → prompt **stash / commit / abort**
 - Untracked files are flagged (carried along by git, but warned so they don't sneak into a PR)
 - `--f` on `jland` is an explicit override; without it, a non-green PR is refused client-side (and
-  branch protection refuses it server-side once 9D lands)
+  branch protection refuses it server-side once 9D's CI lands)
 
 ### 3. Graceful pre-CI behavior
 - `jprstatus` + `jland`'s gate degrade cleanly when **no checks exist** (before 9D) — they don't
@@ -83,18 +83,27 @@ stash/commit/abort before switching.
 
 ---
 
-## Testing & Validation (planned)
+## What was built / done
 
-**Manual** (end-to-end loop on a throwaway branch):
-- [ ] `jbranch test/x` off a clean tree → on new branch, branched from fresh main
-- [ ] `jbranch` with a dirty tree → prompts stash/commit/abort (no silent carry)
-- [ ] `jsave "wip"` ×2 → two commits on the branch
-- [ ] `jpr "Test"` → PR opened, URL printed; re-running reports the existing PR (idempotent)
-- [ ] `jsave` after `jpr` → auto-pushes, PR updates
-- [ ] `jprstatus` → shows the PR (and "no checks" pre-9C, without erroring)
-- [ ] `jprco <N>` from a clean tree → checks out that PR
-- [ ] `jland` → squash-merges, deletes branch, returns to fresh main
-- [ ] Switching branches never touches the root `.env.local` (9A win, re-verified)
+- **6 commands** in `dev_git.sh` (sourced by `dev.sh`): `jbranch`, `jsave`, `jpr`,
+  `jprstatus`, `jland`, `jprco` — guarded, idempotent; `jsave` refuses on `main`.
+- **`main` branch-protected** (merge-only) via the GitHub API:
+  `gh api -X PUT repos/zduanx/jh/branches/main/protection` →
+  *Require a pull request before merging*; `enforce_admins=false` (admin escape hatch kept).
+  Web equivalent: github.com/zduanx/jh/settings/branches.
+- **`jgit` retained** as the (now admin-only, pre-protection) direct-to-main escape hatch.
+
+## Testing & Validation
+
+**Verified end-to-end** (dogfooded — these PRs were the first real uses):
+- ✅ `jbranch` → off fresh main; dirty-tree prompt (stash/commit/abort)
+- ✅ `jsave` → commits on a branch; **refuses on main** (suggests jbranch/jgit)
+- ✅ `jpr` → opened **PR #1**; idempotent (re-run reports the existing PR)
+- ✅ `jprstatus` → showed the PR + checks
+- ✅ `jland` → squash-merged **PR #1** and **PR #2** into protected `main`, deleted branch,
+  returned to fresh main — proving merge-only `main` works (PR merge passes; direct push blocked)
+- ✅ **Bonus:** opening a PR triggers **Vercel's preview deploy**, and merging triggers
+  Vercel's **production** deploy — frontend CD is already live via Vercel's GitHub integration
 
 ---
 
@@ -107,18 +116,16 @@ checks they already read.
 
 ---
 
-## File Structure (planned)
+## File Structure
 
 ```
 jh/
-└── dev.sh    # jbranch, jsave, jpr, jprstatus, jland, jprco
-                (+ existing jgit kept for quick main-direct work)
-DEV_SHORTCUTS.md  # commands table updated
+├── dev_git.sh   # jbranch, jsave, jpr, jprstatus, jland, jprco
+└── dev.sh       # sources dev_git.sh (+ jgit kept as admin escape hatch)
 ```
 
 **Key files**:
-- [dev.sh](../../dev.sh) — the new branch/PR commands (matching existing `j*` conventions)
-- [DEV_SHORTCUTS.md](../../DEV_SHORTCUTS.md) — reference table
+- [dev_git.sh](../../dev_git.sh) — the branch/PR commands (matching existing `j*` conventions)
 
 ---
 
