@@ -18,9 +18,12 @@ import { extractBearer, verifyToken } from './auth.js';
 import { getSession } from './redis.js';
 
 // Load .env.local for local dev (Lambda does NOT use this — its env comes from
-// the SAM template / deploy). Uses Node's built-in env-file loader (no deps).
+// the Terraform-set Lambda env vars). Phase 9B: prefer the UNIFIED ROOT .env.local
+// (one source for all stacks); fall back to the legacy per-stack chat/.env.local.
 const __dir = dirname(fileURLToPath(import.meta.url));
-const envLocal = join(__dir, '.env.local');
+const rootEnvLocal = join(__dir, '..', '.env.local');
+const stackEnvLocal = join(__dir, '.env.local');
+const envLocal = fs.existsSync(rootEnvLocal) ? rootEnvLocal : stackEnvLocal;
 if (fs.existsSync(envLocal)) {
   process.loadEnvFile(envLocal);
 }

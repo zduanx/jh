@@ -4,7 +4,13 @@ from pathlib import Path
 
 # Get absolute path to backend directory (config/settings.py -> backend/)
 _backend_dir = Path(__file__).parent.parent
-_env_local = _backend_dir / '.env.local'
+# Phase 9B: secrets live in the UNIFIED ROOT .env.local (one source for all stacks).
+# Prefer it; fall back to the legacy per-stack backend/.env.local, then .env.
+# In Lambda no file exists → Pydantic reads OS env vars (set by Terraform), unchanged.
+_root_dir = _backend_dir.parent
+_env_local = _root_dir / '.env.local'
+if not _env_local.exists():
+    _env_local = _backend_dir / '.env.local'  # legacy fallback
 _env_file = _backend_dir / '.env'
 
 

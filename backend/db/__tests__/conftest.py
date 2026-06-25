@@ -19,8 +19,12 @@ from db.__tests__.db_test_utils import get_or_create_fixed_test_user
 # Find backend directory (works from any working directory)
 BACKEND_DIR = Path(__file__).parent.parent.parent
 
-# Load environment variables (.env.local takes precedence over .env)
-env_local = BACKEND_DIR / '.env.local'
+# Phase 9B: prefer the unified ROOT .env.local (one source for all stacks),
+# fall back to the legacy per-stack backend/.env.local, then .env.
+ROOT_DIR = BACKEND_DIR.parent
+env_local = ROOT_DIR / '.env.local'
+if not env_local.exists():
+    env_local = BACKEND_DIR / '.env.local'
 env_file = BACKEND_DIR / '.env'
 
 if env_local.exists():
