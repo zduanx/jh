@@ -65,12 +65,19 @@ test('connect() fails closed when MCP_SERVER_URL is missing', async () => {
 });
 
 test('connect() fails closed when MCP_SERVICE_TOKEN is missing', async () => {
-  const saved = process.env.MCP_SERVICE_TOKEN;
+  // Hermetic: connect() checks MCP_SERVER_URL *before* the token, so set a dummy
+  // URL to reach the token check (otherwise in a clean env — e.g. CI — this fails
+  // on the URL check first and never exercises the token path under test).
+  const savedUrl = process.env.MCP_SERVER_URL;
+  const savedToken = process.env.MCP_SERVICE_TOKEN;
+  process.env.MCP_SERVER_URL = 'http://localhost:9999/mcp';
   delete process.env.MCP_SERVICE_TOKEN;
   try {
     await assert.rejects(connect(), /MCP_SERVICE_TOKEN not configured/);
   } finally {
-    if (saved !== undefined) process.env.MCP_SERVICE_TOKEN = saved;
+    if (savedUrl !== undefined) process.env.MCP_SERVER_URL = savedUrl;
+    else delete process.env.MCP_SERVER_URL;
+    if (savedToken !== undefined) process.env.MCP_SERVICE_TOKEN = savedToken;
   }
 });
 

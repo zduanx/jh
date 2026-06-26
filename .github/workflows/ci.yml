@@ -35,6 +35,11 @@ jobs:
       # DATABASE_URL is a dummy so settings/db.session import cleanly (no real DB hit).
       TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/test
       DATABASE_URL: postgresql://postgres:postgres@localhost:5432/test
+      # Dummy placeholders for the other required Settings fields. NOT secrets —
+      # tests mock all real auth/JWT usage; Settings just needs them set so it
+      # validates at import. (Real values live in GitHub Secrets, used by CD.)
+      SECRET_KEY: ci-test-secret-key-not-used-for-real-auth
+      GOOGLE_CLIENT_ID: ci-test-google-client-id.apps.googleusercontent.com
     steps:
       - uses: actions/checkout@v4
 
