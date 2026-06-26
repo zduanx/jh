@@ -48,8 +48,13 @@ resource "aws_iam_role" "github_actions_cd" {
           "token.actions.githubusercontent.com:aud" = "sts.amazonaws.com"
         }
         StringLike = {
-          # ONLY the main branch of zduanx/jh — not PRs, not other repos/branches
-          "token.actions.githubusercontent.com:sub" = "repo:zduanx/jh:ref:refs/heads/main"
+          # Scope to THIS repo. The CD jobs run in a GitHub Environment (the approval
+          # gate), and when a job has `environment:`, GitHub stamps the OIDC token's
+          # `sub` as `repo:OWNER/REPO:environment:NAME` (NOT `ref:refs/heads/main`).
+          # So we trust the deploy environments — which are themselves gated to the
+          # `main` branch (deployment_branch_policy.protected_branches), so this is
+          # still effectively "main only", just expressed via the environment claim.
+          "token.actions.githubusercontent.com:sub" = "repo:zduanx/jh:environment:production-*"
         }
       }
     }]

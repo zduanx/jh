@@ -35,6 +35,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # The chat Lambda is packaged from source_dir, which INCLUDES node_modules.
+      # The runner is clean (no node_modules), so we must install prod deps here —
+      # otherwise the zip ships without jsonwebtoken etc. and the Lambda crashes at
+      # import (this is the "works locally, fails in clean CI" packaging trap).
+      - name: Set up Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Install chat production dependencies
+        working-directory: chat
+        run: npm ci --omit=dev
+
       - name: Configure AWS credentials (OIDC, keyless)
         uses: aws-actions/configure-aws-credentials@v4
         with:
