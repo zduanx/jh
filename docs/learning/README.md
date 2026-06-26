@@ -52,6 +52,12 @@ Educational content about technologies and concepts used in this project.
 - AWS SAM deployment
 - Environment variables in Lambda
 
+**[ci-cd.md](./ci-cd.md)** - GitHub Actions + Terraform CD (OIDC, gated deploys, rollback)
+- OIDC keyless AWS auth + the `environment:` sub-claim trap
+- "Works locally, fails in clean CI" bug class + smoke tests
+- Terraform rollback = git-revert (not a button); fix-forward vs rollback
+- Secrets as TF_VAR env vars; gotchas (648MB provider, zsh local leak, path filters)
+
 ### Testing
 **[pytest.md](./pytest.md)** - pytest commands and patterns
 - Running tests (all, specific, filtered)

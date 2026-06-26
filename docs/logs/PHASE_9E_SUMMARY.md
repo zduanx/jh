@@ -1,14 +1,19 @@
 # Phase 9E: Continuous Deployment (Terraform via GitHub Actions)
 
-**Status**: 🚧 In Progress
+**Status**: ✅ Completed
 **Date**: June 26, 2026
 **Goal**: Run **`terraform apply`** in a GitHub Actions workflow on merge to `main` — deploying the backend + chat stacks automatically, **gated** by a manual approval, authenticating to AWS via **OIDC (no stored keys)**, with `TF_VAR_*` from GitHub Secrets and a **post-deploy smoke test**.
 
-> **Progress:** ✅ OIDC live in AWS (role `jh-github-actions-cd`, scoped to `repo:zduanx/jh@main`),
-> in its own **`bootstrap/terraform/`** state (repo-level CD infra, separate from the app stacks —
-> applied via `jpushbootstrap`) · ✅ CD workflows written (`deploy-backend.yml`, `deploy-chat.yml`) ·
-> ✅ GitHub Environments `production-backend` / `production-chat` (required-reviewer gate) ·
-> ⬜ SAM cleanup · ⬜ first live deploy test.
+> **Proven live:** both stacks deployed end-to-end via keyless gated CD — backend (OIDC →
+> `terraform apply` → `/health` 200) and chat (OIDC → `npm ci` → apply → 401 healthy). OIDC role
+> `jh-github-actions-cd` lives in its own **`bootstrap/terraform/`** state (`jpushbootstrap`); gates
+> are GitHub Environments `production-backend`/`production-chat`. Deep-dive: [ci-cd.md](../learning/ci-cd.md).
+>
+> **3 real bugs the live deploy surfaced (all fixed):** (1) `environment:` changes the OIDC `sub`
+> claim → trust policy had to accept `environment:production-*`, not `ref:refs/heads/main`; (2) chat
+> Lambda shipped without `node_modules` (runner never ran `npm install`) → added `npm ci --omit=dev`;
+> (3) chat smoke must expect **401** (auth-gated, no public health) not 200 — a 200 meant a crashed
+> Lambda. The smoke test correctly caught the broken chat deploy. Rollback (git-revert) drill verified.
 
 > The capstone of Phase 9. Builds on **9A** (deployment is now Terraform — `terraform apply`
 > deploys infra *and* code), **9C** (the PR flow / the merge that triggers it), and **9D** (CI
@@ -75,7 +80,7 @@ versioning, which is deferred).
 
 ---
 
-## Key Achievements (planned)
+## Key Achievements
 
 ### 1. Terraform apply workflows (per stack)
 - Trigger: `push` to `main` (on merge), targeting the stack's Environment (gated)
@@ -130,18 +135,18 @@ jbranch → jsave → jpr → [CI 9D: tests + terraform plan on PR] → review �
 
 ---
 
-## Testing & Validation (planned)
+## Testing & Validation
 
 **Manual**:
 - [ ] PR shows `terraform plan` as a comment (infra diff reviewable)
-- [ ] Merge a trivial backend change → `deploy-backend.yml` runs, waits at the approval gate
-- [ ] Approve → `terraform apply` → backend Lambdas updated; smoke test `/health` 200
-- [ ] Force a bad deploy → smoke fails → workflow red; git-revert the commit → CD re-applies → healthy
-- [ ] Chat change → `deploy-chat.yml` gated → approve → chat updated → smoke ✓
-- [ ] Frontend still auto-deploys via Vercel (per-PR previews preserved)
-- [ ] **OIDC works keyless** — CD assumes the role, applies, with NO AWS keys in GitHub Secrets
-- [ ] Confirm Terraform state in S3 stays consistent between CD and local runs
-- [ ] Dead SAM code removed from `dev.sh`; `jpushapi`/`jpushchat` (Terraform) still work
+- [x] Merge a backend change → `deploy-backend.yml` runs, waits at the approval gate
+- [x] Approve → `terraform apply` → backend Lambdas updated; smoke test `/health` 200
+- [x] Rollback drill: deployed a marker, git-reverted it → CD re-applied → marker gone
+- [x] Chat change → `deploy-chat.yml` gated → approve → chat updated → smoke 401 ✓
+- [x] Frontend still auto-deploys via Vercel (per-PR previews preserved)
+- [x] **OIDC works keyless** — CD assumes the role, applies, with NO AWS keys in GitHub Secrets
+- [x] Terraform state in S3 stays consistent between CD and local runs
+- [x] Dead SAM code removed from `dev.sh`; `jpushapi`/`jpushchat` (Terraform) still work
 
 ---
 
@@ -154,7 +159,7 @@ or hardening (least-privilege IAM, Lambda versioning for instant rollback).
 
 ---
 
-## File Structure (planned)
+## File Structure
 
 ```
 jh/
