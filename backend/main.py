@@ -44,8 +44,7 @@ async def health_check():
     from datetime import datetime
     return {
         "status": "healthy",
-        "timestamp": datetime.utcnow().isoformat() + "Z",
-        "deploy_marker": "rollback-drill"  # harmless marker for the 9E rollback test (reverted after)
+        "timestamp": datetime.utcnow().isoformat() + "Z"
     }
 
 
