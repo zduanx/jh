@@ -1,0 +1,78 @@
+name: Deploy Backend
+
+# Phase 9E: Continuous Deployment for the backend stack (5 Lambdas + infra).
+# On merge to main, deploy via `terraform apply` — authenticating to AWS with OIDC
+# (no stored keys), gated by a manual approval (the `production-backend` environment),
+# then smoke-test /health. Reuses the SAME Terraform the local `jpushapi` runs.
+on:
+  push:
+    branches: [main]
+    paths:
+      # Only deploy when something that affects the backend changed.
+      - "backend/**"
+      - ".github/workflows/deploy-backend.yml"
+  workflow_dispatch: {} # allow manual trigger from the Actions tab
+
+# OIDC: the job needs to request the GitHub identity token to assume the AWS role.
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  deploy:
+    name: terraform apply (backend)
+    runs-on: ubuntu-latest
+    # The gate: this environment has a required reviewer → the job pauses for manual
+    # approval before any step runs. (Create it in Settings → Environments.)
+    environment: production-backend
+    defaults:
+      run:
+        working-directory: backend/terraform
+    env:
+      # TF_VAR_* from GitHub Secrets (synced by `jsyncsecrets` from root .env.local).
+      TF_VAR_database_url: ${{ secrets.TF_VAR_DATABASE_URL }}
+      TF_VAR_test_database_url: ${{ secrets.TF_VAR_TEST_DATABASE_URL }}
+      TF_VAR_secret_key: ${{ secrets.TF_VAR_SECRET_KEY }}
+      TF_VAR_google_client_id: ${{ secrets.TF_VAR_GOOGLE_CLIENT_ID }}
+      TF_VAR_mcp_service_token: ${{ secrets.TF_VAR_MCP_SERVICE_TOKEN }}
+      TF_VAR_voyage_api_key: ${{ secrets.TF_VAR_VOYAGE_API_KEY }}
+      TF_VAR_allowed_emails: ${{ secrets.TF_VAR_ALLOWED_EMAILS }}
+      TF_VAR_allowed_origins: ${{ secrets.TF_VAR_ALLOWED_ORIGINS }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC, keyless)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::400778305315:role/jh-github-actions-cd
+          aws-region: us-east-1
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.15.7"
+
+      # The Lambda module builds the package in Docker (build_in_docker=true).
+      # GitHub's ubuntu runner has Docker pre-installed + is linux/amd64, so the
+      # cross-platform friction we fought locally (ARM/--platform) does not apply.
+      - name: Terraform init
+        run: terraform init
+
+      - name: Terraform plan
+        run: terraform plan -out=tfplan
+
+      - name: Terraform apply
+        run: terraform apply -auto-approve tfplan
+
+      - name: Smoke test (/health)
+        run: |
+          API_URL="$(terraform output -raw api_url)"
+          echo "Smoke-testing $API_URL/health"
+          for i in 1 2 3 4 5; do
+            code="$(curl -s -o /dev/null -w '%{http_code}' "$API_URL/health" || echo 000)"
+            if [ "$code" = "200" ]; then echo "✓ /health 200"; exit 0; fi
+            echo "  attempt $i: $code — retrying in 5s"; sleep 5
+          done
+          echo "✗ /health did not return 200 — deploy is unhealthy"
+          echo "  Rollback: git revert the offending commit on main → CD re-applies the prior code."
+          exit 1

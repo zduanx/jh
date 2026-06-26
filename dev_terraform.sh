@@ -66,6 +66,20 @@ jpushapi() { _jh_tf_deploy backend; }
 # jpushchat — deploy the chat stack via Terraform.
 jpushchat() { _jh_tf_deploy chat; }
 
+# jpushbootstrap — apply the repo-level bootstrap stack (GitHub OIDC provider + CD
+# role). No Lambda, no secrets, so it skips the Docker/tfvars machinery — just a plain
+# terraform apply. One-time / rarely-changing (the CD auth foundation for 9E).
+jpushbootstrap() {
+  local tfdir="$_JH_TF_ROOT/bootstrap/terraform"
+  [ -d "$tfdir" ] || { echo -e "${RED:-}✗ no $tfdir${NC:-}"; return 1; }
+  echo -e "${BLUE:-}=== Applying bootstrap (OIDC + CD role) via Terraform ===${NC:-}"
+  ( cd "$tfdir" && terraform init -input=false >/dev/null && terraform apply -auto-approve )
+  local rc=$?
+  [ $rc -eq 0 ] && echo -e "${GREEN:-}✓ bootstrap applied${NC:-}" \
+                || echo -e "${RED:-}✗ bootstrap apply failed (rc=$rc)${NC:-}"
+  return $rc
+}
+
 # jtfplan — preview changes for a stack without applying (terraform plan).
 # Also builds in Docker (to compute the code hash), so it traps + cleans up like deploy.
 #   jtfplan backend | jtfplan chat
