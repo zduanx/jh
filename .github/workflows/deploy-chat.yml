@@ -55,14 +55,18 @@ jobs:
       - name: Terraform apply
         run: terraform apply -auto-approve tfplan
 
-      - name: Smoke test (/health)
+      - name: Smoke test (Lambda alive + auth gate)
         run: |
           URL="$(terraform output -raw chat_function_url)"
           URL="${URL%/}" # strip any trailing slash
-          echo "Smoke-testing $URL/health"
+          # The chat Lambda auth-gates ALL requests (handler.js verifies the JWT before
+          # anything — there's no public /health). So a 401 to an UNauthenticated request
+          # is the healthy signal: it proves the Lambda is up AND fail-closed auth works.
+          # (A 200 would actually be wrong — it'd mean auth was bypassed.)
+          echo "Smoke-testing $URL/ (expect 401 — alive + auth gate working)"
           for i in 1 2 3 4 5; do
-            code="$(curl -s -o /dev/null -w '%{http_code}' "$URL/health" || echo 000)"
-            if [ "$code" = "200" ]; then echo "✓ /health 200"; exit 0; fi
+            code="$(curl -s -o /dev/null -w '%{http_code}' "$URL/" || echo 000)"
+            if [ "$code" = "401" ]; then echo "✓ chat alive, auth gate returns 401"; exit 0; fi
             echo "  attempt $i: $code — retrying in 5s"; sleep 5
           done
           echo "✗ /health did not return 200 — deploy is unhealthy"
