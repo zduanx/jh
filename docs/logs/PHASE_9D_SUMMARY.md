@@ -1,7 +1,7 @@
 # Phase 9D: Continuous Integration (GitHub Actions)
 
-**Status**: 📋 Planning
-**Date**: June 25, 2026
+**Status**: ✅ Completed
+**Date**: June 26, 2026
 **Goal**: Run the backend (pytest) + chat (Jest) test suites automatically on every push/PR — a **secret-free, free-tier** CI gate that blocks broken code from reaching `main`.
 
 > Builds on **9C** (the branch/PR flow + branch-protected `main`). The CI checks produced
@@ -98,15 +98,31 @@ decisions enforce this (all validated by the test audit):
 
 ---
 
-## Testing & Validation (planned)
+## Testing & Validation
 
-**Manual** (prove the gate works):
-- [ ] Push a branch → CI runs, all suites green
-- [ ] Open a PR with a deliberately failing test → CI red → merge button blocked
-- [ ] `jprstatus` (9C) now shows real check results
-- [ ] Fix the test, push → CI re-runs green → merge unblocked
-- [ ] Confirm no `ANTHROPIC_API_KEY` / AWS creds are referenced anywhere in `ci.yml`
-- [ ] Confirm `eval/` and the agent are not invoked by the workflow
+**Verified end-to-end** (PR #5 was the first real CI run):
+- [x] Opened PR #5 → CI ran all 3 jobs on fresh runners
+- [x] `jprstatus` showed real check results (🟡 → ✓/✗)
+- [x] Iterated red → green (CI caught real bugs; see below), then all 3 jobs passed
+- [x] `ci.yml` references **no** `ANTHROPIC_API_KEY` / AWS creds — DB is hardcoded `localhost`
+- [x] `eval/` and the discovery agent are not pytest-collected → never invoked by CI
+- [x] **Merge gate enforced**: CI added as **required status checks** on `main` branch
+      protection (`backend (pytest)`, `chat (node --test)`, `frontend (build)`) → a red PR's
+      merge button is now disabled server-side (not just `jland`'s client-side gate)
+
+**CI caught 4 real "works-locally-fails-in-clean-env" bugs** on the first run — exactly the value
+of CI (a clean runner with no `.env.local` and no ambient vars surfaced what local runs masked):
+1. `from main import app` → `ModuleNotFoundError` (CI rootdir ≠ `backend/`) → fixed via
+   `pythonpath = .` in `pytest.ini`
+2. `Settings` validation: `SECRET_KEY` + `GOOGLE_CLIENT_ID` required but unset → dummy non-secret
+   placeholders in `ci.yml` `env:` (tests mock real usage)
+3. `chat` test #14 assumed `MCP_SERVER_URL` was set (ambient locally, absent in CI) → made the
+   test **hermetic** (sets both vars it depends on)
+4. `frontend` `npm ci` rejected a stale Create-React-App lockfile → switched to lenient
+   `npm install` (the same approach Vercel's build uses)
+
+Plus a pre-existing **stale test** surfaced and fixed: `title_filters` asserted `include: None`
+but the code normalizes to `[]` (the test was wrong, the code was right).
 
 ---
 
@@ -118,13 +134,15 @@ ships the merged result. The frontend is already CD via Vercel's GitHub integrat
 
 ---
 
-## File Structure (planned)
+## File Structure
 
 ```
 jh/
-└── .github/
-    └── workflows/
-        └── ci.yml    # push/PR → backend pytest (+ runner Postgres) | chat Jest | frontend build
+├── .github/
+│   └── workflows/
+│       └── ci.yml         # push/PR → backend pytest (+ runner Postgres) | chat | frontend build
+└── backend/
+    └── pytest.ini         # pythonpath, `manual` marker, testpaths (CI test discovery)
 ```
 
 **Key files**:
@@ -141,6 +159,12 @@ jh/
   has a public `localhost` URL → CI stays secret-free. Reserve real secrets for deploy (9E); jsyncsecrets is CD-only.
 - **Cost control belongs in CI scope.** Keep paid/slow/non-deterministic work (LLM eval, the agent)
   out of auto-CI and behind manual, write-access-gated triggers — so automated runs are always free.
+- **CI's value is the clean environment.** The first run caught 4 bugs that passed locally — all
+  "works on my machine" cases (import paths, ambient env vars, a stale lockfile) that only surface
+  in a runner with no `.env.local` and no leftover shell state. A green local test ≠ a green CI.
+- **`AIzaSy…` is not automatically a secret.** Google has *server* keys (sensitive) and *browser/
+  client* keys (public by design, referrer-restricted). A scraped third-party Picker key in a test
+  fixture tripped GitHub's scanner but is a false positive — pattern ≠ exposure.
 
 ---
 
