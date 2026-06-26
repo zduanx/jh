@@ -18,21 +18,25 @@ JH_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # Parse production values from .env.local files once at script load time
 # Format: # <VAR_NAME>_PROD_VALUE=value
 
-# Backend production values
-if [ -f "$JH_ROOT/backend/.env.local" ]; then
-    BACKEND_GOOGLE_CLIENT_ID_PROD=$(grep "^# GOOGLE_CLIENT_ID_PROD_VALUE=" "$JH_ROOT/backend/.env.local" | cut -d= -f2- | tr -d '\n' | tr -d '\r')
-    BACKEND_SECRET_KEY_PROD=$(grep "^# SECRET_KEY_PROD_VALUE=" "$JH_ROOT/backend/.env.local" | cut -d= -f2- | tr -d '\n' | tr -d '\r')
-    BACKEND_ALLOWED_EMAILS_PROD=$(grep "^# ALLOWED_EMAILS_PROD_VALUE=" "$JH_ROOT/backend/.env.local" | cut -d= -f2- | tr -d '\n' | tr -d '\r')
-    BACKEND_ALLOWED_ORIGINS_PROD=$(grep "^# ALLOWED_ORIGINS_PROD_VALUE=" "$JH_ROOT/backend/.env.local" | cut -d= -f2- | tr -d '\n' | tr -d '\r')
-    BACKEND_DATABASE_URL_PROD=$(grep "^# DATABASE_URL_PROD_VALUE=" "$JH_ROOT/backend/.env.local" | cut -d= -f2- | tr -d '\n' | tr -d '\r')
-    BACKEND_TEST_DATABASE_URL_PROD=$(grep "^# TEST_DATABASE_URL_PROD_VALUE=" "$JH_ROOT/backend/.env.local" | cut -d= -f2- | tr -d '\n' | tr -d '\r')
+# Backend production values — Phase 9B: read the unified ROOT .env.local
+# (the per-stack backend/.env.local was removed), legacy per-stack as fallback.
+_jh_be_env="$JH_ROOT/.env.local"; [ -f "$_jh_be_env" ] || _jh_be_env="$JH_ROOT/backend/.env.local"
+if [ -f "$_jh_be_env" ]; then
+    BACKEND_GOOGLE_CLIENT_ID_PROD=$(grep "^# GOOGLE_CLIENT_ID_PROD_VALUE=" "$_jh_be_env" | cut -d= -f2- | tr -d '\n' | tr -d '\r')
+    BACKEND_SECRET_KEY_PROD=$(grep "^# SECRET_KEY_PROD_VALUE=" "$_jh_be_env" | cut -d= -f2- | tr -d '\n' | tr -d '\r')
+    BACKEND_ALLOWED_EMAILS_PROD=$(grep "^# ALLOWED_EMAILS_PROD_VALUE=" "$_jh_be_env" | cut -d= -f2- | tr -d '\n' | tr -d '\r')
+    BACKEND_ALLOWED_ORIGINS_PROD=$(grep "^# ALLOWED_ORIGINS_PROD_VALUE=" "$_jh_be_env" | cut -d= -f2- | tr -d '\n' | tr -d '\r')
+    BACKEND_DATABASE_URL_PROD=$(grep "^# DATABASE_URL_PROD_VALUE=" "$_jh_be_env" | cut -d= -f2- | tr -d '\n' | tr -d '\r')
+    BACKEND_TEST_DATABASE_URL_PROD=$(grep "^# TEST_DATABASE_URL_PROD_VALUE=" "$_jh_be_env" | cut -d= -f2- | tr -d '\n' | tr -d '\r')
 fi
 
-# Frontend production values
-if [ -f "$JH_ROOT/frontend/.env.local" ]; then
-    FRONTEND_GOOGLE_CLIENT_ID_PROD=$(grep "^# REACT_APP_GOOGLE_CLIENT_ID_PROD_VALUE=" "$JH_ROOT/frontend/.env.local" | cut -d= -f2- | tr -d '\n' | tr -d '\r')
-    FRONTEND_API_URL_PROD=$(grep "^# REACT_APP_API_URL_PROD_VALUE=" "$JH_ROOT/frontend/.env.local" | cut -d= -f2- | tr -d '\n' | tr -d '\r')
-    FRONTEND_CHAT_URL_PROD=$(grep "^# REACT_APP_CHAT_URL_PROD_VALUE=" "$JH_ROOT/frontend/.env.local" | cut -d= -f2- | tr -d '\n' | tr -d '\r')
+# Frontend production values — Phase 9B: read the unified ROOT .env.local
+# (the per-stack frontend/.env.local was removed), legacy per-stack as fallback.
+_jh_fe_env="$JH_ROOT/.env.local"; [ -f "$_jh_fe_env" ] || _jh_fe_env="$JH_ROOT/frontend/.env.local"
+if [ -f "$_jh_fe_env" ]; then
+    FRONTEND_GOOGLE_CLIENT_ID_PROD=$(grep "^# REACT_APP_GOOGLE_CLIENT_ID_PROD_VALUE=" "$_jh_fe_env" | cut -d= -f2- | tr -d '\n' | tr -d '\r')
+    FRONTEND_API_URL_PROD=$(grep "^# REACT_APP_API_URL_PROD_VALUE=" "$_jh_fe_env" | cut -d= -f2- | tr -d '\n' | tr -d '\r')
+    FRONTEND_CHAT_URL_PROD=$(grep "^# REACT_APP_CHAT_URL_PROD_VALUE=" "$_jh_fe_env" | cut -d= -f2- | tr -d '\n' | tr -d '\r')
 fi
 
 # Global associative arrays for deployment checks (zsh syntax)
@@ -922,251 +926,9 @@ _compare_and_display_env() {
 
 # Deploy backend to AWS Lambda via SAM
 
-# Check and deploy frontend to Vercel
-jpushvercel() {
-    echo -e "${BLUE}=== Deploying Frontend to Vercel ===${NC}"
-    echo ""
-
-    # Flags: --c (auto-confirm y/n prompts), --m "msg" (commit message).
-    local AUTO_CONFIRM=false
-    local FLAG_COMMIT_MSG=""
-    while [ $# -gt 0 ]; do
-        case "$1" in
-            --c) AUTO_CONFIRM=true; shift ;;
-            --m) FLAG_COMMIT_MSG="$2"; shift 2 ;;
-            *) echo -e "${YELLOW}  (ignoring unknown arg: $1)${NC}"; shift ;;
-        esac
-    done
-
-    cd "$JH_ROOT" || return 1
-    cd frontend || return 1
-
-    # Check Vercel project status
-    echo -e "${BLUE}[1/5] Checking Vercel project status...${NC}"
-    VERCEL_PROJECT=$(vercel project ls 2>&1 | grep "zduan-job")
-    if [ $? -eq 0 ]; then
-        echo -e "${GREEN}  ✓ Vercel project found: zduan-job${NC}"
-        PROD_URL=$(echo "$VERCEL_PROJECT" | awk '{print $3}')
-        echo -e "${GREEN}  ✓ Production URL: ${BLUE}$PROD_URL${NC}"
-    else
-        echo -e "${RED}  ✗ Vercel project not found${NC}"
-        cd "$JH_ROOT" || return 1
-        return 1
-    fi
-
-    # Check environment variables
-    echo ""
-    echo -e "${BLUE}[2/5] Checking Vercel environment variables...${NC}"
-
-    echo -e "${BLUE}  Required variables for production:${NC}"
-    echo ""
-
-    # Pull env vars from Vercel to get actual decrypted values
-    vercel env pull .env.vercel.check --environment=production > /dev/null 2>&1
-
-    # Track variables that need updating
-    typeset -a VARS_TO_UPDATE=()
-
-    if [ -f ".env.vercel.check" ]; then
-        # Loop through each variable (using global FRONTEND_CHECK)
-        for VAR_NAME in "${(@k)FRONTEND_CHECK}"; do
-            EXPECTED_VAL="${FRONTEND_CHECK[$VAR_NAME]}"
-
-            # Get value from pulled env file (preserve literal \n for detection)
-            VERCEL_VAL_RAW=$(grep "^${VAR_NAME}=" .env.vercel.check | cut -d= -f2-)
-            VERCEL_VAL=$(printf "%s" "$VERCEL_VAL_RAW" | tr -d '"')
-
-            # Also get normalized version to check if it matches when cleaned
-            VERCEL_VAL_CLEAN=$(_normalize_env_value "$VERCEL_VAL_RAW")
-
-            if [ -n "$VERCEL_VAL" ]; then
-                # Variable exists in Vercel
-                # Check if raw value matches (ideal case)
-                if [ "$VERCEL_VAL" = "$EXPECTED_VAL" ]; then
-                    echo -e "${GREEN}  ✓ $VAR_NAME matches${NC}"
-                    echo -e "${BLUE}    Value: $VERCEL_VAL${NC}"
-                # Check if it matches after cleaning (needs fixing)
-                elif [ "$VERCEL_VAL_CLEAN" = "$EXPECTED_VAL" ]; then
-                    echo -e "${YELLOW}  ⚠ $VAR_NAME has corrupted escape sequences (will fix)${NC}"
-                    echo -e "${YELLOW}    Current:  $VERCEL_VAL${NC}"
-                    echo -e "${YELLOW}    Expected: $EXPECTED_VAL${NC}"
-                    VARS_TO_UPDATE+=("$VAR_NAME")
-                # Completely different value
-                else
-                    echo -e "${RED}  ✗ $VAR_NAME differs${NC}"
-                    echo -e "${YELLOW}    Vercel:   $VERCEL_VAL${NC}"
-                    echo -e "${YELLOW}    Expected: $EXPECTED_VAL${NC}"
-                    VARS_TO_UPDATE+=("$VAR_NAME")
-                fi
-            else
-                # Variable not found in Vercel
-                echo -e "${RED}  ✗ $VAR_NAME: NOT SET${NC}"
-                echo -e "${YELLOW}    Expected: $EXPECTED_VAL${NC}"
-                VARS_TO_UPDATE+=("$VAR_NAME")
-            fi
-        done
-
-        # Cleanup
-        rm -f .env.vercel.check
-    else
-        echo -e "${RED}  ✗ Cannot retrieve Vercel environment variables${NC}"
-        cd "$JH_ROOT" || return 1
-        return 1
-    fi
-
-    echo ""
-    echo -e "${BLUE}  Dashboard: https://vercel.com/zduanxs-projects/zduan-job/settings/environment-variables${NC}"
-
-    # Offer to update differing variables
-    if [ ${#VARS_TO_UPDATE[@]} -gt 0 ]; then
-        echo ""
-        echo -e "${YELLOW}The following variable(s) will be updated to match .env.local:${NC}"
-        for VAR_NAME in "${VARS_TO_UPDATE[@]}"; do
-            EXPECTED_VAL="${FRONTEND_CHECK[$VAR_NAME]}"
-            echo -e "${YELLOW}  • $VAR_NAME → $EXPECTED_VAL${NC}"
-        done
-        echo ""
-        if [ "$AUTO_CONFIRM" = true ]; then
-            echo -e "${GREEN}  --c: auto-confirming Vercel env update${NC}"; UPDATE_CHOICE="y"
-        else
-            echo -n -e "${YELLOW}Update Vercel with these values? [y/n]: ${NC}"
-            read UPDATE_CHOICE
-        fi
-
-        if [[ "$UPDATE_CHOICE" =~ ^[Yy]$ ]]; then
-            echo -e "${BLUE}Updating Vercel environment variables...${NC}"
-            for VAR_NAME in "${VARS_TO_UPDATE[@]}"; do
-                EXPECTED_VAL="${FRONTEND_CHECK[$VAR_NAME]}"
-                echo -e "${BLUE}  Setting $VAR_NAME...${NC}"
-
-                # Remove existing variable if it exists (suppress errors if not found)
-                echo "y" | vercel env rm "$VAR_NAME" production > /dev/null 2>&1
-
-                # Add the new value (use printf to avoid adding newline that becomes literal \n)
-                printf "%s" "$EXPECTED_VAL" | vercel env add "$VAR_NAME" production > /dev/null 2>&1
-                if [ $? -eq 0 ]; then
-                    echo -e "${GREEN}    ✓ $VAR_NAME updated${NC}"
-                else
-                    echo -e "${RED}    ✗ Failed to update $VAR_NAME${NC}"
-                fi
-            done
-            echo -e "${GREEN}Environment variable update complete${NC}"
-        else
-            echo -e "${RED}Aborting deployment - environment variables not synced${NC}"
-            cd "$JH_ROOT" || return 1
-            return 1
-        fi
-    fi
-
-    # Check git status
-    echo ""
-    echo -e "${BLUE}[3/5] Checking git status...${NC}"
-    cd "$JH_ROOT" || return 1
-
-    # Check for uncommitted changes (including untracked files)
-    FRONTEND_CHANGES=$(git status --porcelain frontend/ 2>/dev/null)
-    if [ -z "$FRONTEND_CHANGES" ]; then
-        echo -e "${GREEN}  ✓ No uncommitted frontend/ changes${NC}"
-    else
-        echo -e "${YELLOW}  ⚠ You have uncommitted frontend/ changes${NC}"
-        echo -e "${YELLOW}    Vercel deploys from git, so commit your changes first${NC}"
-        git status --short frontend/ | sed 's/^/    /'
-    fi
-
-    # Check current branch
-    CURRENT_BRANCH=$(git branch --show-current)
-    echo -e "${BLUE}  Current branch: ${YELLOW}$CURRENT_BRANCH${NC}"
-
-    # Check latest deployment status
-    echo ""
-    echo -e "${BLUE}[4/5] Checking latest Vercel deployments...${NC}"
-    cd "$JH_ROOT/frontend" || return 1
-    vercel ls --limit 3 2>&1 | tail -n +6 | head -5
-
-    # Trigger git deployment
-    echo ""
-    echo -e "${BLUE}[5/5] Git push and deployment:${NC}"
-    if [ "$AUTO_CONFIRM" = true ]; then
-        echo -e "${GREEN}  --c: auto-confirming git push${NC}"; DEPLOY_CHOICE="y"
-    else
-        echo -n -e "${YELLOW}Push frontend/ to git for Vercel CI/CD? [y/n]: ${NC}"
-        read DEPLOY_CHOICE
-    fi
-
-    if [[ "$DEPLOY_CHOICE" =~ ^[Yy]$ ]]; then
-        cd "$JH_ROOT" || return 1
-
-        # Only add frontend changes
-        echo -e "${BLUE}Adding frontend/ changes...${NC}"
-        git add frontend/
-
-        # Check if there are staged changes
-        if git diff --cached --quiet; then
-            echo -e "${YELLOW}  ⚠ No frontend changes to commit${NC}"
-        else
-            # Show what will be committed
-            echo -e "${BLUE}Staged changes:${NC}"
-            git status --short | grep "^[AM]" | sed 's/^/  /'
-
-            if [ -n "$FLAG_COMMIT_MSG" ]; then
-                COMMIT_MSG="$FLAG_COMMIT_MSG"
-                echo -e "${GREEN}  --m: using commit message: ${COMMIT_MSG}${NC}"
-            else
-                echo -n -e "${YELLOW}Commit message: ${NC}"
-                read COMMIT_MSG
-            fi
-
-            if [ -z "$COMMIT_MSG" ]; then
-                echo -e "${RED}✗ Commit message required${NC}"
-                git reset > /dev/null 2>&1
-                cd "$JH_ROOT" || return 1
-                return 1
-            fi
-
-            # Commit
-            git commit -m "$COMMIT_MSG"
-            if [ $? -ne 0 ]; then
-                echo -e "${RED}✗ Commit failed${NC}"
-                cd "$JH_ROOT" || return 1
-                return 1
-            fi
-
-            # Push
-            echo -e "${BLUE}Pushing to git...${NC}"
-            git push origin "$CURRENT_BRANCH"
-            if [ $? -ne 0 ]; then
-                echo -e "${RED}✗ Git push failed${NC}"
-                cd "$JH_ROOT" || return 1
-                return 1
-            fi
-
-            echo -e "${GREEN}✓ Pushed to git. Vercel CI/CD will auto-deploy.${NC}"
-            echo ""
-
-            # Wait a moment for Vercel to pick up the deployment
-            echo -e "${BLUE}Waiting for Vercel to pick up deployment...${NC}"
-            sleep 3
-
-            # Check latest deployment status
-            cd "$JH_ROOT/frontend" || return 1
-            echo -e "${BLUE}Latest Vercel deployments:${NC}"
-            vercel ls --limit 5 2>&1 | tail -n +6 | head -7
-
-            echo ""
-            echo -e "${BLUE}Monitor deployment:${NC}"
-            echo -e "  Dashboard: ${BLUE}https://vercel.com/zduanxs-projects/zduan-job${NC}"
-            echo -e "  Live site:  ${BLUE}https://zduan-job.vercel.app${NC}"
-        fi
-    else
-        echo -e "${RED}Deployment cancelled by user${NC}"
-        cd "$JH_ROOT" || return 1
-        return 1
-    fi
-
-    cd "$JH_ROOT" || return 1
-    echo ""
-    echo -e "${GREEN}=== Frontend deployment complete ===${NC}"
-}
+# jpushvercel REMOVED (Phase 9D cleanup): its env-sync moved into `jsyncsecrets`
+# (target=vercel branch → `vercel env`), and its deploy was redundant with Vercel's
+# auto-deploy on git push. Use: jsyncsecrets frontend  +  push (Vercel deploys).
 
 # Verify environment variables are synced between local and deployed
 jenvcheck() {
@@ -1246,7 +1008,7 @@ jenvcheck() {
             rm -f .env.vercel.check
         else
             echo -e "${RED}  ✗ Cannot retrieve Vercel environment variables${NC}"
-            echo -e "${YELLOW}    Run 'jpushvercel' to check connection and fix${NC}"
+            echo -e "${YELLOW}    Run 'jsyncsecrets frontend' to push vars to Vercel${NC}"
         fi
 
         cd "$JH_ROOT" || return 1
@@ -1331,8 +1093,8 @@ jhelp() {
     echo "  jpushchat          - Deploy chat Node Lambda via Terraform"
     echo "  jtfplan [stack]    - Preview Terraform changes (terraform plan) without applying"
     echo "  jtfkill            - Kill orphaned Terraform/package.py build processes"
-    echo "  jsyncsecrets [stk] - Push stack secrets (root .env.local) -> GitHub Secrets (manual)"
-    echo "  jpushvercel        - Deploy frontend to Vercel (git CI/CD)"
+    echo "  jsyncsecrets [stk] - Manual sync: root .env.local -> GitHub Secrets (terraform"
+    echo "                       stacks) + Vercel env (frontend). Vercel deploys on git push."
     echo "  jenvcheck          - Verify environment variables (local vs deployed)"
     echo ""
     echo -e "${GREEN}Debugging:${NC}"
