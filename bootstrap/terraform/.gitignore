@@ -1,0 +1,35 @@
+# Terraform — NEVER commit these (they contain secrets / are machine-local)
+
+# State files: contain ALL resource attributes incl. secrets in PLAINTEXT.
+# State lives in S3 (remote backend), never in git.
+*.tfstate
+*.tfstate.*
+*.tfstate.backup
+
+# Local provider plugins + lock metadata cache (large, machine-specific)
+.terraform/
+
+# Crash logs
+crash.log
+crash.*.log
+
+# Variable files that may hold secret VALUES (we use TF_VAR_ / .env.local instead,
+# but ignore these defensively so a stray secret-bearing tfvars never gets committed)
+*.tfvars
+*.tfvars.json
+!example.tfvars        # example/template files (no real values) are OK to commit
+
+# Generated plan files (point-in-time, may contain sensitive diffs)
+*.tfplan
+
+# Lambda build artifacts (the module's build output + the chat archive_file zip).
+# These are generated from source on every build — never commit (and the module's
+# plan.json can embed sensitive build context).
+builds/
+.build/
+*.zip
+
+# The auto-generated config from `-generate-config-out` before cleanup.
+# CONTAINS PLAINTEXT SECRETS (env vars read back from live Lambdas) — never commit.
+generated.tf
+generated_*.tf

@@ -1,12 +1,28 @@
 # Phase 9E: Continuous Deployment (Terraform via GitHub Actions)
 
-**Status**: 📋 Planning
-**Date**: June 25, 2026
-**Goal**: Run **`terraform apply`** in a GitHub Actions workflow on merge to `main` — deploying the backend + chat stacks automatically, **gated** by a manual approval, with `TF_VAR_*` from GitHub Secrets and a **post-deploy smoke test + rollback**.
+**Status**: 🚧 In Progress
+**Date**: June 26, 2026
+**Goal**: Run **`terraform apply`** in a GitHub Actions workflow on merge to `main` — deploying the backend + chat stacks automatically, **gated** by a manual approval, authenticating to AWS via **OIDC (no stored keys)**, with `TF_VAR_*` from GitHub Secrets and a **post-deploy smoke test**.
+
+> **Progress:** ✅ OIDC live in AWS (role `jh-github-actions-cd`, scoped to `repo:zduanx/jh@main`),
+> in its own **`bootstrap/terraform/`** state (repo-level CD infra, separate from the app stacks —
+> applied via `jpushbootstrap`) · ✅ CD workflows written (`deploy-backend.yml`, `deploy-chat.yml`) ·
+> ✅ GitHub Environments `production-backend` / `production-chat` (required-reviewer gate) ·
+> ⬜ SAM cleanup · ⬜ first live deploy test.
 
 > The capstone of Phase 9. Builds on **9A** (deployment is now Terraform — `terraform apply`
-> deploys infra *and* code), **9B** (the merge that triggers it), and **9D** (CI green gates the
-> PR). This is the only sub-phase that touches **production** and uses **secrets**.
+> deploys infra *and* code), **9C** (the PR flow / the merge that triggers it), and **9D** (CI
+> green gates the PR). This is the only sub-phase that touches **production** and uses **secrets**.
+
+**The 9E work, in order:**
+1. **OIDC auth** — AWS IAM OIDC provider + a role scoped to `repo:zduanx/jh:ref:refs/heads/main`
+   (Terraform), so the runner assumes a role via a short-lived token — **no AWS keys stored in GitHub**
+2. **CD workflows** — `deploy-backend.yml` + `deploy-chat.yml`: `init → plan → (gated apply)`
+3. **Smoke test** — after apply, assert `/health` returns 200
+4. **Rollback** — git-revert the bad commit → CD re-applies the previous good code (Terraform is
+   declarative; "rollback" = apply the prior state, not an instant alias flip)
+5. **`dev.sh` cleanup** — delete the dead SAM code (`jpushapi_sam`, `jpushchat_sam`,
+   `generate_template.py`, `generate_samconfig.py`) left over from the pre-9A SAM deploy path
 
 ---
 
@@ -27,23 +43,34 @@ Terraform apply workflows.
 
 Deploys are **gated** (a GitHub Environment with a required reviewer) — on merge, the workflow
 runs `terraform plan`, waits for approval, then `apply`. After apply, a **smoke test** hits
-`/health` (+ representative endpoints); on failure the workflow **rolls back** (re-apply the
-previous known-good package / Terraform state) so a bad deploy never stays live.
+`/health`; on failure the workflow goes red. **Rollback is git-revert**: revert the bad commit on
+`main` → CD re-applies the previous good code (declarative IaC has no instant undo without Lambda
+versioning, which is deferred).
 
 **Included in this phase**:
+- **OIDC AWS auth** (Terraform): `aws_iam_openid_connect_provider` (trust GitHub's token issuer)
+  + an `aws_iam_role` whose trust policy is scoped to `repo:zduanx/jh:ref:refs/heads/main` (only
+  the repo's main branch — PRs and other repos can't assume it) + a permissions policy for the
+  services Terraform touches (Lambda, S3, IAM, API Gateway, SQS, CloudWatch Logs, the state bucket).
+  **No long-lived AWS keys in GitHub** — the runner gets ~1h temporary creds per run.
 - `.github/workflows/deploy-backend.yml` + `deploy-chat.yml` — on merge to `main`:
-  `terraform init` → `plan` → (gated approval) → `apply`
-- **`TF_VAR_*` from GitHub Secrets** (`TF_VAR_database_url`, etc.) — the CD analogue of the local
-  `tfvars.sh` (which reads `.env.local`); 9E centralizes the source
-- **AWS creds** via GitHub Secrets (or OIDC) for Terraform + the S3 state backend
-- **GitHub Environments** (`backend`, `chat`) with required-reviewer gates
-- **Post-deploy smoke test + rollback** (deploy is self-verifying)
+  `terraform init` → `plan` → (gated approval) → `apply` → smoke test
+- **`TF_VAR_*` from GitHub Secrets** (`TF_VAR_database_url`, etc.) — already synced by `jsyncsecrets`
+  (9B). Same vars the local `tfvars.sh` exports from `.env.local`; Terraform reads `var.*` identically.
+- **GitHub Environments** (`backend`, `chat`) with required-reviewer gates (the manual approval)
+- **Post-deploy smoke test** — assert `/health` returns 200 after apply
+- **Rollback = git-revert** — if a deploy goes bad, revert the commit → CD re-applies the prior good
+  code (Terraform is declarative; rollback is "apply the previous state", not an alias flip)
 - `plan`-on-PR: post the Terraform plan as a PR comment for review (infra diff, like code)
-- New ADR: **ADR-036** (Terraform CD: `apply` on merge, gated, smoke-test + rollback)
+- **`dev.sh` SAM cleanup** — remove dead `jpushapi_sam` / `jpushchat_sam` / `generate_*.py`
+- New ADR: **ADR-036** (Terraform CD: OIDC auth, `apply` on merge, gated, smoke-test, git-revert rollback)
 
 **Explicitly excluded**:
-- Frontend deploy work — already CD via Vercel
-- Fully-automatic (ungated) prod deploys — kept gated
+- **Frontend deploy** — Vercel keeps auto-deploying on git push (we keep its per-PR preview deploys,
+  a real perk). `jsyncsecrets` already syncs the frontend's `REACT_APP_*` to Vercel (9B); CD does
+  not redeploy the frontend (that would race Vercel's build).
+- Fully-automatic (ungated) prod deploys — kept gated (manual approval)
+- Lambda alias/versioning for instant rollback — deferred (git-revert is enough at solo scale)
 - Re-implementing deploy logic — CD reuses the *same* `.tf` + module the local `jpushapi` uses
 
 ---
@@ -67,8 +94,10 @@ previous known-good package / Terraform state) so a bad deploy never stays live.
 - On merge: gated `apply` (required reviewer on the Environment) — preserves human control
 
 ### 4. Deploy → smoke-test → rollback
-- After `apply`: assert `/health` (+ representative endpoints) return 200
-- On failure: roll back (re-apply prior state / known-good package), exit non-zero
+- After `apply`: assert `/health` returns 200 (the endpoint exists in `backend/main.py`)
+- On failure: the workflow exits non-zero (red). **Rollback is git-revert**: revert the bad
+  commit on `main` → CD re-applies the previous good code. (Honest about Terraform: there's no
+  instant "undo" without Lambda versioning; declarative rollback = apply the prior state.)
 
 ### 5. The full pipeline
 ```
@@ -84,6 +113,13 @@ jbranch → jsave → jpr → [CI 9D: tests + terraform plan on PR] → review �
 
 - **CD reuses 9A's Terraform unchanged** — the same `.tf` + lambda module the local `jpushapi`
   runs; CD just runs `terraform apply` in a runner with `TF_VAR_*` from Secrets. No new deploy code.
+- **Secrets reach Terraform as env vars, not generated files** — the runner names each secret into
+  the job env (`TF_VAR_database_url: ${{ secrets.TF_VAR_DATABASE_URL }}`), and `terraform apply`
+  auto-reads any `TF_VAR_*` from the environment. Unlike SAM (which needed `generate_*.py` to write
+  `template.yaml`/`samconfig.toml`), Terraform consumes env + `.tf` natively — **no generate step**.
+  The explicit `${{ secrets.X }}` lines are the required handoff from GitHub's vault into the VM
+  (a script can't enumerate secrets by name) and double as **per-job least-privilege** (the backend
+  job only sees backend's secrets, never chat's).
 - **The local environment was the hard case** — Docker/ARM/`--platform` friction we fought in 9A
   is absent in CD (Linux runner). So the painful local migration *de-risks* CD.
 - **`terraform apply` deploying every run is correct for CD** — each CD run is a merge (an
@@ -100,18 +136,21 @@ jbranch → jsave → jpr → [CI 9D: tests + terraform plan on PR] → review �
 - [ ] PR shows `terraform plan` as a comment (infra diff reviewable)
 - [ ] Merge a trivial backend change → `deploy-backend.yml` runs, waits at the approval gate
 - [ ] Approve → `terraform apply` → backend Lambdas updated; smoke test `/health` 200
-- [ ] Force a bad deploy → smoke fails → rollback → prod healthy, workflow exits non-zero
+- [ ] Force a bad deploy → smoke fails → workflow red; git-revert the commit → CD re-applies → healthy
 - [ ] Chat change → `deploy-chat.yml` gated → approve → chat updated → smoke ✓
-- [ ] Frontend still auto-deploys via Vercel
+- [ ] Frontend still auto-deploys via Vercel (per-PR previews preserved)
+- [ ] **OIDC works keyless** — CD assumes the role, applies, with NO AWS keys in GitHub Secrets
 - [ ] Confirm Terraform state in S3 stays consistent between CD and local runs
+- [ ] Dead SAM code removed from `dev.sh`; `jpushapi`/`jpushchat` (Terraform) still work
 
 ---
 
-## Next Steps → Phase 9E
+## Next Steps → Phase 10
 
-Secret re-architecture — replace the per-stack `.env.local` PROD_VALUE source (`tfvars.sh`) with
-a **root `.env.local`** + a `jsyncsecrets` push to **GitHub Secrets**, so local and CD pull from
-one consistent place. (9E is the original 9A scope, deferred behind the Terraform migration.)
+9E is the **capstone of Phase 9** (CI/CD). With it, the full SDLC loop is closed:
+`jbranch → jsave → jpr → CI (9D) → review → jland → CD (9E) → prod`. Possible Phase 10
+directions: observability (structured logs/metrics/alarms), the autonomous coding-agent work,
+or hardening (least-privilege IAM, Lambda versioning for instant rollback).
 
 ---
 
@@ -120,15 +159,21 @@ one consistent place. (9E is the original 9A scope, deferred behind the Terrafor
 ```
 jh/
 ├── .github/workflows/
-│   ├── deploy-backend.yml   # merge → init → plan → (gated) apply → smoke/rollback
+│   ├── deploy-backend.yml   # merge → init → plan → (gated) apply → smoke test
 │   └── deploy-chat.yml
-├── backend/terraform/       # the .tf CD runs (from 9A)
+├── backend/terraform/
+│   └── *.tf                 # the infra/lambda .tf CD applies (from 9A)
+├── bootstrap/terraform/
+│   ├── oidc.tf              # GitHub OIDC provider + CD role (repo-level; jpushbootstrap)
+│   └── main.tf              # own S3 state (key=bootstrap/), separate from the app stacks
 └── chat/terraform/
 ```
 
 **Key files**:
+- `bootstrap/terraform/oidc.tf` — repo-level OIDC provider + CD role (separate state; `jpushbootstrap`)
 - [backend/terraform/](../../backend/terraform/) — the Terraform CD applies (unchanged from 9A)
-- [tfvars.sh](../../tfvars.sh) — local TF_VAR source; CD uses GitHub Secrets instead
+- [tfvars.sh](../../tfvars.sh) — local TF_VAR source; CD reads the same vars from GitHub Secrets
+  (`jsyncsecrets` keeps both in sync from the unified root `.env.local`)
 
 ---
 
@@ -140,8 +185,15 @@ jh/
   is a local-dev problem, not a CD one.
 - **Secret injection lives in the deploy workflow, never in the PR flow** — `jpr`/`jland` (9B)
   touch no secrets; CD sets `TF_VAR_*` from GitHub Secrets at apply time.
-- **A deploy isn't done until verified** — smoke-test + rollback turns `terraform apply` into a
-  *safe* deploy (the pipeline catches a bad deploy, not a user hitting a 500).
+- **A deploy isn't done until verified** — smoke-test turns `terraform apply` into a *safe* deploy
+  (the pipeline catches a bad deploy, not a user hitting a 500).
+- **OIDC beats stored keys** — federated auth (GitHub proves its identity with a short-lived signed
+  token; AWS trusts it via a repo+branch-scoped role) means **no long-lived AWS credentials in
+  GitHub** to leak. The trust is scoped to `repo:zduanx/jh:ref:refs/heads/main`, so PRs and other
+  repos can't assume the role. It's all IaC (`oidc.tf`) — the auth setup is itself version-controlled.
+- **Terraform "rollback" is git-revert, not a button** — declarative IaC has no instant undo without
+  Lambda versioning. Being honest about this (revert + re-apply) beats pretending there's a rollback
+  switch. Instant rollback (alias flip) is a deliberate future add, not assumed.
 
 ---
 

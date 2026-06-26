@@ -1,0 +1,70 @@
+name: Deploy Chat
+
+# Phase 9E: Continuous Deployment for the chat stack (Node Lambda + Function URL).
+# On merge to main, deploy via `terraform apply` — OIDC auth (no stored keys), gated
+# by the `production-chat` environment, then smoke-test /health. Reuses the same
+# Terraform the local `jpushchat` runs. Chat packages via archive_file (no Docker).
+on:
+  push:
+    branches: [main]
+    paths:
+      - "chat/**"
+      - ".github/workflows/deploy-chat.yml"
+  workflow_dispatch: {}
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  deploy:
+    name: terraform apply (chat)
+    runs-on: ubuntu-latest
+    environment: production-chat # gate: required reviewer pauses the job for approval
+    defaults:
+      run:
+        working-directory: chat/terraform
+    env:
+      # chat's 6 secrets (from chat/deploy.config.json), via GitHub Secrets.
+      TF_VAR_secret_key: ${{ secrets.TF_VAR_SECRET_KEY }}
+      TF_VAR_anthropic_api_key: ${{ secrets.TF_VAR_ANTHROPIC_API_KEY }}
+      TF_VAR_mcp_service_token: ${{ secrets.TF_VAR_MCP_SERVICE_TOKEN }}
+      TF_VAR_mcp_server_url: ${{ secrets.TF_VAR_MCP_SERVER_URL }}
+      TF_VAR_upstash_redis_rest_url: ${{ secrets.TF_VAR_UPSTASH_REDIS_REST_URL }}
+      TF_VAR_upstash_redis_rest_token: ${{ secrets.TF_VAR_UPSTASH_REDIS_REST_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC, keyless)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::400778305315:role/jh-github-actions-cd
+          aws-region: us-east-1
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.15.7"
+
+      - name: Terraform init
+        run: terraform init
+
+      - name: Terraform plan
+        run: terraform plan -out=tfplan
+
+      - name: Terraform apply
+        run: terraform apply -auto-approve tfplan
+
+      - name: Smoke test (/health)
+        run: |
+          URL="$(terraform output -raw chat_function_url)"
+          URL="${URL%/}" # strip any trailing slash
+          echo "Smoke-testing $URL/health"
+          for i in 1 2 3 4 5; do
+            code="$(curl -s -o /dev/null -w '%{http_code}' "$URL/health" || echo 000)"
+            if [ "$code" = "200" ]; then echo "✓ /health 200"; exit 0; fi
+            echo "  attempt $i: $code — retrying in 5s"; sleep 5
+          done
+          echo "✗ /health did not return 200 — deploy is unhealthy"
+          echo "  Rollback: git revert the offending commit on main → CD re-applies the prior code."
+          exit 1
