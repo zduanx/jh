@@ -317,9 +317,12 @@ class TestGetOrCreateUser:
         assert user2.last_login >= first_login
 
 
+@pytest.mark.manual
 class TestManualInspection:
     """
-    Tests that persist data for manual inspection
+    Tests that persist data for manual inspection (NOT real assertions — they
+    create users to look at via psql). Marked `manual` so CI skips them
+    (CI runs `pytest -m "not manual"`); run locally to seed inspectable data.
 
     Run this class:
         pytest tests/test_user_service.py::TestManualInspection -v

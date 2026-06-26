@@ -78,43 +78,75 @@ jtfplan() {
   jtfkill
 }
 
-# jsyncsecrets — push the secrets each stack needs (from deploy.config.json) to
-# GitHub Secrets, read from the unified root .env.local PROD_VALUEs (Phase 9B → 9E CD).
-# One-way: root .env.local is the source; GitHub Secrets is write-only.
-# Pushes as TF_VAR_<lowercase> (what the CD `terraform apply` workflow reads).
-#   jsyncsecrets [backend|chat|all]   (default: all terraform stacks)
+# jsyncsecrets — manual one-way push of each stack's vars from the unified root
+# .env.local PROD_VALUEs to its deploy target (Phase 9B → 9E CD). Manifest-driven:
+# each stack's deploy.config.json `target` decides WHERE the vars go —
+#   target=terraform → GitHub Secrets as TF_VAR_<lowercase>   (CD `terraform apply` reads them)
+#   target=vercel    → Vercel production env via `vercel env`  (Vercel still deploys; we only sync)
+# Source is root .env.local; the destinations are write-only. Purely manual (never automatic).
+#   jsyncsecrets [backend|chat|frontend|all]   (default: all stacks)
 jsyncsecrets() {
   local which="${1:-all}"
   local root="$_JH_TF_ROOT"
   local envfile="$root/.env.local"
 
   if [ ! -f "$envfile" ]; then echo -e "${RED:-}✗ no root .env.local${NC:-}"; return 1; fi
-  if ! command -v gh >/dev/null 2>&1; then echo -e "${RED:-}✗ gh CLI not installed${NC:-}"; return 1; fi
-  if ! gh auth status >/dev/null 2>&1; then echo -e "${RED:-}✗ not logged in — run: gh auth login${NC:-}"; return 1; fi
 
   local stacks=()
   case "$which" in
-    all) stacks=(backend chat) ;;
+    all) stacks=(backend chat frontend) ;;
     *)   stacks=("$which") ;;
   esac
 
-  local pushed=0 name val tfvar
+  # Declare ALL loop-locals ONCE up front. (In zsh, re-running `local x` on a later
+  # loop iteration — when x already holds a value — PRINTS `x=value` to stdout, which
+  # would leak secret values. Declaring once avoids that re-declaration entirely.)
+  local pushed=0 stack manifest target names name val tfvar bvars bv
   for stack in "${stacks[@]}"; do
-    local manifest="$root/$stack/deploy.config.json"
+    manifest="$root/$stack/deploy.config.json"
     [ -f "$manifest" ] || { echo "  ⚠ no $manifest, skip"; continue; }
-    echo -e "${BLUE:-}=== syncing '$stack' secrets → GitHub Secrets ===${NC:-}"
-    # var names from the manifest's secrets[]
-    local names
-    names="$(python3 -c "import json;print('\n'.join(json.load(open('$manifest')).get('secrets',[])))" 2>/dev/null)"
-    while IFS= read -r name; do
-      [ -z "$name" ] && continue
-      val="$(grep "^# ${name}_PROD_VALUE=" "$envfile" | head -1 | cut -d= -f2-)"
-      [ -z "$val" ] && { echo "  ⚠ no PROD_VALUE for $name"; continue; }
-      tfvar="TF_VAR_$(echo "$name" | tr '[:upper:]' '[:lower:]')"
-      printf '%s' "$val" | gh secret set "$tfvar" >/dev/null 2>&1 \
-        && { echo "  ✓ $tfvar"; pushed=$((pushed+1)); } \
-        || echo "  ✗ failed: $tfvar"
-    done <<< "$names"
+    target="$(python3 -c "import json;print(json.load(open('$manifest')).get('target',''))" 2>/dev/null)"
+
+    case "$target" in
+      terraform)
+        if ! command -v gh >/dev/null 2>&1; then echo "  ⚠ gh CLI missing — skip '$stack'"; continue; fi
+        if ! gh auth status >/dev/null 2>&1; then echo "  ⚠ gh not authed (gh auth login) — skip '$stack'"; continue; fi
+        echo -e "${BLUE:-}=== '$stack' (terraform) → GitHub Secrets ===${NC:-}"
+        names="$(python3 -c "import json;print('\n'.join(json.load(open('$manifest')).get('secrets',[])))" 2>/dev/null)"
+        while IFS= read -r name; do
+          [ -z "$name" ] && continue
+          val="$(grep "^# ${name}_PROD_VALUE=" "$envfile" | head -1 | cut -d= -f2-)"
+          [ -z "$val" ] && { echo "  ⚠ no PROD_VALUE for $name"; continue; }
+          tfvar="TF_VAR_$(echo "$name" | tr '[:upper:]' '[:lower:]')"
+          printf '%s' "$val" | gh secret set "$tfvar" >/dev/null 2>&1 \
+            && { echo "  ✓ $tfvar"; pushed=$((pushed+1)); } \
+            || echo "  ✗ failed: $tfvar"
+        done <<< "$names"
+        ;;
+
+      vercel)
+        if ! command -v vercel >/dev/null 2>&1; then echo "  ⚠ vercel CLI missing — skip '$stack'"; continue; fi
+        echo -e "${BLUE:-}=== '$stack' (vercel) → Vercel production env ===${NC:-}"
+        echo "  (Vercel still deploys on git push; this only syncs its build-time vars.)"
+        # frontend manifest uses build_vars[] (public REACT_APP_*), not secrets[]
+        bvars="$(python3 -c "import json;print('\n'.join(json.load(open('$manifest')).get('build_vars',[])))" 2>/dev/null)"
+        ( cd "$root/frontend" || exit 1
+          while IFS= read -r bv; do
+            [ -z "$bv" ] && continue
+            val="$(grep "^# ${bv}_PROD_VALUE=" "$envfile" | head -1 | cut -d= -f2- | tr -d '\r')"
+            [ -z "$val" ] && { echo "  ⚠ no PROD_VALUE for $bv"; continue; }
+            # replace: remove the existing prod var (ignore if absent), then add fresh
+            echo "y" | vercel env rm "$bv" production >/dev/null 2>&1
+            printf '%s' "$val" | vercel env add "$bv" production >/dev/null 2>&1 \
+              && echo "  ✓ $bv" || echo "  ✗ failed: $bv"
+          done <<< "$bvars"
+        ) && pushed=$((pushed+1))
+        ;;
+
+      *)
+        echo "  ⚠ '$stack' has unknown target '$target' — skip"
+        ;;
+    esac
   done
-  echo -e "${GREEN:-}✓ synced $pushed secret(s) to GitHub${NC:-}"
+  echo -e "${GREEN:-}✓ jsyncsecrets done${NC:-}"
 }

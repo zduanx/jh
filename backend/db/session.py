@@ -12,9 +12,12 @@ from dotenv import load_dotenv
 _is_lambda = os.getenv("AWS_LAMBDA_FUNCTION_NAME") is not None
 
 if not _is_lambda:
-    # Local development: load .env.local (takes precedence over .env)
+    # Local development: load .env.local (takes precedence over .env).
+    # Phase 9B: prefer the unified ROOT .env.local, fall back to legacy per-stack.
     _backend_dir = Path(__file__).parent.parent
-    env_local = _backend_dir / '.env.local'
+    env_local = _backend_dir.parent / '.env.local'   # root
+    if not env_local.exists():
+        env_local = _backend_dir / '.env.local'       # legacy per-stack
     env_file = _backend_dir / '.env'
 
     if env_local.exists():

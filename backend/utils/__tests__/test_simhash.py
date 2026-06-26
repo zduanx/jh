@@ -146,10 +146,12 @@ class TestComputeSimhash:
         assert hash1 == hash2
 
     def test_returns_64_bit_int(self):
-        """SimHash should be a 64-bit integer."""
+        """SimHash is a SIGNED 64-bit integer (compute_simhash converts to signed
+        for PostgreSQL BIGINT compatibility — see simhash.py: `simhash -= (1 << 64)`).
+        Stored as BigInteger (range -2^63 .. 2^63-1), so it can be negative."""
         h = compute_simhash(SAMPLE_HTML_1)
         assert isinstance(h, int)
-        assert 0 <= h < (1 << 64)
+        assert -(1 << 63) <= h < (1 << 63)  # signed 64-bit (Postgres BIGINT range)
 
     def test_different_content_different_hash(self):
         """Different content should produce different hashes."""
