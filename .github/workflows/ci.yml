@@ -81,7 +81,10 @@ jobs:
           cache-dependency-path: chat/package-lock.json
       - name: Install
         working-directory: chat
-        run: npm ci
+        # `npm install` (not `npm ci`) — lenient, like Vercel's build: it tolerates a
+        # lockfile that a newer npm would resolve differently, instead of hard-failing.
+        # This is a build/test check, not a shipped artifact, so exact-lock isn't needed.
+        run: npm install
       - name: Test
         working-directory: chat
         run: npm test
@@ -102,7 +105,9 @@ jobs:
           cache-dependency-path: frontend/package-lock.json
       - name: Install
         working-directory: frontend
-        run: npm ci
+        # `npm install` (not `npm ci`) — same lenient approach Vercel uses, so the
+        # stale Create-React-App lockfile doesn't hard-fail across Node versions.
+        run: npm install
       - name: Build
         working-directory: frontend
         run: npm run build

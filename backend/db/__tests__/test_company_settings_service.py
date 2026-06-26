@@ -44,7 +44,10 @@ class TestCreateSetting:
         assert setting.id is not None
         assert setting.user_id == test_user.user_id
         assert setting.company_name == "anthropic"
-        assert setting.title_filters == {"include": None, "exclude": []}
+        # TitleFilters.to_dict() normalizes a None/empty include to [] (see
+        # extractors_v2_base/config.py: `"include": self.include or []`), so a
+        # minimal setting stores empty lists, not None.
+        assert setting.title_filters == {"include": [], "exclude": []}
         assert setting.is_enabled is True
         assert setting.created_at is not None
         assert setting.updated_at is not None
