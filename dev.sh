@@ -15,28 +15,29 @@ JH_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # ==============================================================================
 # GLOBAL ENVIRONMENT VARIABLE CONFIGURATION
 # ==============================================================================
-# Parse production values from .env.local files once at script load time
-# Format: # <VAR_NAME>_PROD_VALUE=value
+# Phase 9B: ONE unified secret source. Resolve it once — prefer the root .env.local,
+# fall back to a legacy per-stack file only if root is absent. Every j* command that
+# reads PROD_VALUEs / env vars goes through this (no more per-stack path scattering).
+_jh_env_file() {
+    if [ -f "$JH_ROOT/.env.local" ]; then echo "$JH_ROOT/.env.local"
+    elif [ -f "$JH_ROOT/backend/.env.local" ]; then echo "$JH_ROOT/backend/.env.local"
+    fi
+}
 
-# Backend production values — Phase 9B: read the unified ROOT .env.local
-# (the per-stack backend/.env.local was removed), legacy per-stack as fallback.
-_jh_be_env="$JH_ROOT/.env.local"; [ -f "$_jh_be_env" ] || _jh_be_env="$JH_ROOT/backend/.env.local"
-if [ -f "$_jh_be_env" ]; then
-    BACKEND_GOOGLE_CLIENT_ID_PROD=$(grep "^# GOOGLE_CLIENT_ID_PROD_VALUE=" "$_jh_be_env" | cut -d= -f2- | tr -d '\n' | tr -d '\r')
-    BACKEND_SECRET_KEY_PROD=$(grep "^# SECRET_KEY_PROD_VALUE=" "$_jh_be_env" | cut -d= -f2- | tr -d '\n' | tr -d '\r')
-    BACKEND_ALLOWED_EMAILS_PROD=$(grep "^# ALLOWED_EMAILS_PROD_VALUE=" "$_jh_be_env" | cut -d= -f2- | tr -d '\n' | tr -d '\r')
-    BACKEND_ALLOWED_ORIGINS_PROD=$(grep "^# ALLOWED_ORIGINS_PROD_VALUE=" "$_jh_be_env" | cut -d= -f2- | tr -d '\n' | tr -d '\r')
-    BACKEND_DATABASE_URL_PROD=$(grep "^# DATABASE_URL_PROD_VALUE=" "$_jh_be_env" | cut -d= -f2- | tr -d '\n' | tr -d '\r')
-    BACKEND_TEST_DATABASE_URL_PROD=$(grep "^# TEST_DATABASE_URL_PROD_VALUE=" "$_jh_be_env" | cut -d= -f2- | tr -d '\n' | tr -d '\r')
-fi
+# Read one `# NAME_PROD_VALUE=` from the unified env file (cleaned of CR/LF).
+_jh_prod_val() { grep "^# ${1}_PROD_VALUE=" "$(_jh_env_file)" 2>/dev/null | cut -d= -f2- | tr -d '\n\r'; }
 
-# Frontend production values — Phase 9B: read the unified ROOT .env.local
-# (the per-stack frontend/.env.local was removed), legacy per-stack as fallback.
-_jh_fe_env="$JH_ROOT/.env.local"; [ -f "$_jh_fe_env" ] || _jh_fe_env="$JH_ROOT/frontend/.env.local"
-if [ -f "$_jh_fe_env" ]; then
-    FRONTEND_GOOGLE_CLIENT_ID_PROD=$(grep "^# REACT_APP_GOOGLE_CLIENT_ID_PROD_VALUE=" "$_jh_fe_env" | cut -d= -f2- | tr -d '\n' | tr -d '\r')
-    FRONTEND_API_URL_PROD=$(grep "^# REACT_APP_API_URL_PROD_VALUE=" "$_jh_fe_env" | cut -d= -f2- | tr -d '\n' | tr -d '\r')
-    FRONTEND_CHAT_URL_PROD=$(grep "^# REACT_APP_CHAT_URL_PROD_VALUE=" "$_jh_fe_env" | cut -d= -f2- | tr -d '\n' | tr -d '\r')
+# Parse production values once at load time (Format: # <VAR_NAME>_PROD_VALUE=value).
+if [ -f "$(_jh_env_file)" ]; then
+    BACKEND_GOOGLE_CLIENT_ID_PROD=$(_jh_prod_val GOOGLE_CLIENT_ID)
+    BACKEND_SECRET_KEY_PROD=$(_jh_prod_val SECRET_KEY)
+    BACKEND_ALLOWED_EMAILS_PROD=$(_jh_prod_val ALLOWED_EMAILS)
+    BACKEND_ALLOWED_ORIGINS_PROD=$(_jh_prod_val ALLOWED_ORIGINS)
+    BACKEND_DATABASE_URL_PROD=$(_jh_prod_val DATABASE_URL)
+    BACKEND_TEST_DATABASE_URL_PROD=$(_jh_prod_val TEST_DATABASE_URL)
+    FRONTEND_GOOGLE_CLIENT_ID_PROD=$(_jh_prod_val REACT_APP_GOOGLE_CLIENT_ID)
+    FRONTEND_API_URL_PROD=$(_jh_prod_val REACT_APP_API_URL)
+    FRONTEND_CHAT_URL_PROD=$(_jh_prod_val REACT_APP_CHAT_URL)
 fi
 
 # Global associative arrays for deployment checks (zsh syntax)
@@ -72,14 +73,14 @@ _normalize_env_value() {
     echo "$value" | tr -d '"' | sed 's/\\n//g' | sed 's/\\r//g' | sed 's/\\t//g'
 }
 
-# Get test database URL from backend/.env.local
+# Get test database URL from the unified root .env.local (9B)
 _get_test_db_url() {
-    grep "^DATABASE_URL=" "$JH_ROOT/backend/.env.local" 2>/dev/null | cut -d= -f2-
+    grep "^DATABASE_URL=" "$(_jh_env_file)" 2>/dev/null | cut -d= -f2-
 }
 
-# Get prod database URL from backend/.env.local (from PROD_VALUE comment)
+# Get prod database URL from the unified root .env.local (from PROD_VALUE comment)
 _get_prod_db_url() {
-    grep "^# DATABASE_URL_PROD_VALUE=" "$JH_ROOT/backend/.env.local" 2>/dev/null | cut -d= -f2-
+    grep "^# DATABASE_URL_PROD_VALUE=" "$(_jh_env_file)" 2>/dev/null | cut -d= -f2-
 }
 
 # Mask password in database URL for display
@@ -100,6 +101,14 @@ jbe() {
 jfe() {
     cd "$JH_ROOT" || return 1
     echo -e "${BLUE}Starting frontend server...${NC}"
+    # Phase 9B: REACT_APP_* live in the unified ROOT .env.local, but Create React App
+    # (react-scripts) only auto-reads frontend/.env*, NOT the root. So export the
+    # frontend's vars from root .env.local before `npm start` picks them up.
+    if [ -f "$JH_ROOT/.env.local" ]; then
+        while IFS= read -r line; do
+            case "$line" in REACT_APP_*=*) export "${line?}" ;; esac
+        done < "$JH_ROOT/.env.local"
+    fi
     cd "$JH_ROOT/frontend" || return 1
     npm start
 }
@@ -457,6 +466,13 @@ jstatus() {
         echo -e "${RED}✗ Chat server not running${NC}"
     fi
 
+    # Check MCP server (the chat agent's tools — Job Assistant needs it)
+    if lsof -ti:8001 > /dev/null 2>&1; then
+        echo -e "${GREEN}✓ MCP server running${NC} on http://localhost:8001"
+    else
+        echo -e "${RED}✗ MCP server not running${NC} (jbemcp — needed for the Job Assistant)"
+    fi
+
     echo ""
     echo -e "${BLUE}Quick test:${NC} curl http://localhost:8000/health"
 }
@@ -510,12 +526,12 @@ jready() {
 
     # 3. Check backend .env.local
     echo -e "${BLUE}[3/8] Backend environment config...${NC}"
-    if [ -f "$JH_ROOT/backend/.env.local" ]; then
+    if [ -f "$JH_ROOT/.env.local" ] || [ -f "$JH_ROOT/backend/.env.local" ]; then
         echo -e "${GREEN}  ✓ backend/.env.local exists${NC}"
         # Check for required variables using BACKEND_CHECK keys
         MISSING_BACKEND_VARS=()
         for VAR_NAME in "${(@k)BACKEND_CHECK}"; do
-            if ! grep -q "^${VAR_NAME}=" "$JH_ROOT/backend/.env.local"; then
+            if ! grep -q "^${VAR_NAME}=" "$(_jh_env_file)"; then
                 MISSING_BACKEND_VARS+=("$VAR_NAME")
             fi
         done
@@ -543,12 +559,12 @@ jready() {
 
     # 5. Check frontend .env.local
     echo -e "${BLUE}[5/8] Frontend environment config...${NC}"
-    if [ -f "$JH_ROOT/frontend/.env.local" ]; then
+    if [ -f "$JH_ROOT/.env.local" ] || [ -f "$JH_ROOT/frontend/.env.local" ]; then
         echo -e "${GREEN}  ✓ frontend/.env.local exists${NC}"
         # Check for required variables using FRONTEND_CHECK keys
         MISSING_FRONTEND_VARS=()
         for VAR_NAME in "${(@k)FRONTEND_CHECK}"; do
-            if ! grep -q "^${VAR_NAME}=" "$JH_ROOT/frontend/.env.local"; then
+            if ! grep -q "^${VAR_NAME}=" "$(_jh_env_file)"; then
                 MISSING_FRONTEND_VARS+=("$VAR_NAME")
             fi
         done
@@ -566,7 +582,7 @@ jready() {
 
     # 6. Check database connectivity (test both local/test and prod databases)
     echo -e "${BLUE}[6/8] Database connectivity...${NC}"
-    if [ -f "$JH_ROOT/backend/.env.local" ] && [ -d "$JH_ROOT/backend/venv" ]; then
+    if { [ -f "$JH_ROOT/.env.local" ] || [ -f "$JH_ROOT/backend/.env.local" ]; } && [ -d "$JH_ROOT/backend/venv" ]; then
         cd "$JH_ROOT/backend" || return 1
         source venv/bin/activate
 
@@ -713,7 +729,7 @@ print('|'.join(results))
     fi
 
     # Chat Redis (Upstash) connectivity
-    if [ -f "$JH_ROOT/chat/.env.local" ] && [ -d "$JH_ROOT/chat/node_modules" ]; then
+    if { [ -f "$JH_ROOT/.env.local" ] || [ -f "$JH_ROOT/chat/.env.local" ]; } && [ -d "$JH_ROOT/chat/node_modules" ]; then
         REDIS_PING=$(cd "$JH_ROOT/chat" && node -e "
 process.loadEnvFile('.env.local');
 const { ping } = await import('./redis.js');
@@ -819,7 +835,7 @@ jenvcheck() {
     # Backend (Lambda vs .env.local)
     echo -e "${BLUE}Backend (AWS Lambda):${NC}"
 
-    if [ -f "$JH_ROOT/backend/.env.local" ]; then
+    if [ -f "$JH_ROOT/.env.local" ] || [ -f "$JH_ROOT/backend/.env.local" ]; then
         # Check API Lambda
         echo -e "${BLUE}  API Lambda (JobHuntTrackerAPI):${NC}"
         LAMBDA_VARS=$(aws lambda get-function --function-name JobHuntTrackerAPI --query 'Configuration.Environment.Variables' 2>/dev/null)
@@ -869,7 +885,7 @@ jenvcheck() {
     echo -e "${BLUE}Frontend (Vercel):${NC}"
     echo -e "${BLUE}  Comparing .env.local PROD_VALUE → Vercel:${NC}"
 
-    if [ -f "$JH_ROOT/frontend/.env.local" ]; then
+    if [ -f "$JH_ROOT/.env.local" ] || [ -f "$JH_ROOT/frontend/.env.local" ]; then
         cd "$JH_ROOT/frontend" || return 1
 
         # Pull env vars from Vercel
@@ -943,15 +959,20 @@ jhelp() {
     echo "  jbe                - Start backend (foreground)"
     echo "  jfe                - Start frontend (foreground)"
     echo "  jbenode            - Start chat Node server (foreground, port 8100)"
+    echo "  jbemcp             - Start MCP server (foreground, port 8001 — the chat agent's tools)"
     echo "  jbe-bg             - Start backend (background, survives terminal close)"
     echo "  jfe-bg             - Start frontend (background, survives terminal close)"
     echo "  jbenode-bg         - Start chat Node server (background)"
+    echo "  jbemcp-bg          - Start MCP server (background, port 8001)"
+    echo ""
+    echo -e "  ${YELLOW}Note:${NC} the Job Assistant needs all of: jbe + jbenode + jbemcp (+ jfe)."
     echo ""
     echo -e "${GREEN}Stop Services:${NC}"
     echo "  jkill-be           - Kill backend"
     echo "  jkill-fe           - Kill frontend"
     echo "  jkill-benode       - Kill chat Node server (port 8100)"
-    echo "  jkillall           - Kill all (backend, frontend, chat)"
+    echo "  jkill-bemcp        - Kill MCP server (port 8001)"
+    echo "  jkillall           - Kill all (backend, frontend, chat, MCP)"
     echo ""
     echo -e "${GREEN}Database:${NC}"
     echo "  jdbcreate <name>   - Create new Alembic migration"
@@ -1317,8 +1338,7 @@ jcompany() {
     source venv/bin/activate 2>/dev/null
     # The agent brain (host) needs ANTHROPIC_API_KEY. It lives in chat/.env.local
     # (the chat agent's key) — reuse it. Fall back to backend/.env.local if present.
-    export ANTHROPIC_API_KEY="${ANTHROPIC_API_KEY:-$(grep '^ANTHROPIC_API_KEY=' "$JH_ROOT/chat/.env.local" 2>/dev/null | cut -d= -f2-)}"
-    export ANTHROPIC_API_KEY="${ANTHROPIC_API_KEY:-$(grep '^ANTHROPIC_API_KEY=' .env.local 2>/dev/null | cut -d= -f2-)}"
+    export ANTHROPIC_API_KEY="${ANTHROPIC_API_KEY:-$(grep '^ANTHROPIC_API_KEY=' "$(_jh_env_file)" 2>/dev/null | cut -d= -f2-)}"
     if [ -z "$ANTHROPIC_API_KEY" ]; then
         echo -e "${YELLOW}  ANTHROPIC_API_KEY not found (checked chat/.env.local, backend/.env.local)${NC}"
     fi

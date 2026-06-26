@@ -30,11 +30,20 @@ if (fs.existsSync(envLocal)) {
 
 const PORT = process.env.CHAT_PORT || 8100;
 
+// CORS headers — the React dev server (localhost:3000) calls this server cross-origin.
+// Allow the same origin the backend already allows (ALLOWED_ORIGINS, first entry).
+const CORS = {
+  'Access-Control-Allow-Origin': (process.env.ALLOWED_ORIGINS || 'http://localhost:3000').split(',')[0],
+  'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+  'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+};
+
 function sendJson(res, status, body) {
   const data = JSON.stringify(body);
   res.writeHead(status, {
     'Content-Type': 'application/json',
     'Content-Length': Buffer.byteLength(data),
+    ...CORS,
   });
   res.end(data);
 }
@@ -53,6 +62,13 @@ async function readBody(req) {
 
 const server = http.createServer(async (req, res) => {
   const { method, url } = req;
+
+  // CORS preflight — the browser sends OPTIONS before a cross-origin request
+  // that carries an Authorization header. Answer it with the allow-headers.
+  if (method === 'OPTIONS') {
+    res.writeHead(204, CORS);
+    return res.end();
+  }
 
   // Health check
   if (method === 'GET' && url === '/health') {
@@ -94,6 +110,7 @@ const server = http.createServer(async (req, res) => {
       'Content-Type': 'text/event-stream',
       'Cache-Control': 'no-cache',
       Connection: 'keep-alive',
+      ...CORS,
     });
 
     // Shared turn runner over an adapted stream — identical to handler.js.

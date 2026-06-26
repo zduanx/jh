@@ -31,8 +31,11 @@ import { CASES, EVAL_UID } from './cases.js';
 
 const __dir = dirname(fileURLToPath(import.meta.url));
 
-// Load chat/.env.local so the agent has its keys (same loader as chat/local.js).
-const envLocal = join(__dir, '..', 'chat', '.env.local');
+// Load env so the agent has its keys (same loader as chat/local.js). Phase 9B:
+// prefer the unified ROOT .env.local, fall back to the legacy per-stack chat one.
+const rootEnvLocal = join(__dir, '..', '.env.local');
+const stackEnvLocal = join(__dir, '..', 'chat', '.env.local');
+const envLocal = fs.existsSync(rootEnvLocal) ? rootEnvLocal : stackEnvLocal;
 if (fs.existsSync(envLocal)) process.loadEnvFile(envLocal);
 
 /**
