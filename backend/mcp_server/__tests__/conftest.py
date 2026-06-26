@@ -25,10 +25,11 @@ from sqlalchemy.orm import sessionmaker
 import mcp_server.server as server
 from db.__tests__.db_test_utils import get_or_create_fixed_test_user
 
-# Reuse the db test suite's session-scoped engine + migration setup.
-# (Its conftest defines `test_engine`; loading it as a plugin makes that fixture
-# available here without duplicating the Neon/Alembic bootstrap.)
-pytest_plugins = ["db.__tests__.conftest"]
+# Reuse the db test suite's session-scoped engine + Alembic migration bootstrap by
+# IMPORTING the fixture directly (the standard cross-suite fixture-sharing pattern).
+# (`pytest_plugins` can't be used in a nested conftest, and registering it top-level
+# double-registers the auto-discovered db conftest — so we import the fixture instead.)
+from db.__tests__.conftest import test_engine  # noqa: F401  (re-exported as a fixture)
 
 EMBEDDING_DIM = 1024
 

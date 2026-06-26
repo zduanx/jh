@@ -8,9 +8,14 @@ from sqlalchemy import pool
 
 from alembic import context
 
-# Load environment variables (.env.local takes precedence over .env)
-env_local = Path('.env.local')
-env_file = Path('.env')
+# Load environment variables (.env.local takes precedence over .env).
+# Phase 9B: prefer the unified ROOT .env.local (absolute path, not cwd-relative),
+# fall back to the legacy per-stack backend/.env.local.
+_backend_dir = Path(__file__).parent.parent          # backend/
+env_local = _backend_dir.parent / '.env.local'        # root
+if not env_local.exists():
+    env_local = _backend_dir / '.env.local'           # legacy per-stack
+env_file = _backend_dir / '.env'
 
 if env_local.exists():
     load_dotenv(env_local)

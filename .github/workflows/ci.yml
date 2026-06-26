@@ -1,0 +1,103 @@
+name: CI
+
+# Phase 9D: run the test suites on every PR (and on push to main). The checks
+# produced here are what jprstatus shows and what branch protection gates merges on.
+# Secret-free: a throwaway Postgres in the runner (NOT a synced secret), mocks elsewhere.
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+jobs:
+  # --- Backend: pytest against a throwaway pgvector Postgres in the runner ---
+  backend:
+    name: backend (pytest)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        # Same extensions as prod (pgvector + pg_trgm). conftest runs the Alembic
+        # migrations against this empty DB → prod-architecture schema, disposable.
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      # Hardcoded localhost — NOT a secret, NOT synced. The runner's own Postgres.
+      # DATABASE_URL is a dummy so settings/db.session import cleanly (no real DB hit).
+      TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/test
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/test
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.13
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+
+      - name: Install dependencies
+        working-directory: backend
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest pytest-anyio
+
+      - name: Run pytest
+        working-directory: backend
+        # -m "not manual": skip the inspection-only tests (persist data, no assertions).
+        # --ignore: the two standalone __main__ scripts that make real network calls.
+        run: |
+          pytest -m "not manual" \
+            --ignore=auth/__tests__/test_auth.py \
+            --ignore=sourcing/__tests__/test_sourcing.py \
+            -v
+
+  # --- Chat: Node's built-in test runner (fully offline) ---
+  chat:
+    name: chat (node --test)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: chat/package-lock.json
+      - name: Install
+        working-directory: chat
+        run: npm ci
+      - name: Test
+        working-directory: chat
+        run: npm test
+
+  # --- Frontend: build check (react-scripts build must succeed) ---
+  frontend:
+    name: frontend (build)
+    runs-on: ubuntu-latest
+    env:
+      CI: "true" # make react-scripts non-interactive + treat warnings sanely
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install
+        working-directory: frontend
+        run: npm ci
+      - name: Build
+        working-directory: frontend
+        run: npm run build
